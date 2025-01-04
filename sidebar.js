@@ -1207,8 +1207,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 监听侧栏宽度变化
     sidebarWidth.addEventListener('input', (e) => {
         const width = e.target.value;
-        document.documentElement.style.setProperty('--cerebr-sidebar-width', `${width}vw`);
         widthValue.textContent = `${width}vw`;
+    });
+
+    sidebarWidth.addEventListener('change', (e) => {
+        const width = e.target.value;
+        document.documentElement.style.setProperty('--cerebr-sidebar-width', `${width}vw`);
+        saveSettings('sidebarWidth', width);
         // 通知父窗口宽度变化
         window.parent.postMessage({
             type: 'SIDEBAR_WIDTH_CHANGE',
@@ -1216,19 +1221,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, '*');
     });
 
-    sidebarWidth.addEventListener('change', (e) => {
-        saveSettings('sidebarWidth', e.target.value);
-    });
-
     // 监听字体大小变化
     fontSize.addEventListener('input', (e) => {
         const size = e.target.value;
-        document.documentElement.style.setProperty('--cerebr-font-size', `${size}px`);
         fontSizeValue.textContent = `${size}px`;
     });
 
     fontSize.addEventListener('change', (e) => {
-        saveSettings('fontSize', e.target.value);
+        const size = e.target.value;
+        document.documentElement.style.setProperty('--cerebr-font-size', `${size}px`);
+        saveSettings('fontSize', size);
     });
 
     // 监听缩放比例变化
@@ -1238,14 +1240,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     scaleFactor.addEventListener('input', (e) => {
         const value = parseFloat(e.target.value);
         scaleValue.textContent = `${value.toFixed(1)}x`;
+    });
+
+    scaleFactor.addEventListener('change', (e) => {
+        const value = parseFloat(e.target.value);
         window.parent.postMessage({
             type: 'SCALE_FACTOR_CHANGE',
             value: value
         }, '*');
-    });
-
-    scaleFactor.addEventListener('change', (e) => {
-        saveSettings('scaleFactor', parseFloat(e.target.value));
+        saveSettings('scaleFactor', value);
     });
 
     // 初始化设置
