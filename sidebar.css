@@ -234,6 +234,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
 }
 
 #settings-button svg {
@@ -258,7 +259,7 @@ body {
 #settings-menu {
     position: absolute;
     bottom: 100%;
-    left: 8px;
+    right: 8px;
     background-color: var(--cerebr-bg-color);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
@@ -266,7 +267,7 @@ body {
     display: none;
     min-width: 180px;
     margin-bottom: 8px;
-    transform-origin: bottom left;
+    transform-origin: bottom right;
     backdrop-filter: blur(var(--cerebr-blur-radius));
     -webkit-backdrop-filter: blur(var(--cerebr-blur-radius));
 }
