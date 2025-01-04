@@ -483,7 +483,7 @@ input:checked + .slider:before {
     padding: 1em;
     border-radius: 6px;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-    white-space: pre;
+    white-space: pre-wrap;
     /* 浅色模式默认样式 */
     background: #f6f8fa;
     color: #24292e;
