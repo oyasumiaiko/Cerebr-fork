@@ -433,6 +433,7 @@ input:checked + .slider:before {
     padding: 1em;
     border-radius: 6px;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: calc(var(--cerebr-font-size) - 2px);
     white-space: pre-wrap;
     /* 浅色模式默认样式 */
     background: #f6f8fa;
