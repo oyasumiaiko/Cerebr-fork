@@ -1173,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 初始化设置
     async function initSettings() {
         try {
-            const result = await chrome.storage.sync.get(['sidebarWidth', 'fontSize']);
+            const result = await chrome.storage.sync.get(['sidebarWidth', 'fontSize', 'scaleFactor']);
             if (result.sidebarWidth) {
                 document.documentElement.style.setProperty('--cerebr-sidebar-width', `${result.sidebarWidth}px`);
                 sidebarWidth.value = result.sidebarWidth;
@@ -1183,6 +1183,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 document.documentElement.style.setProperty('--cerebr-font-size', `${result.fontSize}px`);
                 fontSize.value = result.fontSize;
                 fontSizeValue.textContent = `${result.fontSize}px`;
+            }
+            if (result.scaleFactor) {
+                const scaleFactor = document.getElementById('scale-factor');
+                const scaleValue = document.getElementById('scale-value');
+                scaleFactor.value = result.scaleFactor;
+                scaleValue.textContent = `${result.scaleFactor}x`;
             }
         } catch (error) {
             console.error('初始化设置失败:', error);
@@ -1223,6 +1229,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     fontSize.addEventListener('change', (e) => {
         saveSettings('fontSize', e.target.value);
+    });
+
+    // 监听缩放比例变化
+    const scaleFactor = document.getElementById('scale-factor');
+    const scaleValue = document.getElementById('scale-value');
+    
+    scaleFactor.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value);
+        scaleValue.textContent = `${value.toFixed(1)}x`;
+        window.parent.postMessage({
+            type: 'SCALE_FACTOR_CHANGE',
+            value: value
+        }, '*');
+    });
+
+    scaleFactor.addEventListener('change', (e) => {
+        saveSettings('scaleFactor', parseFloat(e.target.value));
     });
 
     // 初始化设置

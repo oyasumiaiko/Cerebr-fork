@@ -6,6 +6,7 @@ class CerebrSidebar {
   constructor() {
     this.isVisible = false;
     this.sidebarWidth = 30;  // 临时默认值，将在初始化时更新
+    this.scaleFactor = 1.0;  // 添加缩放因子
     this.initialized = false;
     this.lastUrl = window.location.href;
     console.log('CerebrSidebar 实例创建');
@@ -76,9 +77,10 @@ class CerebrSidebar {
     try {
       console.log('开始初始化侧边栏');
       
-      // 从存储中加载宽度
-      const result = await chrome.storage.sync.get('sidebarWidth');
+      // 从存储中加载宽度和缩放因子
+      const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor']);
       this.sidebarWidth = result.sidebarWidth || 30;
+      this.scaleFactor = result.scaleFactor || 1.0;
       
       const container = document.createElement('cerebr-root');
 
@@ -183,15 +185,7 @@ class CerebrSidebar {
 
       // 添加 ResizeObserver 监听大小变化
       const scaleObserver = new ResizeObserver(entries => {
-        const container = entries[0].target;
-        const scale = 1 / window.devicePixelRatio; // 使用设备像素比来计算缩放
-        iframe.style.transformOrigin = 'top left';
-        iframe.style.transform = `scale(${scale})`;
-        iframe.style.width = `${100 / scale}%`; // 补偿缩放导致的宽度变化
-        iframe.style.height = `${100 / scale}%`; // 补偿缩放导致的高度变化
-        
-        // 更新 CSS 变量以调整圆角和边距
-        this.sidebar.style.setProperty('--scale-ratio', scale);
+        this.updateScale();
       });
 
       scaleObserver.observe(content);
@@ -229,6 +223,20 @@ class CerebrSidebar {
         this.sidebar.classList.add('initialized');
         this.initialized = true;
         console.log('侧边栏初始化完成');
+      });
+
+      // 监听来自 iframe 的消息
+      window.addEventListener('message', (event) => {
+        if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
+          this.sidebarWidth = event.data.width;
+          this.sidebar.style.width = `${this.sidebarWidth}vw`;
+          // 保存新的宽度值
+          chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+        } else if (event.data.type === 'SCALE_FACTOR_CHANGE') {
+          this.scaleFactor = event.data.value;
+          this.updateScale();
+          chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
+        }
       });
     } catch (error) {
       console.error('初始化侧边栏失败:', error);
@@ -390,6 +398,19 @@ class CerebrSidebar {
       // 重置状态
       lastImageData = null;
     });
+  }
+
+  updateScale() {
+    const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+    if (iframe) {
+      const baseScale = 1 / window.devicePixelRatio;
+      const scale = baseScale * this.scaleFactor;
+      iframe.style.transformOrigin = 'top left';
+      iframe.style.transform = `scale(${scale})`;
+      iframe.style.width = `${100 / scale}%`;
+      iframe.style.height = `${100 / scale}%`;
+      this.sidebar.style.setProperty('--scale-ratio', scale);
+    }
   }
 }
 
