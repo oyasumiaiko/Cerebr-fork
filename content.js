@@ -5,7 +5,7 @@ console.log('Document readyState:', document.readyState);
 class CerebrSidebar {
   constructor() {
     this.isVisible = false;
-    this.sidebarWidth = 430;  // 默认值改为像素
+    this.sidebarWidth = 800;  // 默认值改为800px
     this.scaleFactor = 1.0;
     this.initialized = false;
     this.lastUrl = window.location.href;
@@ -13,6 +13,13 @@ class CerebrSidebar {
     this.initializeSidebar();
     this.setupUrlChangeListener();
     this.setupDragAndDrop();
+  }
+
+  // 添加统一的宽度更新方法
+  updateWidth(width) {
+    this.sidebarWidth = width;
+    this.sidebar.style.width = `calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor})`;
+    chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
   }
 
   setupUrlChangeListener() {
@@ -107,7 +114,7 @@ class CerebrSidebar {
           position: fixed;
           top: calc(20px * var(--scale-ratio, 1));
           right: calc(20px * var(--scale-ratio, 1));
-          width: ${this.sidebarWidth}px;
+          width: calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor});
           height: calc(100vh - calc(40px * var(--scale-ratio, 1)));
           background: var(--cerebr-bg-color, #ffffff);
           color: var(--cerebr-text-color, #000000);
@@ -228,16 +235,9 @@ class CerebrSidebar {
       // 监听来自 iframe 的消息
       window.addEventListener('message', (event) => {
         if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
-          this.sidebarWidth = event.data.width;
-          const scaledWidth = Math.round(this.sidebarWidth / this.scaleFactor);
-          this.sidebar.style.width = `${scaledWidth}px`;
-          // 保存新的宽度值
-          chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+          this.updateWidth(event.data.width);
         } else if (event.data.type === 'SCALE_FACTOR_CHANGE') {
           this.scaleFactor = event.data.value;
-          // 更新宽度以适应新的缩放比例
-          const scaledWidth = Math.round(this.sidebarWidth / this.scaleFactor);
-          this.sidebar.style.width = `${scaledWidth}px`;
           this.updateScale();
           chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
         }
@@ -256,11 +256,9 @@ class CerebrSidebar {
 
       const handleMouseMove = (e) => {
         const diff = startX - e.clientX;
-        this.sidebarWidth = Math.min(Math.max(300, startWidth - diff), 600);
-        const scaledWidth = Math.round(this.sidebarWidth / this.scaleFactor);
-        this.sidebar.style.width = `${scaledWidth}px`;
-        // 保存新的宽度值
-        chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+        const scale = this.scaleFactor / window.devicePixelRatio;
+        const newWidth = Math.min(Math.max(500, startWidth - diff / scale), 1500);
+        this.updateWidth(newWidth);
       };
 
       const handleMouseUp = () => {
@@ -275,11 +273,11 @@ class CerebrSidebar {
     // 监听来自 iframe 的消息
     window.addEventListener('message', (event) => {
       if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
-        this.sidebarWidth = event.data.width;
-        const scaledWidth = Math.round(this.sidebarWidth / this.scaleFactor);
-        this.sidebar.style.width = `${scaledWidth}px`;
-        // 保存新的宽度值
-        chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+        this.updateWidth(event.data.width);
+      } else if (event.data.type === 'SCALE_FACTOR_CHANGE') {
+        this.scaleFactor = event.data.value;
+        this.updateScale();
+        chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
       }
     });
   }
@@ -416,6 +414,7 @@ class CerebrSidebar {
       iframe.style.width = `${100}%`;
       iframe.style.height = `${100}%`;
       this.sidebar.style.setProperty('--scale-ratio', scale);
+      this.updateWidth(this.sidebarWidth);
     }
   }
 }
