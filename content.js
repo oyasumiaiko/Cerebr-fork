@@ -5,9 +5,8 @@ console.log('Document readyState:', document.readyState);
 class CerebrSidebar {
   constructor() {
     this.isVisible = false;
-    this.sidebarWidth = 30;
+    this.sidebarWidth = 30;  // 临时默认值，将在初始化时更新
     this.initialized = false;
-    this.pageKey = window.location.origin + window.location.pathname;
     this.lastUrl = window.location.href;
     console.log('CerebrSidebar 实例创建');
     this.initializeSidebar();
@@ -76,6 +75,11 @@ class CerebrSidebar {
   async initializeSidebar() {
     try {
       console.log('开始初始化侧边栏');
+      
+      // 从存储中加载宽度
+      const result = await chrome.storage.sync.get('sidebarWidth');
+      this.sidebarWidth = result.sidebarWidth || 30;
+      
       const container = document.createElement('cerebr-root');
 
       // 防止外部JavaScript访问和修改我们的元素
@@ -227,7 +231,8 @@ class CerebrSidebar {
         const diff = (startX - e.clientX) / window.innerWidth * 100;
         this.sidebarWidth = Math.min(Math.max(20, startWidth + diff), 60);
         this.sidebar.style.width = `${this.sidebarWidth}vw`;
-        this.saveState();
+        // 保存新的宽度值
+        chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
       };
 
       const handleMouseUp = () => {
@@ -244,7 +249,8 @@ class CerebrSidebar {
       if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
         this.sidebarWidth = event.data.width;
         this.sidebar.style.width = `${this.sidebarWidth}vw`;
-        this.saveState();
+        // 保存新的宽度值
+        chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
       }
     });
   }
