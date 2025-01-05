@@ -648,14 +648,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 加载保存的 API 配置
     let apiConfigs = [];
     let selectedConfigIndex = 0;
+    let favoriteApis = [];  // 存储收藏的API配置
 
     // 从存储加载配置
     async function loadAPIConfigs() {
         try {
-            const result = await chrome.storage.sync.get(['apiConfigs', 'selectedConfigIndex']);
+            const result = await chrome.storage.sync.get(['apiConfigs', 'selectedConfigIndex', 'favoriteApis']);
             if (result.apiConfigs && result.apiConfigs.length > 0) {
                 apiConfigs = result.apiConfigs;
                 selectedConfigIndex = result.selectedConfigIndex || 0;
+                favoriteApis = result.favoriteApis || [];
             } else {
                 // 创建默认配置
                 apiConfigs = [{
@@ -664,6 +666,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     modelName: 'gpt-4o'
                 }];
                 selectedConfigIndex = 0;
+                favoriteApis = [];
                 await saveAPIConfigs();
             }
         } catch (error) {
@@ -675,10 +678,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 modelName: 'gpt-4o'
             }];
             selectedConfigIndex = 0;
+            favoriteApis = [];
         }
 
-        // 确保一定会渲染卡片
+        // 确保一定会渲染卡片和收藏列表
         renderAPICards();
+        renderFavoriteApis();
     }
 
     // 保存配置到存储
@@ -686,7 +691,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             await chrome.storage.sync.set({
                 apiConfigs,
-                selectedConfigIndex
+                selectedConfigIndex,
+                favoriteApis
             });
         } catch (error) {
             console.error('保存 API 配置失败:', error);
@@ -720,7 +726,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 创建 API 卡片
     function createAPICard(config, index, templateCard) {
-        // 克模板
+        // 克隆模板
         const template = templateCard.cloneNode(true);
         template.classList.remove('template');
         template.style.display = '';
@@ -733,12 +739,52 @@ document.addEventListener('DOMContentLoaded', async () => {
         const baseUrlInput = template.querySelector('.base-url');
         const modelNameInput = template.querySelector('.model-name');
         const apiForm = template.querySelector('.api-form');
+        const favoriteBtn = template.querySelector('.favorite-btn');
 
         apiKeyInput.value = config.apiKey || '';
         baseUrlInput.value = config.baseUrl || 'https://api.openai.com/v1/chat/completions';
         modelNameInput.value = config.modelName || 'gpt-4o';
 
-        // 止入框和按钮点击事件冒泡
+        // 检查是否已收藏
+        const isFavorite = favoriteApis.some(favConfig => 
+            favConfig.apiKey === config.apiKey && 
+            favConfig.baseUrl === config.baseUrl && 
+            favConfig.modelName === config.modelName
+        );
+        if (isFavorite) {
+            favoriteBtn.classList.add('active');
+        }
+
+        // 收藏按钮点击事件
+        favoriteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const currentConfig = {
+                apiKey: apiKeyInput.value,
+                baseUrl: baseUrlInput.value,
+                modelName: modelNameInput.value
+            };
+
+            const existingIndex = favoriteApis.findIndex(favConfig => 
+                favConfig.apiKey === currentConfig.apiKey && 
+                favConfig.baseUrl === currentConfig.baseUrl && 
+                favConfig.modelName === currentConfig.modelName
+            );
+
+            if (existingIndex === -1) {
+                // 添加到收藏
+                favoriteApis.push(currentConfig);
+                favoriteBtn.classList.add('active');
+            } else {
+                // 取消收藏
+                favoriteApis.splice(existingIndex, 1);
+                favoriteBtn.classList.remove('active');
+            }
+
+            saveAPIConfigs();
+            renderFavoriteApis();
+        });
+
+        // 阻止输入框和按钮点击事件冒泡
         const stopPropagation = (e) => e.stopPropagation();
         apiForm.addEventListener('click', stopPropagation);
         template.querySelector('.card-actions').addEventListener('click', stopPropagation);
@@ -755,7 +801,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         });
 
-        // 制配置
+        // 复制配置
         template.querySelector('.duplicate-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             apiConfigs.push({...config});
@@ -789,6 +835,51 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         return template;
+    }
+
+    // 渲染收藏的API列表
+    function renderFavoriteApis() {
+        const favoriteApisList = document.querySelector('.favorite-apis-list');
+        favoriteApisList.innerHTML = '';
+
+        if (favoriteApis.length === 0) {
+            const emptyMessage = document.createElement('div');
+            emptyMessage.style.padding = '4px 8px';
+            emptyMessage.style.opacity = '0.7';
+            emptyMessage.style.fontSize = '12px';
+            emptyMessage.textContent = '暂无收藏的API';
+            favoriteApisList.appendChild(emptyMessage);
+            return;
+        }
+
+        favoriteApis.forEach((config) => {
+            const item = document.createElement('div');
+            item.className = 'favorite-api-item';
+            
+            const apiName = document.createElement('span');
+            apiName.className = 'api-name';
+            apiName.textContent = config.modelName || config.baseUrl;
+            
+            item.appendChild(apiName);
+
+            // 点击切换到该API配置
+            item.addEventListener('click', () => {
+                const configIndex = apiConfigs.findIndex(c => 
+                    c.apiKey === config.apiKey && 
+                    c.baseUrl === config.baseUrl && 
+                    c.modelName === config.modelName
+                );
+                
+                if (configIndex !== -1) {
+                    selectedConfigIndex = configIndex;
+                    saveAPIConfigs();
+                    renderAPICards();
+                    settingsMenu.classList.remove('visible');
+                }
+            });
+
+            favoriteApisList.appendChild(item);
+        });
     }
 
     // 等待 DOM 加载完成后再初始化

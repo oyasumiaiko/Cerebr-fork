@@ -244,6 +244,54 @@ body {
     background-color: var(--cerebr-message-user-bg);
 }
 
+/* 收藏的API列表样式 */
+#favorite-apis {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.favorite-apis-list {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+}
+
+.favorite-api-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    background: var(--cerebr-message-ai-bg);
+    border-radius: 4px;
+    font-size: 13px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.favorite-api-item:hover {
+    background: var(--cerebr-message-user-bg);
+    transform: translateX(2px);
+}
+
+.favorite-api-item .api-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 收藏按钮样式 */
+.favorite-btn.active svg {
+    fill: #ffb400;
+    stroke: #ffb400;
+}
+
+.favorite-btn.active:hover svg {
+    fill: #ffa000;
+    stroke: #ffa000;
+}
+
 /* 开关样式 */
 .switch {
     position: relative;
