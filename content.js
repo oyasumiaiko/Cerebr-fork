@@ -463,7 +463,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 处理侧边栏切换命令
-    if (message.type === 'TOGGLE_SIDEBAR_onClicked' || message.type === 'TOGGLE_SIDEBAR_toggle_sidebar') {
+    if (message.type === 'TOGGLE_SIDEBAR_onClicked') {
         try {
             if (sidebar) {
                 sidebar.toggle();
@@ -474,6 +474,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
         } catch (error) {
             console.error('处理切换命令失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 处理打开侧边栏命令
+    if (message.type === 'OPEN_SIDEBAR') {
+        try {
+            if (sidebar) {
+                if (!sidebar.isVisible) {
+                    sidebar.toggle();
+                }
+                sendResponse({ success: true, status: sidebar.isVisible });
+            } else {
+                console.error('侧边栏实例不存在');
+                sendResponse({ success: false, error: 'Sidebar instance not found' });
+            }
+        } catch (error) {
+            console.error('处理打开命令失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 处理关闭侧边栏命令
+    if (message.type === 'CLOSE_SIDEBAR') {
+        try {
+            if (sidebar) {
+                if (sidebar.isVisible) {
+                    sidebar.toggle();
+                }
+                sendResponse({ success: true, status: sidebar.isVisible });
+            } else {
+                console.error('侧边栏实例不存在');
+                sendResponse({ success: false, error: 'Sidebar instance not found' });
+            }
+        } catch (error) {
+            console.error('处理关闭命令失败:', error);
             sendResponse({ success: false, error: error.message });
         }
         return true;

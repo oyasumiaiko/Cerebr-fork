@@ -25,12 +25,19 @@
     }
   },
   "commands": {
-    "toggle_sidebar": {
+    "open_sidebar": {
       "suggested_key": {
         "default": "Alt+Z",
         "mac": "MacCtrl+Z"
       },
-      "description": "打开/关闭 Cerebr 侧边栏"
+      "description": "打开 Cerebr 侧边栏"
+    },
+    "close_sidebar": {
+      "suggested_key": {
+        "default": "Alt+C",
+        "mac": "MacCtrl+C"
+      },
+      "description": "关闭 Cerebr 侧边栏"
     },
     "clear_chat": {
       "suggested_key": {

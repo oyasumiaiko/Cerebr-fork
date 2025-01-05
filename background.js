@@ -56,8 +56,10 @@ async function handleTabCommand(commandType) {
 chrome.commands.onCommand.addListener(async (command) => {
   console.log('onCommand:', command);
 
-  if (command === 'toggle_sidebar') {
-    await handleTabCommand('TOGGLE_SIDEBAR_toggle_sidebar');
+  if (command === 'open_sidebar') {
+    await handleTabCommand('OPEN_SIDEBAR');
+  } else if (command === 'close_sidebar') {
+    await handleTabCommand('CLOSE_SIDEBAR');
   } else if (command === 'clear_chat') {
     await handleTabCommand('CLEAR_CHAT');
   } else if (command === 'quick_summary') {
