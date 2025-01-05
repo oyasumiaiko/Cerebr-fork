@@ -758,7 +758,7 @@ async function extractPageContent() {
       elements.forEach(element => element.remove());
   });
 
-  let mainContent = tempContainer.innerText;
+  let mainContent = tempContainer.textContent;
 
   // 理文本
   mainContent = mainContent
@@ -772,8 +772,12 @@ async function extractPageContent() {
       return null;
   }
 
-  console.log('页面内容提取完成，内容:', mainContent);
-  console.log('页面内容提取完成，内容长度:', mainContent.length);
+  console.log('=== 处理后的 mainContent ===');
+  console.log(mainContent);
+  console.log('=== mainContent 长度 ===', mainContent.length);
+
+  // console.log('页面内容提取完成，内容:', mainContent);
+  // console.log('页面内容提取完成，内容长度:', mainContent.length);
 
   return {
       title: document.title,
