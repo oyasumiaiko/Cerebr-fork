@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const widthValue = document.getElementById('width-value');
     const fontSizeValue = document.getElementById('font-size-value');
     let currentMessageElement = null;
+    let isTemporaryMode = false; // 添加临时模式状态变量
 
     // 聊天历史记录变量
     let chatHistory = [];
@@ -112,13 +113,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 isValid: true
             });
 
-            // 获取网页内容
-            const pageContentResponse = await getPageContent();
-            if (pageContentResponse) {
-                pageContent = pageContentResponse;
+            // 如果不是临时模式，获取网页内容
+            if (!isTemporaryMode) {
+                const pageContentResponse = await getPageContent();
+                if (pageContentResponse) {
+                    pageContent = pageContentResponse;
+                } else {
+                    pageContent = null;
+                    console.error('获取网页内容失败。');
+                }
             } else {
-                pageContent = null;
-                console.error('获取网页内容失败。');
+                pageContent = null;  // 临时模式下不使用网页内容
             }
 
             // 构建消息内容
@@ -165,6 +170,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // 构建消息数组（不包括当前用户消息）
             const messages = [...chatHistory.slice(0, -1)];  // 排除刚刚添加的用户消息
+
+            // 添加系统消息
             const systemMessage = {
                 role: "system",
                 content: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。用户语言是 ${navigator.language}。请优先使用 ${navigator.language} 语言回答用户问题。${
@@ -532,6 +539,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         isComposing = false;
     });
 
+    // 添加临时模式相关函数
+    function enterTemporaryMode() {
+        isTemporaryMode = true;
+        messageInput.classList.add('temporary-mode');
+        document.body.classList.add('temporary-mode');
+        messageInput.setAttribute('placeholder', '临时模式 - 不获取网页内容');
+    }
+
+    function exitTemporaryMode() {
+        isTemporaryMode = false;
+        messageInput.classList.remove('temporary-mode');
+        document.body.classList.remove('temporary-mode');
+        messageInput.setAttribute('placeholder', '输入消息...');
+    }
+
+    // 统一的键盘事件监听器
     messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             if (isComposing) {
@@ -546,6 +569,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (e.key === 'Escape') {
             // 按 ESC 键时让输入框失去焦点
             messageInput.blur();
+        } else if (e.key === '-') {
+            // 检查输入框是否为空
+            if (!this.textContent.trim() && !this.querySelector('.image-tag')) {
+                e.preventDefault();
+                if (isTemporaryMode) {
+                    exitTemporaryMode();
+                } else {
+                    enterTemporaryMode();
+                }
+                console.log('临时模式状态:', isTemporaryMode); // 添加调试日志
+            }
         }
     });
 
@@ -1068,13 +1102,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 滚动时隐藏菜单
     chatContainer.addEventListener('scroll', hideContextMenu);
-
-    // 按下 Esc 键隐藏菜单
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            hideContextMenu();
-        }
-    });
 
     // 片粘贴功能
     messageInput.addEventListener('paste', async (e) => {

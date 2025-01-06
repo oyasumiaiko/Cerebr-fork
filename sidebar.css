@@ -992,3 +992,41 @@ input[type="range"].temperature::-webkit-slider-thumb:hover {
 input[type="range"].temperature::-webkit-slider-thumb:active {
     transform: scale(0.9);
 }
+
+/* 临时模式样式 */
+#message-input.temporary-mode {
+    background-color: color-mix(in srgb, var(--cerebr-input-bg) 70%, transparent);
+    transition: background-color 0.3s ease;
+}
+
+#message-input.temporary-mode:empty::before {
+    content: attr(placeholder);
+    opacity: 0.5;
+}
+
+/* 临时模式样式 */
+body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0);
+    pointer-events: none;
+    transition: background-color 0.3s ease;
+    z-index: 9999;
+}
+
+body.temporary-mode::after {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+:root.dark-theme body.temporary-mode::after {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+#message-input.temporary-mode:empty::before {
+    content: attr(placeholder);
+    opacity: 0.5;
+}
