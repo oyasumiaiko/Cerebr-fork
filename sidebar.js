@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
+    let shouldAutoScroll = true; // 添加自动滚动状态
 
     // 聊天历史记录变量
     let chatHistory = [];
@@ -326,6 +327,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (chatHistory.length > 0) {
                     chatHistory[chatHistory.length - 1].content = rawText;
                 }
+
+                // 根据shouldAutoScroll决定是否滚动
+                scrollToBottom();
             }
         } else {
             appendMessage(rawText, 'ai');
@@ -501,14 +505,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             fragment.appendChild(messageDiv);
         } else {
             chatContainer.appendChild(messageDiv);
-            // 只在发送新消息时自动滚动
+            // 只在发送新消息时强制滚动，其他情况根据shouldAutoScroll决定
             if (sender === 'user' && !skipHistory) {
-                requestAnimationFrame(() => {
-                    chatContainer.scrollTo({
-                        top: chatContainer.scrollHeight,
-                        behavior: 'smooth'
-                    });
-                });
+                scrollToBottom(true); // 用户新消息强制滚动
+            } else {
+                scrollToBottom(); // AI回复根据shouldAutoScroll决定
             }
         }
 
@@ -1489,4 +1490,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 初始化设置
     await initSettings();
+
+    // 添加检查是否在底部的函数
+    function isNearBottom() {
+        const threshold = 100; // 距离底部的阈值，单位像素
+        const scrollBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+        return scrollBottom <= threshold;
+    }
+
+    // 添加滚动事件监听
+    chatContainer.addEventListener('scroll', () => {
+        shouldAutoScroll = isNearBottom();
+    });
+
+    // 修改滚动到底部的函数
+    function scrollToBottom(force = false) {
+        if (force || shouldAutoScroll) {
+            requestAnimationFrame(() => {
+                chatContainer.scrollTo({
+                    top: chatContainer.scrollHeight,
+                    behavior: 'smooth'
+                });
+            });
+        }
+    }
 });
