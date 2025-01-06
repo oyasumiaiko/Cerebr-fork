@@ -926,10 +926,24 @@ input:checked + .slider:before {
 .content-length-footer {
     font-size: calc(var(--cerebr-font-size) - 4px);
     color: var(--cerebr-text-color);
-    margin-top: 0px;
-    margin-bottom: -0.5rem;
     text-align: right;
-    opacity: 0.7;
+}
+
+.content-length-footer:not(:empty) {
+    animation: footerFadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes footerFadeIn {
+    0% {
+        opacity: 0;
+        transform: translateY(-6px);
+        max-height: 6px;
+    }
+    100% {
+        opacity: 0.7;
+        transform: translateY(0);
+        max-height: 12px;
+    }
 }
 
 /* 确保设置按钮是相对定位，这样菜单才能正确定位 */
