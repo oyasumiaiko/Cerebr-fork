@@ -114,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             // 先添加用户消息到界面和历史记录
-            appendMessage(messageInput.innerHTML, 'user');
+            const userMessageDiv = appendMessage(messageInput.innerHTML, 'user');
             messageInput.innerHTML = '';
             adjustTextareaHeight(messageInput);
 
@@ -128,6 +128,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const pageContentResponse = await getPageContent();
                 if (pageContentResponse) {
                     pageContent = pageContentResponse;
+                    // 创建字数统计元素
+                    const footer = document.createElement('div');
+                    footer.classList.add('content-length-footer');
+                    const contentLength = pageContent.content ? pageContent.content.length : 0;
+                    footer.textContent = `↑ ${contentLength.toLocaleString()}`;
+                    // 添加到用户消息下方
+                    userMessageDiv.appendChild(footer);
                 } else {
                     pageContent = null;
                     console.error('获取网页内容失败。');
@@ -434,7 +441,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // 修改appendMessage函数，只在发送新消息时滚动
+    // 修改appendMessage函数，移除初始字数显示
     function appendMessage(text, sender, skipHistory = false, fragment = null) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', `${sender}-message`);
@@ -476,15 +483,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 渲染 LaTeX 公式
         renderMathInElement(messageDiv, MATH_DELIMITERS.renderConfig);
-
-        // Add content length footer for user messages if page content exists
-        if (sender === 'user' && pageContent) {
-            const contentLength = pageContent.content ? pageContent.content.length : 0;
-            const footer = document.createElement('div');
-            footer.classList.add('content-length-footer');
-            footer.textContent = `↑ ${contentLength.toLocaleString()}`;
-            messageDiv.appendChild(footer);
-        }
 
         // 如果提供了文档片段，添加到片段中；否则直接添加到聊天容器
         if (fragment) {
