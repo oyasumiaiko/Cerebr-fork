@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
     let shouldAutoScroll = true; // 添加自动滚动状态
+    let lastUserScrollTime = 0; // 添加最后用户滚动时间
+    let lastProgrammaticScroll = 0; // 添加最后程序滚动时间
 
     // 聊天历史记录变量
     let chatHistory = [];
@@ -1513,13 +1515,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 添加滚动事件监听
-    chatContainer.addEventListener('scroll', () => {
+    chatContainer.addEventListener('scroll', (e) => {
+        // 如果这次滚动是由程序触发的（在500ms内有程序滚动），忽略它
+        if (Date.now() - lastProgrammaticScroll < 100) {
+            return;
+        }
         shouldAutoScroll = isNearBottom();
+    });
+
+    // 添加滚轮事件监听
+    chatContainer.addEventListener('wheel', (e) => {
+        // 如果用户向上滚动
+        if (e.deltaY < 0) {
+            lastUserScrollTime = Date.now();
+            shouldAutoScroll = false;
+        }
     });
 
     // 修改滚动到底部的函数
     function scrollToBottom(force = false) {
+        // 如果在用户最后向上滚动后的500ms内，且不是强制滚动，则不执行
+        if (!force && Date.now() - lastUserScrollTime < 500) {
+            return;
+        }
+
         if (force || shouldAutoScroll) {
+            lastProgrammaticScroll = Date.now();
             requestAnimationFrame(() => {
                 chatContainer.scrollTo({
                     top: chatContainer.scrollHeight,
