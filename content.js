@@ -116,7 +116,6 @@ class CerebrSidebar {
           right: calc(20px * var(--scale-ratio, 1));
           width: calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor});
           height: calc(100vh - calc(40px * var(--scale-ratio, 1)));
-          background: var(--cerebr-bg-color, #ffffff);
           color: var(--cerebr-text-color, #000000);
           box-shadow: -2px 0 15px rgba(0,0,0,0.1);
           z-index: 2147483647;
@@ -125,36 +124,49 @@ class CerebrSidebar {
           visibility: hidden;
           transform: translateX(calc(100% + calc(20px * var(--scale-ratio, 1))));
           pointer-events: none;
-          contain: style layout size;
           isolation: isolate;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          contain: layout style;
         }
+
+        .cerebr-sidebar__content {
+          height: 100%;
+          overflow: hidden;
+          border-radius: calc(12px * var(--scale-ratio, 1));
+          position: relative;
+          z-index: 1;
+          background: transparent;
+          backdrop-filter: blur(30px);
+          contain: layout style;
+        }
+
         .cerebr-sidebar.initialized {
           visibility: visible;
           transition: transform 0.3s ease;
           pointer-events: auto;
         }
+
         @media (prefers-color-scheme: dark) {
           .cerebr-sidebar {
-            --cerebr-bg-color: #282c34;
+            --cerebr-bg-color: rgba(38, 43, 51, 0.75);
             --cerebr-text-color: #abb2bf;
             box-shadow: -2px 0 20px rgba(0,0,0,0.3);
           }
         }
+
         .cerebr-sidebar.visible {
           transform: translateX(0);
         }
-        .cerebr-sidebar__content {
-          height: 100%;
-          overflow: hidden;
-          border-radius: calc(12px * var(--scale-ratio, 1));
-          contain: style layout size;
-        }
+
         .cerebr-sidebar__iframe {
           width: 100%;
           height: 100%;
           border: none;
-          background: var(--cerebr-bg-color, #ffffff);
-          contain: strict;
+          background: transparent;
+          position: relative;
+          z-index: 2;
+          transform-origin: top left;
+          box-sizing: border-box;
         }
       `;
 
