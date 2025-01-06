@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fontSizeValue = document.getElementById('font-size-value');
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
+    let isProcessingMessage = false; // 添加消息处理状态标志
 
     // 聊天历史记录变量
     let chatHistory = [];
@@ -93,6 +94,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function sendMessage() {
+        // 如果正在处理消息，直接返回
+        if (isProcessingMessage) {
+            return;
+        }
+
         const message = messageInput.textContent.trim();
         const imageTags = messageInput.querySelectorAll('.image-tag');
 
@@ -105,6 +111,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         try {
+            // 设置处理状态为true
+            isProcessingMessage = true;
+
             // 生成新的请求ID
             const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             // 创建该请求的上下文
@@ -272,6 +281,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             // 从 chatHistory 中移除最后一条记录（用户的问题）
             chatHistory.pop();
+        } finally {
+            // 无论成功还是失败，都重置处理状态
+            isProcessingMessage = false;
         }
     }
 
@@ -570,8 +582,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 统一的键盘事件监听器
     messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
-            if (isComposing) {
-                // 如果正在使用输入法，不发送消息
+            if (isComposing || isProcessingMessage) {
+                // 如果正在使用输入法或正在处理消息，不发送消息
                 return;
             }
             e.preventDefault();
