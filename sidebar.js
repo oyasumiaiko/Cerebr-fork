@@ -1045,28 +1045,56 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 修改快速总结功能
     async function performQuickSummary() {
-        // 获取选中的文本
-        const selectedText = window.getSelection().toString().trim();
-
-        // 如果在临时模式下且没有选中文本，不执行总结
-        if (isTemporaryMode && !selectedText) {
+        // 检查焦点是否在侧栏内
+        const isSidebarFocused = document.hasFocus();
+        const sidebarSelection = window.getSelection().toString().trim();
+        
+        // 只有当焦点在侧栏内且有选中文本时，才使用侧栏的选中文本
+        if (isSidebarFocused && sidebarSelection) {
+            messageInput.textContent = sidebarSelection;
+            sendMessage();
             return;
         }
-        
-        // 清空聊天记录
-        chatContainer.innerHTML = '';
-        chatHistory = [];
-        
-        // 关闭设置菜单
-        toggleSettingsMenu(false);
 
-        // 构建总结请求
-        messageInput.textContent = selectedText ? 
-            `请解释这段文本的含义：${selectedText}` :
-            `请总结这个页面的主要内容。`;
+        // 获取页面上选中的文本
+        try {
+            // 创建一个 Promise 来等待选中文本的结果
+            const selectedText = await new Promise((resolve) => {
+                // 添加一次性的消息监听器
+                const messageHandler = (event) => {
+                    if (event.data.type === 'SELECTED_TEXT_RESULT') {
+                        window.removeEventListener('message', messageHandler);
+                        resolve(event.data.selectedText?.trim());
+                    }
+                };
+                window.addEventListener('message', messageHandler);
+
+                // 向父窗口请求选中的文本
+                window.parent.postMessage({ type: 'GET_SELECTED_TEXT' }, '*');
+            });
+
+            // 如果在临时模式下且没有选中文本，不执行总结
+            if (isTemporaryMode && !selectedText) {
+                return;
+            }
             
-        // 直接发送消息
-        sendMessage();
+            // 清空聊天记录
+            chatContainer.innerHTML = '';
+            chatHistory = [];
+            
+            // 关闭设置菜单
+            toggleSettingsMenu(false);
+
+            // 构建总结请求
+            messageInput.textContent = selectedText ? 
+                `请解释这段文本的含义：${selectedText}` :
+                `请总结这个页面的主要内容。`;
+                
+            // 直接发送消息
+            sendMessage();
+        } catch (error) {
+            console.error('获取选中文本失败:', error);
+        }
     }
 
     // 快速总结功能

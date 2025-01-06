@@ -290,6 +290,17 @@ class CerebrSidebar {
         this.scaleFactor = event.data.value;
         this.updateScale();
         chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
+      } else if (event.data.type === 'GET_SELECTED_TEXT') {
+        // 获取页面上选中的文本
+        const selectedText = window.getSelection().toString();
+        // 发送回 iframe
+        const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+        if (iframe) {
+          iframe.contentWindow.postMessage({
+            type: 'SELECTED_TEXT_RESULT',
+            selectedText: selectedText
+          }, '*');
+        }
       }
     });
   }
