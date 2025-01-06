@@ -356,9 +356,15 @@ input:checked + .slider:before {
     display: none;
     flex-direction: column;
     padding: 20px;
-    overflow-y: auto;
+    overflow-y: scroll;
+    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;  /* IE and Edge */
     backdrop-filter: blur(var(--cerebr-blur-radius));
     -webkit-backdrop-filter: blur(var(--cerebr-blur-radius));
+}
+
+#api-settings::-webkit-scrollbar {
+    display: none;  /* Chrome, Safari and Opera */
 }
 
 #api-settings.visible {
