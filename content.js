@@ -294,12 +294,12 @@ class CerebrSidebar {
     });
   }
 
-  toggle() {
+  toggle(forceShow = false) {
     if (!this.initialized) return;
 
     try {
       const wasVisible = this.isVisible;
-      this.isVisible = !this.isVisible;
+      this.isVisible = forceShow ? true : !this.isVisible;
 
       if (this.isVisible) {
         this.sidebar.classList.add('visible');
@@ -308,7 +308,7 @@ class CerebrSidebar {
       }
 
       // 如果从不可见变为可见，通知iframe并聚焦输入框
-      if (!wasVisible && this.isVisible) {
+      if ((!wasVisible && this.isVisible) || forceShow) {
         const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
         if (iframe) {
           iframe.contentWindow.postMessage({ type: 'FOCUS_INPUT' }, '*');
@@ -455,9 +455,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 快速总结功能的公共函数
     async function handleQuickSummary() {
         try {
-            // 如果侧边栏没有打开，先打开它
+            // 如果侧边栏没有打开，先打开它并强制聚焦
             if (sidebar && !sidebar.isVisible) {
-                sidebar.toggle();
+                sidebar.toggle(true);
             }
 
             const iframe = sidebar?.sidebar?.querySelector('.cerebr-sidebar__iframe');
@@ -478,7 +478,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'TOGGLE_SIDEBAR_onClicked') {
         try {
             if (sidebar) {
-                sidebar.toggle();
+                sidebar.toggle();  // 保持原样，因为这是普通的切换
                 sendResponse({ success: true, status: sidebar.isVisible });
             } else {
                 console.error('侧边栏实例不存在');
@@ -496,7 +496,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
             if (sidebar) {
                 if (!sidebar.isVisible) {
-                    sidebar.toggle();
+                    sidebar.toggle(true);  // 使用 forceShow 参数
                 }
                 sendResponse({ success: true, status: sidebar.isVisible });
             } else {
@@ -515,7 +515,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
             if (sidebar) {
                 if (sidebar.isVisible) {
-                    sidebar.toggle();
+                    sidebar.toggle();  // 保持原样，因为这是关闭操作
                 }
                 sendResponse({ success: true, status: sidebar.isVisible });
             } else {
