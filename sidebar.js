@@ -113,8 +113,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 isValid: true
             });
 
+            // 先添加用户消息到界面和历史记录
+            appendMessage(messageInput.innerHTML, 'user');
+            messageInput.innerHTML = '';
+            adjustTextareaHeight(messageInput);
+
+            // 添加加载状态消息
+            const loadingMessage = appendMessage('正在处理...', 'ai', true);
+            loadingMessage.classList.add('loading-message');
+
             // 如果不是临时模式，获取网页内容
             if (!isTemporaryMode) {
+                loadingMessage.textContent = '正在获取网页内容...';
                 const pageContentResponse = await getPageContent();
                 if (pageContentResponse) {
                     pageContent = pageContentResponse;
@@ -128,7 +138,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // 构建消息内容
             let messageContent;
-            const images = [];
 
             // 如果有图片，构建包含文本和图片的数组格式
             if (imageTags.length > 0) {
@@ -163,11 +172,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 content: messageContent
             };
 
-            // 先添加用户消息到界面和历史记录
-            appendMessage(messageInput.innerHTML, 'user');
-            messageInput.innerHTML = '';
-            adjustTextareaHeight(messageInput);
-
             // 构建消息数组（不包括当前用户消息）
             const messages = [...chatHistory.slice(0, -1)];  // 排除刚刚添加的用户消息
 
@@ -186,6 +190,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 messages.unshift(systemMessage);
             }
 
+            // 更新加载状态消息
+            loadingMessage.textContent = '正在等待 AI 回复...';
+
             // 发送API请求
             const response = await fetch(config.baseUrl, {
                 method: 'POST',
@@ -201,8 +208,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     temperature: config.temperature || 1,
                     top_p: 0.95,
                     max_tokens: 4096,
-                    // frequency_penalty: 0,
-                    // presence_penalty: 0,
                 })
             });
 
@@ -212,6 +217,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             const reader = response.body.getReader();
+            let hasStartedResponse = false;
 
             while (true) {
                 const {done, value} = await reader.read();
@@ -233,6 +239,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                             try {
                                 const data = JSON.parse(content);
                                 if (data.choices?.[0]?.delta?.content) {
+                                    if (!hasStartedResponse) {
+                                        // 移除加载状态消息
+                                        loadingMessage.remove();
+                                        hasStartedResponse = true;
+                                    }
                                     context.aiResponse += data.choices[0].delta.content;
                                     updateAIMessage(context.aiResponse, requestId);
                                 }
@@ -247,7 +258,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } catch (error) {
             console.error('发送消息失败:', error);
-            appendMessage('发送失败: ' + error.message, 'ai', true);
+            // 更新加载状态消息显示错误
+            if (loadingMessage) {
+                loadingMessage.textContent = '发送失败: ' + error.message;
+                loadingMessage.classList.add('error-message');
+            }
             // 从 chatHistory 中移除最后一条记录（用户的问题）
             chatHistory.pop();
         }
