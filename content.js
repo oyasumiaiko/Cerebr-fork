@@ -458,28 +458,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    // 快速总结功能的公共函数
-    async function handleQuickSummary() {
-        try {
-            // 如果侧边栏没有打开，先打开它并强制聚焦
-            if (sidebar && !sidebar.isVisible) {
-                sidebar.toggle(true);
-            }
-
-            const iframe = sidebar?.sidebar?.querySelector('.cerebr-sidebar__iframe');
-            if (iframe) {
-                iframe.contentWindow.postMessage({ type: 'QUICK_SUMMARY_COMMAND' }, '*');
-                return { success: true };
-            } else {
-                console.error('找不到侧边栏iframe');
-                return { success: false, error: 'Iframe not found' };
-            }
-        } catch (error) {
-            console.error('处理快速总结命令失败:', error);
-            return { success: false, error: error.message };
-        }
-    }
-
     // 处理侧边栏切换命令
     if (message.type === 'TOGGLE_SIDEBAR_onClicked') {
         try {
@@ -555,9 +533,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // 处理快速总结命令
     if (message.type === 'QUICK_SUMMARY') {
-        handleQuickSummary().then(result => {
-            sendResponse(result);
-        });
+        try {
+            // 如果侧边栏没有打开，先打开它并强制聚焦
+            if (sidebar && !sidebar.isVisible) {
+                sidebar.toggle(true);
+            }
+
+            const iframe = sidebar?.sidebar?.querySelector('.cerebr-sidebar__iframe');
+            if (iframe) {
+                iframe.contentWindow.postMessage({ type: 'QUICK_SUMMARY_COMMAND' }, '*');
+                sendResponse({ success: true });
+            } else {
+                console.error('找不到侧边栏iframe');
+                sendResponse({ success: false, error: 'Iframe not found' });
+            }
+        } catch (error) {
+            console.error('处理快速总结命令失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
         return true;
     }
 
@@ -700,7 +693,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
 });
 
-// 修改 waitForContent 函数
 async function waitForContent() {
     return new Promise((resolve) => {
         const checkContent = () => {
@@ -738,7 +730,6 @@ async function waitForContent() {
     });
 }
 
-// 修改 extractPageContent 函数
 async function extractPageContent() {
   console.log('extractPageContent 开始提取页面内容');
 
