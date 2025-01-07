@@ -134,9 +134,8 @@ class CerebrSidebar {
           overflow: hidden;
           border-radius: calc(12px * var(--scale-ratio, 1));
           position: relative;
-          z-index: 1;
           background: transparent;
-          backdrop-filter: blur(30px);
+          backdrop-filter: blur(30px) saturate(250%);
           contain: layout style;
         }
 
@@ -164,7 +163,6 @@ class CerebrSidebar {
           border: none;
           background: transparent;
           position: relative;
-          z-index: 2;
           transform-origin: top left;
           box-sizing: border-box;
         }
@@ -243,17 +241,6 @@ class CerebrSidebar {
         this.initialized = true;
         console.log('侧边栏初始化完成');
       });
-
-      // 监听来自 iframe 的消息
-      window.addEventListener('message', (event) => {
-        if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
-          this.updateWidth(event.data.width);
-        } else if (event.data.type === 'SCALE_FACTOR_CHANGE') {
-          this.scaleFactor = event.data.value;
-          this.updateScale();
-          chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
-        }
-      });
     } catch (error) {
       console.error('初始化侧边栏失败:', error);
     }
@@ -282,25 +269,33 @@ class CerebrSidebar {
       document.addEventListener('mouseup', handleMouseUp);
     });
 
+    
     // 监听来自 iframe 的消息
     window.addEventListener('message', (event) => {
-      if (event.data.type === 'SIDEBAR_WIDTH_CHANGE') {
-        this.updateWidth(event.data.width);
-      } else if (event.data.type === 'SCALE_FACTOR_CHANGE') {
-        this.scaleFactor = event.data.value;
-        this.updateScale();
-        chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
-      } else if (event.data.type === 'GET_SELECTED_TEXT') {
-        // 获取页面上选中的文本
-        const selectedText = window.getSelection().toString();
-        // 发送回 iframe
-        const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
-        if (iframe) {
-          iframe.contentWindow.postMessage({
+      switch (event.data.type) {
+        case 'SIDEBAR_WIDTH_CHANGE':
+          this.updateWidth(event.data.width);
+          break;
+          
+        case 'SCALE_FACTOR_CHANGE':
+          this.scaleFactor = event.data.value;
+          this.updateScale();
+          chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
+          break;
+          
+        case 'GET_SELECTED_TEXT':
+          const selectedText = window.getSelection().toString();
+          this.sidebar?.querySelector('.cerebr-sidebar__iframe')?.contentWindow.postMessage({
             type: 'SELECTED_TEXT_RESULT',
-            selectedText: selectedText
+            selectedText
           }, '*');
-        }
+          break;
+          
+        case 'CLOSE_SIDEBAR':
+          if (this.isVisible) {
+            this.toggle();
+          }
+          break;
       }
     });
   }

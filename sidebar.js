@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fontSize = document.getElementById('font-size');
     const widthValue = document.getElementById('width-value');
     const fontSizeValue = document.getElementById('font-size-value');
+    const collapseButton = document.getElementById('collapse-button');
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
@@ -1086,10 +1087,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             toggleSettingsMenu(false);
 
             // 构建总结请求
-            messageInput.textContent = selectedText ? 
-                `请解释这段文本的含义：${selectedText}` :
-                `请总结这个页面的主要内容。`;
-                
+            const trimmedText = selectedText?.trim() || '';
+            const isQuestion = trimmedText.endsWith('?') || 
+                             trimmedText.endsWith('？') || 
+                             trimmedText.endsWith('吗');
+            const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
+            const isSearchModel = currentModel.endsWith('-search');
+            
+            if (selectedText) {
+                if(isSearchModel) messageInput.textContent += `联网搜索，`;
+                messageInput.textContent += isQuestion ? `"${selectedText}"` : `简洁解释："${selectedText}"`;
+            } else {
+                messageInput.textContent = `请总结这个页面的主要内容。`;
+            }
             // 直接发送消息
             sendMessage();
         } catch (error) {
@@ -1588,4 +1598,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
     }
+
+    // 添加收起按钮点击事件
+    collapseButton.addEventListener('click', () => {
+        window.parent.postMessage({
+            type: 'CLOSE_SIDEBAR'
+        }, '*');
+    });
 });
