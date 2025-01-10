@@ -198,7 +198,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 添加系统消息
             const systemMessage = {
                 role: "system",
-                content: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。用户语言是 ${navigator.language}。请优先使用 ${navigator.language} 语言回答用户问题。${pageContent ?
+                content: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。${pageContent ?
                     `\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}` :
                     ''
                     }`
@@ -479,7 +479,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
     });
-    
+
     // 修改appendMessage函数，移除初始字数显示
     function appendMessage(text, sender, skipHistory = false, fragment = null) {
         const messageDiv = document.createElement('div');
@@ -1078,10 +1078,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
 
-            // 获取页面上选中的文本
-            // 清空聊天记录
-            chatContainer.innerHTML = '';
-            chatHistory = [];
 
             // 关闭设置菜单
             toggleSettingsMenu(false);
@@ -1095,12 +1091,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isSearchModel = currentModel.endsWith('-search');
 
             if (trimmedText) {
-                if (isSearchModel) messageInput.textContent = `search, grounding, explain: "${trimmedText}"`;
+                if (isSearchModel) messageInput.textContent = `Search, Grounding, 解释: "${trimmedText}"`;
                 else messageInput.textContent = isQuestion ? `"${trimmedText}"` : `"${trimmedText}"是什么？`;
             } else {
                 if (wasTemporaryMode) {
                     exitTemporaryMode();
                 }
+
+                // 清空聊天记录
+                chatContainer.innerHTML = '';
+                chatHistory = [];
                 messageInput.textContent = `请总结这个页面的主要内容。`;
             }
             // 发送消息
