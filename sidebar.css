@@ -384,6 +384,37 @@ input:checked + .slider:before {
     transition: all 0.2s ease;
 }
 
+/* 添加紧凑模式样式 */
+.api-card .api-form {
+    display: none;
+}
+
+.api-card.expanded .api-form {
+    display: block;
+    margin-top: 10px;
+}
+
+/* 添加紧凑模式的头部样式 */
+.api-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.api-card-title {
+    flex: 1;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.api-card-actions {
+    display: flex;
+    gap: 4px;
+}
+
 .api-card:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);

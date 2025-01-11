@@ -96,29 +96,32 @@
         <div class="api-cards">
             <!-- 卡片模板 -->
             <div class="api-card template" style="display: none;">
+                <div class="api-card-header">
+                    <div class="api-card-title"></div>
+                    <div class="api-card-actions">
+                        <button class="card-button favorite-btn" title="收藏">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M8 2L9.8 5.6L14 6.2L11 9.1L11.8 13.2L8 11.3L4.2 13.2L5 9.1L2 6.2L6.2 5.6L8 2Z" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                        </button>
+                        <button class="card-button duplicate-btn" title="复制">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M13 5H7V11H13V5Z" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M10 3H4V9" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                        </button>
+                        <button class="card-button delete-btn" title="删除">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M3 4H13" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M5 4V12H11V4" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
                 <div class="api-form">
                     <div class="form-group">
                         <div class="form-group-header">
                             <label>API Key</label>
-                            <div class="card-actions">
-                                <button class="card-button favorite-btn" title="收藏">
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                        <path d="M8 2L9.8 5.6L14 6.2L11 9.1L11.8 13.2L8 11.3L4.2 13.2L5 9.1L2 6.2L6.2 5.6L8 2Z" stroke="currentColor" stroke-width="1.5"/>
-                                    </svg>
-                                </button>
-                                <button class="card-button duplicate-btn">
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                        <path d="M13 5H7V11H13V5Z" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M10 3H4V9" stroke="currentColor" stroke-width="1.5"/>
-                                    </svg>
-                                </button>
-                                <button class="card-button delete-btn">
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                        <path d="M3 4H13" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M5 4V12H11V4" stroke="currentColor" stroke-width="1.5"/>
-                                    </svg>
-                                </button>
-                            </div>
                         </div>
                         <input type="password" class="api-key" placeholder="输入 API Key">
                     </div>

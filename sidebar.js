@@ -851,6 +851,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             template.classList.add('selected');
         }
 
+        // 设置标题
+        const titleElement = template.querySelector('.api-card-title');
+        titleElement.textContent = config.modelName || config.baseUrl || '新配置';
+
         const apiKeyInput = template.querySelector('.api-key');
         const baseUrlInput = template.querySelector('.base-url');
         const modelNameInput = template.querySelector('.model-name');
@@ -895,17 +899,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 阻止输入框和按钮点击事件冒泡
         const stopPropagation = (e) => e.stopPropagation();
         apiForm.addEventListener('click', stopPropagation);
-        template.querySelector('.card-actions').addEventListener('click', stopPropagation);
+        template.querySelector('.api-card-actions').addEventListener('click', stopPropagation);
 
         // 输入变化时保存
         [apiKeyInput, baseUrlInput, modelNameInput, temperatureInput].forEach(input => {
             input.addEventListener('change', () => {
                 apiConfigs[index] = {
+                    ...apiConfigs[index],
                     apiKey: apiKeyInput.value,
                     baseUrl: baseUrlInput.value,
                     modelName: modelNameInput.value,
                     temperature: parseFloat(temperatureInput.value)
                 };
+                // 更新标题
+                titleElement.textContent = apiConfigs[index].modelName || apiConfigs[index].baseUrl || '新配置';
                 saveAPIConfigs();
             });
         });
@@ -931,16 +938,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
-        // 选择配置
+        // 点击卡片事件
         template.addEventListener('click', () => {
-            selectedConfigIndex = index;
-            saveAPIConfigs();
-            document.querySelectorAll('.api-card').forEach(card => {
-                card.classList.remove('selected');
-            });
-            template.classList.add('selected');
-            // 关闭设置页面
-            apiSettings.classList.remove('visible');
+            // 如果已经是选中状态，则切换展开/折叠
+            if (index === selectedConfigIndex) {
+                template.classList.toggle('expanded');
+            } else {
+                // 选择新的配置
+                selectedConfigIndex = index;
+                saveAPIConfigs();
+                // 更新所有卡片的选中状态
+                document.querySelectorAll('.api-card').forEach(card => {
+                    card.classList.remove('selected');
+                    // 如果不是当前卡片，折叠它
+                    if (card !== template) {
+                        card.classList.remove('expanded');
+                    }
+                });
+                template.classList.add('selected');
+                template.classList.add('expanded');
+            }
         });
 
         return template;
