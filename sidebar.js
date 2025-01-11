@@ -862,6 +862,35 @@ document.addEventListener('DOMContentLoaded', async () => {
         const temperatureValue = template.querySelector('.temperature-value');
         const apiForm = template.querySelector('.api-form');
         const favoriteBtn = template.querySelector('.favorite-btn');
+        const togglePasswordBtn = template.querySelector('.toggle-password-btn');
+
+        // 添加密码切换按钮的点击事件监听器
+        togglePasswordBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const type = apiKeyInput.type === 'password' ? 'text' : 'password';
+            apiKeyInput.type = type;
+            togglePasswordBtn.classList.toggle('visible');
+        });
+
+        // 添加点击外部自动隐藏密码的功能
+        document.addEventListener('click', (e) => {
+            // 如果点击的不是API Key输入框和切换按钮
+            if (!apiKeyInput.contains(e.target) && !togglePasswordBtn.contains(e.target)) {
+                // 如果当前是显示状态，则切换回密码状态
+                if (apiKeyInput.type === 'text') {
+                    apiKeyInput.type = 'password';
+                    togglePasswordBtn.classList.remove('visible');
+                }
+            }
+        });
+
+        // 当输入框失去焦点时也隐藏密码
+        apiKeyInput.addEventListener('blur', () => {
+            if (apiKeyInput.type === 'text') {
+                apiKeyInput.type = 'password';
+                togglePasswordBtn.classList.remove('visible');
+            }
+        });
 
         apiKeyInput.value = config.apiKey || '';
         baseUrlInput.value = config.baseUrl || 'https://api.openai.com/v1/chat/completions';
