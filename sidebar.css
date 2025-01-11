@@ -330,7 +330,7 @@ input:checked + .slider:before {
     right: 0;
     bottom: 0;
     background: var(--cerebr-bg-color);
-    display: none;
+    display: flex;
     flex-direction: column;
     padding: 20px;
     overflow-y: scroll;
@@ -338,6 +338,11 @@ input:checked + .slider:before {
     -ms-overflow-style: none;  /* IE and Edge */
     backdrop-filter: blur(var(--cerebr-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    pointer-events: none;
+    user-select: none;  /* 防止文字被选中 */
 }
 
 #api-settings::-webkit-scrollbar {
@@ -345,7 +350,21 @@ input:checked + .slider:before {
 }
 
 #api-settings.visible {
-    display: flex;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+/* 移除滑入动画，只保留淡入淡出 */
+#api-settings .settings-header,
+#api-settings .api-cards > *:not(.template) {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+#api-settings.visible .settings-header,
+#api-settings.visible .api-cards > *:not(.template) {
+    opacity: 1;
 }
 
 .settings-header {
@@ -506,6 +525,7 @@ input:checked + .slider:before {
     color: var(--cerebr-text-color);
     font-size: 14px;
     box-sizing: border-box;
+    user-select: text;  /* 允许输入框文字选择 */
 }
 
 /* 添加输入框包装容器样式 */
