@@ -1660,12 +1660,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (force || shouldAutoScroll) {
             lastProgrammaticScroll = Date.now();
-            requestAnimationFrame(() => {
-                chatContainer.scrollTo({
-                    top: chatContainer.scrollHeight,
-                    behavior: 'smooth'
+            
+            // 获取最后一条 AI 消息
+            const lastAiMessage = chatContainer.querySelector('.ai-message:last-child');
+            if (lastAiMessage) {
+                const topMargin = 16; // 添加16px的顶部边距
+                // 获取消息相对于聊天容器的位置
+                const messageRect = lastAiMessage.getBoundingClientRect();
+                const containerRect = chatContainer.getBoundingClientRect();
+                const messageTopRelative = messageRect.top - containerRect.top;
+
+                // 如果消息顶部已经到达或超过容器顶部（考虑边距），不再滚动
+                if (messageTopRelative <= topMargin) {
+                    return;
+                }
+
+                // 计算需要滚动的位置：让消息顶部与容器顶部对齐（考虑边距）
+                const targetScrollTop = chatContainer.scrollTop + messageTopRelative - topMargin;
+                
+                requestAnimationFrame(() => {
+                    chatContainer.scrollTo({
+                        top: targetScrollTop,
+                        behavior: 'smooth'
+                    });
                 });
-            });
+            } else {
+                // 如果没有找到 AI 消息，则滚动到底部
+                requestAnimationFrame(() => {
+                    chatContainer.scrollTo({
+                        top: chatContainer.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                });
+            }
         }
     }
 
