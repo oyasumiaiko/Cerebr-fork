@@ -1,4 +1,4 @@
-    document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
     const messageInput = document.getElementById('message-input');
     const contextMenu = document.getElementById('context-menu');
@@ -183,6 +183,10 @@
                 pageContent = null;  // 临时模式下不使用网页内容
             }
 
+            // 创建新的 AbortController
+            currentController = new AbortController();
+            const signal = currentController.signal;
+            
             // 构建消息内容
             let messageContent;
 
@@ -980,7 +984,7 @@
             e.stopPropagation();
             // 直接切换当前配置的收藏状态
             apiConfigs[index].isFavorite = !apiConfigs[index].isFavorite;
-            
+
             if (apiConfigs[index].isFavorite) {
                 favoriteBtn.classList.add('active');
             } else {
