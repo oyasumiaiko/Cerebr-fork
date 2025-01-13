@@ -1073,10 +1073,10 @@ input:checked + .slider:before {
 #settings-menu::before {
     content: '';
     position: absolute;
-    bottom: -16px;  /* 增加底部距离 */
-    left: -20px;    /* 向左扩展 */
-    right: -20px;   /* 向右扩展 */
-    height: 24px;   /* 增加高度 */
+    bottom: -24px;  /* 增加底部距离 */
+    left: -40px;    /* 向左扩展更多 */
+    right: -40px;   /* 向右扩展更多 */
+    height: 32px;   /* 增加高度 */
     background: transparent;
 }
 
