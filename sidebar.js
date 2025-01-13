@@ -35,16 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         settingsMenu.classList.remove('visible');
     });
 
-    // 添加点击事件监听器，让点击侧边栏时自动聚焦到输入框
-    document.body.addEventListener('click', (e) => {
-        // 排除点击设置按钮、设置菜单、上下文菜单的情况
-        if (!settingsButton.contains(e.target) &&
-            !settingsMenu.contains(e.target) &&
-            !contextMenu.contains(e.target)) {
-            messageInput.focus();
-        }
-    });
-
     // 聊天历史记录变量
     let chatHistory = [];
     let responseContexts = new Map();  // 存储每个请求的上下文
@@ -186,7 +176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 创建新的 AbortController
             currentController = new AbortController();
             const signal = currentController.signal;
-            
+
             // 构建消息内容
             let messageContent;
 
