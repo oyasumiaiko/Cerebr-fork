@@ -1106,8 +1106,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 清空聊天记录功能
-    const clearChat = document.getElementById('clear-chat');
-    clearChat.addEventListener('click', () => {
+    function clearChatHistory() {
         // 如果有正在进行的请求，停止它
         if (currentController) {
             currentController.abort();
@@ -1117,6 +1116,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatContainer.innerHTML = '';
         // 清空当前页面的聊天历史记录
         chatHistory = [];
+    }
+
+    const clearChat = document.getElementById('clear-chat');
+    clearChat.addEventListener('click', () => {
+        clearChatHistory();
         // 关闭设置菜单
         toggleSettingsMenu(false);
         // 聚焦输入框并将光标移到末尾
@@ -1154,10 +1158,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (wasTemporaryMode) {
                     exitTemporaryMode();
                 }
-
-                // 清空聊天记录
-                chatContainer.innerHTML = '';
-                chatHistory = [];
+                clearChatHistory();
                 messageInput.textContent = `请总结这个页面的主要内容。`;
             }
             // 发送消息
