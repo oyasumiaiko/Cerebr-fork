@@ -139,21 +139,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return msg;
     }
 
-    // 提取公共配置
-    const MATH_DELIMITERS = {
-        regex: /(\\\\\([^]+?\\\\\))|(\\\([^]+?\\\))|(\\\[[\s\S]+?\\\])/g,
-        // regex: /(\$\$[\s\S]+?\$\$)|(\$[^\s$][^$]*?\$)|(\\\\\([^]+?\\\\\))|(\\\([^]+?\\\))|(\\\[[\s\S]+?\\\])/g,
-        renderConfig: {
-            delimiters: [
-                { left: '\\(', right: '\\)', display: false },  // 行内公式
-                { left: '\\\\(', right: '\\\\)', display: false },  // 行内公式
-                { left: '\\[', right: '\\]', display: true },   // 行间公式
-                // {left: '$$', right: '$$', display: true},     // 行间公式（备用）
-                // {left: '$', right: '$', display: false}       // 行内公式（备用）
-            ],
-            throwOnError: false
-        }
-    };
 
     // 获取网页内容
     async function getPageContent() {
@@ -429,52 +414,115 @@ document.addEventListener('DOMContentLoaded', async () => {
             appendMessage(rawText, 'ai');
         }
     }
+    // 提取公共配置
+    const MATH_DELIMITERS = {
+        delimiters: [
+            { left: '\\(', right: '\\)', display: false },  // 行内公式
+            { left: '\\\\(', right: '\\\\)', display: false },  // 行内公式
+            { left: '\\[', right: '\\]', display: true },   // 行间公式
+            { left: '$$', right: '$$', display: true },     // 行间公式
+            { left: '$', right: '$', display: false }       // 行内公式
+        ],
+        throwOnError: false
+    };
 
-    // 提取公共的数学公式处理函数
-    function processMathAndMarkdown(text) {
+    // 预处理数学表达式
+    function preMathEscape(text) {
+        let counter = 0;
         const mathExpressions = [];
-        let mathIndex = 0;
-        text = text.replace(/\\\[([a-zA-Z\d]+)\]/g, '[$1]');
 
-        // 临时替换数学公式
-        text = text.replace(MATH_DELIMITERS.regex, (match) => {
-            // 只替换不在 \n 后面的 abla_
-            match = match.replace(/(?<!\\n)abla_/g, '\\nabla_');
-
-            // 如果是普通括号形式公式，转换为 \(...\) 形式
-            if (match.startsWith('(') && match.endsWith(')') && !match.startsWith('\\(')) {
-                console.log('警告：请使用 \\(...\\) 来表示行内公式');
-            }
-            const placeholder = `%%MATH_EXPRESSION_${mathIndex}%%`;
-            mathExpressions.push(match);
-            mathIndex++;
+        // 替换块级数学表达式
+        text = text.replace(/(\\\[[\s\S]+?\\\])/g, (match, p1) => {
+            const placeholder = `😎BLOCK_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'block' });
+            counter++;
             return placeholder;
         });
 
-        // 配 marked
+        // 替换行内数学表达式
+        text = text.replace(/(\\\([\s\S]+?\\\))/g, (match, p1) => {
+            const placeholder = `😎INLINE_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'inline' });
+            counter++;
+            return placeholder;
+        });
+
+        // 替换美元符号包围的块级数学表达式
+        text = text.replace(/(\$\$[\s\S]+?\$\$)/g, (match, p1) => {
+            const placeholder = `😎DOLLARBLOCK_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'dollarblock' });
+            counter++;
+            return placeholder;
+        });
+
+        // 替换美元符号包围的行内数学表达式
+        text = text.replace(/(\$[^\$\n]+?\$)/g, (match, p1) => {
+            const placeholder = `😎DOLLAR_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(1, -1), originalContent: p1, type: 'dollarinline' });
+            counter++;
+            return placeholder;
+        });
+
+        return { text, mathExpressions };
+    }
+
+    // 后处理数学表达式
+    function postMathReplace(text, mathExpressions) {
+        mathExpressions.forEach(({ placeholder, content, originalContent, type }) => {
+            let rendered;
+            try {
+                if (type === 'block' || type === 'dollarblock') {
+                    rendered = katex.renderToString(content, { displayMode: true, throwOnError: true });
+                } else if (type === 'inline' || type === 'dollarinline') {
+                    rendered = katex.renderToString(content, { displayMode: false, throwOnError: true });
+                }
+            } catch (e) {
+                console.error('KaTeX error:', e);
+                rendered = originalContent;
+            }
+            text = text.replace(placeholder, rendered);
+        });
+
+        return text;
+    }
+
+    // 处理数学公式和Markdown
+    function processMathAndMarkdown(text) {
+        // 替换特殊语法
+        text = text.replace(/\\\[([a-zA-Z\d]+)\]/g, '[$1]');
+        text = text.replace(/(?<!\\n)abla_/g, '\\nabla_');
+        text = text.replace(/:\s\*\*/g, ':**');
+
+        // 预处理数学表达式
+        const { text: escapedText, mathExpressions } = preMathEscape(text);
+
+        // 处理未闭合的代码块
+        let processedText = escapedText;
+        const codeBlockRegex = /```/g;
+        if (((processedText || '').match(codeBlockRegex) || []).length % 2 > 0) {
+            processedText += '\n```';
+        }
+
+        // 配置marked
         marked.setOptions({
             breaks: true,
             gfm: true,
             sanitize: false,
-            highlight: function (code, lang) {
+            highlight: function(code, lang) {
                 if (lang && hljs.getLanguage(lang)) {
                     try {
                         return hljs.highlight(code, { language: lang }).value;
-                    } catch (err) { }
+                    } catch (err) {}
                 }
                 return hljs.highlightAuto(code).value;
             }
         });
 
-        text = text.replace(/:\s\*\*/g, ':**');
+        // 渲染Markdown
+        const renderedMarkdown = marked.parse(processedText);
 
-        // 渲染 Markdown
-        let html = marked.parse(text);
-
-        // 恢复数学公式
-        html = html.replace(/%%MATH_EXPRESSION_(\d+)%%/g, (_, index) => mathExpressions[index]);
-
-        return html;
+        // 替换数学表达式
+        return postMathReplace(renderedMarkdown, mathExpressions);
     }
 
     // 监听来自 content script 的消息
