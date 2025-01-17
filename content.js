@@ -533,6 +533,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // 处理获取页面类型请求
+  if (message.type === 'GET_DOCUMENT_TYPE') {
+    sendResponse({ contentType: document.contentType });
+    return true;
+  }
+
   // 处理获取页面内容请求
   if (message.type === 'GET_PAGE_CONTENT_INTERNAL') {
     console.log('收到获取页面内容请求');

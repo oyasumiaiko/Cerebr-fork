@@ -1519,6 +1519,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         selection.addRange(range);
     });
 
+    // 添加获取页面类型的函数
+    async function getDocumentType() {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'GET_DOCUMENT_TYPE'
+            });
+            return response?.contentType;
+        } catch (error) {
+            console.error('获取页面类型失败:', error);
+            return null;
+        }
+    }
+
     // 修改快速总结功能
     async function performQuickSummary(webpageSelection = null) {
         const wasTemporaryMode = isTemporaryMode;
@@ -1535,6 +1548,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
             const isSearchModel = currentModel.endsWith('-search');
 
+            // 获取页面类型
+            const contentType = await getDocumentType();
+            const isPDF = contentType === 'application/pdf';
+
             if (selectedText) {
                 messageInput.textContent = isSearchModel ? 
                     `google_search, 解释: "${selectedText}"` : 
@@ -1544,7 +1561,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                     exitTemporaryMode();
                 }
                 clearChatHistory();
-                messageInput.textContent = `请总结这个页面的主要内容。`;
+                
+                // 为PDF文件使用特殊的提示词
+                if (isPDF) {
+                    messageInput.textContent = `请对这个PDF文档进行分析：
+1. 首先列出文档的详细大纲结构，包括各级标题和对应的主要内容；
+2. 然后根据大纲结构，按照以下方面展开总结：
+   - 文档的主要目的和核心论点
+   - 每个主要部分的关键内容和要点
+   - 重要的数据、图表或研究发现
+   - 作者的结论和建议
+3. 最后，总结文档的创新点、局限性和实际应用价值。
+
+请用清晰的层级结构和要点形式展示以上内容。`;
+                } else {
+                    messageInput.textContent = `请总结这个页面的主要内容。`;
+                }
             }
             // 发送消息
             await sendMessage();
