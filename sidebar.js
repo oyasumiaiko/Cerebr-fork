@@ -390,13 +390,31 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 获取当前对话链
             const conversationChain = getCurrentConversationChain();
 
-            // 添加系统消息
+            // 基础提示语
+            const basePrompt = `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。`;
+
+            // 搜索模型的额外提示语
+            const searchPrompt = `\n\n当需要获取最新或更准确的信息时，请使用google_search.search功能。搜索时：
+1. 优先使用英文编写搜索词以获得更全面的结果
+2. 每个搜索主题可以用2-3个不同表述的搜索词以提高结果质量
+3. 可以进行10-20次不同的搜索
+4. 搜索词应该简洁、精确、多样化
+5. 根据搜索结果给出深入、全面的中文回答`;
+
+            // 网页内容提示语
+            const pageContentPrompt = pageContent ? 
+                `\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}` :
+                '';
+
+            // 获取当前模型名称并根据模型类型添加搜索提示语
+            const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
+            const isSearchModel = currentModel.endsWith('-search');
+            const modelSpecificPrompt = isSearchModel ? searchPrompt : '';
+
+            // 组合完整的系统消息
             const systemMessage = {
                 role: "system",
-                content: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。${pageContent ?
-                    `\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}` :
-                    ''
-                    }`
+                content: basePrompt + modelSpecificPrompt + pageContentPrompt
             };
 
             // 构建消息数组
@@ -1519,7 +1537,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (selectedText) {
                 messageInput.textContent = isSearchModel ? 
-                    `GoogleSearch, 解释: "${selectedText}"` : 
+                    `google_search, 解释: "${selectedText}"` : 
                     `"${selectedText}"是什么？`;
             } else {
                 if (wasTemporaryMode) {
