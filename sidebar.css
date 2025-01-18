@@ -1482,7 +1482,6 @@ body.temporary-mode::after {
 }
 
 .source-tooltip {
-    display: none;
     position: absolute;
     bottom: 100%;
     left: 0;
@@ -1495,10 +1494,18 @@ body.temporary-mode::after {
     z-index: 1000;
     margin-bottom: 8px;
     backdrop-filter: blur(var(--cerebr-blur-radius));
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.1s ease, visibility 0.1s;
+    pointer-events: none;
+    will-change: opacity;
+    contain: content;
 }
 
 .source-item:hover .source-tooltip {
-    display: block;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .source-tooltip h4 {
@@ -1516,10 +1523,17 @@ body.temporary-mode::after {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    opacity: 0;
+    animation: matchItemAppear 0.2s ease forwards;
 }
 
-.match-item:last-child {
-    margin-bottom: 0;
+@keyframes matchItemAppear {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .match-text {
