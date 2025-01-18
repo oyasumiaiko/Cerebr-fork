@@ -620,12 +620,44 @@ document.addEventListener('DOMContentLoaded', async () => {
                             
                             // 添加进度条到容器
                             confidenceBar.appendChild(progressBar);
+
+                            // 收集该来源的所有匹配文本和置信度
+                            const matchingTexts = [];
+                            groundingMetadata.groundingSupports.forEach(support => {
+                                if (support.groundingChunkIndices && support.confidenceScores) {
+                                    support.groundingChunkIndices.forEach((chunkIndex, idx) => {
+                                        const chunk = groundingMetadata.groundingChunks[chunkIndex];
+                                        if (chunk?.web?.uri === source.url) {
+                                            matchingTexts.push({
+                                                text: support.segment.text,
+                                                confidence: support.confidenceScores[idx] * 100
+                                            });
+                                        }
+                                    });
+                                }
+                            });
+
+                            // 创建悬浮提示内容
+                            const tooltipContent = matchingTexts.map(match => 
+                                `<div class="match-item">
+                                    <div class="match-text">${match.text}</div>
+                                    <div class="match-confidence">${match.confidence.toFixed(1)}%</div>
+                                </div>`
+                            ).join('');
                             
                             li.innerHTML = `
                                 <div class="source-item">
                                     <div class="source-info">
                                         [${source.refNumber}] <a href="${source.url}" target="_blank">${source.domain}</a>
-                                        <span class="confidence-text">${avgConfidence.toFixed(1)}%</span>
+                                        <span class="confidence-text">
+                                            ${avgConfidence.toFixed(1)}% (${count}次引用)
+                                        </span>
+                                    </div>
+                                    <div class="source-tooltip">
+                                        <div class="tooltip-content">
+                                            <h4>匹配内容：</h4>
+                                            ${tooltipContent}
+                                        </div>
                                     </div>
                                 </div>
                             `;

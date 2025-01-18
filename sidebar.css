@@ -1442,6 +1442,8 @@ body.temporary-mode::after {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    position: relative;
+    cursor: pointer;
 }
 
 .source-info {
@@ -1479,6 +1481,78 @@ body.temporary-mode::after {
     background: color-mix(in srgb, var(--cerebr-text-color) 60%, transparent);
 }
 
+.source-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: var(--cerebr-background-color);
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 8px;
+    z-index: 1000;
+    margin-bottom: 8px;
+    backdrop-filter: blur(var(--cerebr-blur-radius));
+}
+
+.source-item:hover .source-tooltip {
+    display: block;
+}
+
+.source-tooltip h4 {
+    margin: 0 0 8px 0;
+    font-size: 0.9em;
+    opacity: 0.8;
+}
+
+.match-item {
+    padding: 6px;
+    background: var(--cerebr-hover-color);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    font-size: 0.9em;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.match-item:last-child {
+    margin-bottom: 0;
+}
+
+.match-text {
+    color: var(--cerebr-text-color);
+    line-height: 1.4;
+}
+
+.match-confidence {
+    color: var(--cerebr-text-color);
+    opacity: 0.7;
+    font-size: 0.9em;
+    align-self: flex-end;
+}
+
+/* Dark theme support */
+:root.dark-theme .source-tooltip {
+    background: var(--cerebr-background-color);
+    border-color: var(--cerebr-border-color);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+:root.dark-theme .match-item {
+    background: var(--cerebr-message-ai-bg);
+}
+
+:root.dark-theme .match-text {
+    color: var(--cerebr-text-color);
+}
+
+:root.dark-theme .match-confidence {
+    color: var(--cerebr-text-color);
+}
+
 /* Web Search Queries Section */
 .search-queries-list {
     margin-top: 0.5em;
@@ -1514,11 +1588,6 @@ body.temporary-mode::after {
 
 .search-queries-list li:hover {
     background: var(--cerebr-message-user-bg);
-    /* transform: translateX(2px); */
-}
-
-.search-queries-list li:active {
-    /* transform: translateX(1px); */
 }
 
 .search-queries-list li::before {
