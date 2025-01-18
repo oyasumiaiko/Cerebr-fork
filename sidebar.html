@@ -101,6 +101,12 @@
                     <path d="M2 6V2H6M10 2H14V6M14 10V14H10M6 14H2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </div>
+            <div class="menu-item" id="prompt-settings-toggle">
+                <span>提示词设置</span>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 12L10 8L6 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </div>
         </div>
     </div>
     <div id="api-settings">
@@ -177,6 +183,46 @@
             </div>
         </div>
     </div>
+    <div id="prompt-settings">
+        <div class="settings-header">
+            <button class="back-button">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M12 4L6 10L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <span class="settings-title">提示词设置</span>
+        </div>
+        <div class="prompt-settings-content">
+            <div class="prompt-group">
+                <label>系统提示词</label>
+                <textarea id="system-prompt" placeholder="输入系统提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>系统搜索提示词</label>
+                <textarea id="search-prompt" placeholder="输入系统搜索时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>划词搜索提示词</label>
+                <textarea id="selection-prompt" placeholder="输入划词搜索时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>PDF总结提示词</label>
+                <textarea id="pdf-prompt" placeholder="输入PDF文档分析时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>页面总结提示词</label>
+                <textarea id="summary-prompt" placeholder="输入页面总结时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>直接查询提示词</label>
+                <textarea id="query-prompt" placeholder="输入直接查询时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-actions">
+                <button id="reset-prompts">恢复默认</button>
+                <button id="save-prompts">保存更改</button>
+            </div>
+        </div>
+    </div>
     <div class="image-preview-modal">
         <div class="image-preview-content">
             <img src="" alt="预览图片">
@@ -187,7 +233,11 @@
             </button>
         </div>
     </div>
-    <script src="sidebar.js"></script>
-    <script src="sidebar-message-handler.js"></script>
+    <script src="lib/marked.min.js"></script>
+    <script src="lib/highlight.min.js"></script>
+    <script src="lib/katex.min.js"></script>
+    <script src="lib/auto-render.min.js"></script>
+    <script type="module" src="sidebar.js"></script>
+    <script type="module" src="sidebar-message-handler.js"></script>
 </body>
 </html>

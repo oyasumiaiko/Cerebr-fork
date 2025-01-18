@@ -133,12 +133,13 @@ class CerebrSidebar {
 
         .cerebr-sidebar__content {
           height: 100%;
-          overflow: hidden;
+          overflow: auto;
           border-radius: calc(12px * var(--scale-ratio, 1));
           position: relative;
-          background: transparent;
+          background: rgba(255, 255, 255, 0);
           backdrop-filter: blur(30px) saturate(250%);
           contain: layout style;
+          pointer-events: auto;
         }
 
         .cerebr-sidebar.fullscreen {
@@ -157,14 +158,6 @@ class CerebrSidebar {
           visibility: visible;
           transition: transform 0.3s ease;
           pointer-events: auto;
-        }
-
-        @media (prefers-color-scheme: dark) {
-          .cerebr-sidebar {
-            --cerebr-bg-color: rgba(38, 43, 51, 0.75);
-            --cerebr-text-color: #abb2bf;
-            box-shadow: -2px 0 20px rgba(0,0,0,0.3);
-          }
         }
 
         .cerebr-sidebar.visible {

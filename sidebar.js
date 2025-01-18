@@ -1,3 +1,5 @@
+import { PromptSettings } from './prompt_settings.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
     const messageInput = document.getElementById('message-input');
@@ -390,48 +392,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 获取当前对话链
             const conversationChain = getCurrentConversationChain();
 
-            // 基础提示语
-            const basePrompt = `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。`;
-
-            // 搜索模型的额外提示语
-            const searchPrompt = `\n\n---\n\n当需要获取最新或更准确的信息时，请使用google_search.search功能。搜索前请先思考：
-
-1. 分析主题的关键概念和要素
-2. 确定需要了解的具体方面
-3. 考虑不同的视角和维度
-4. 思考时间跨度和地域范围
-5. 识别可能的专业术语
-
-然后按以下原则设计queries：
-
-1. 结合中英文，大部分使用英文，遵循以下模式：
-   - [核心概念] + [具体方面/属性]
-   - [主题] + [年份/时间范围] + [统计/研究/review]
-   - [专业术语] + [definition/example/application]
-   
-2. 每个要点设计3-4个不同queries：
-   - 使用同义词和相关词
-   - 从一般到具体
-   - 结合不同领域视角
-
-3. 总共可以使用10-20个渐进式queries：
-   - 先搜索基础概念和背景
-   - 再搜索具体细节和案例
-   - 最后搜索最新进展和争议
-
-4. 搜索结果分析和整合：
-   - 交叉验证不同来源
-   - 对比不同观点
-   - 提取关键数据和论据
-   - 总结主流观点和新趋势
-
-即使用户没有明确要求，也要主动搜索以确保信息：
-1. 时效性 - 了解最新发展和变化
-2. 全面性 - 覆盖不同角度和层面
-3. 准确性 - 核实关键信息和数据
-4. 权威性 - 参考可靠来源和专业观点
-5. 客观性 - 平衡不同立场和论据`;
-
             // 网页内容提示语
             const pageContentPrompt = pageContent ? 
                 `\n\n---\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}` :
@@ -440,12 +400,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 获取当前模型名称并根据模型类型添加搜索提示语
             const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
             const isSearchModel = currentModel.endsWith('-search');
-            const modelSpecificPrompt = isSearchModel ? searchPrompt : '';
+
+            // 获取当前提示词设置
+            const prompts = promptSettingsManager.getPrompts();
 
             // 组合完整的系统消息
             const systemMessage = {
                 role: "system",
-                content: basePrompt + modelSpecificPrompt + pageContentPrompt
+                content: prompts.system + (isSearchModel ? prompts.search : '') + pageContentPrompt
             };
 
             // 构建消息数组
@@ -1563,7 +1525,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 修改快速总结功能
+    // 导入并初始化提示词设置
+    const promptSettingsManager = new PromptSettings();
+
     async function performQuickSummary(webpageSelection = null) {
         const wasTemporaryMode = isTemporaryMode;
         try {
@@ -1583,32 +1547,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             const contentType = await getDocumentType();
             const isPDF = contentType === 'application/pdf';
 
+            // 获取当前提示词设置
+            const prompts = promptSettingsManager.getPrompts();
+
             if (selectedText) {
-                messageInput.textContent = isSearchModel ? 
-                    `编写最少10条多方面、多层次、多角度的queries，使用google_search(queries)工具执行查询，并将信息总结、精炼、组织为维基百科的形式。
-                    解释: "${selectedText}"
-                    使用中文回答。` : 
-                    `"${selectedText}"是什么？`;
+                // 使用自定义的划词搜索提示词
+                const prompt = isSearchModel ? 
+                    prompts.selection.replace('<SELECTION>', selectedText) :
+                    prompts.query.replace('<SELECTION>', selectedText);
+                messageInput.textContent = prompt;
             } else {
                 if (wasTemporaryMode) {
                     exitTemporaryMode();
                 }
                 clearChatHistory();
                 
-                // 为PDF文件使用特殊的提示词
+                // 为PDF文件使用自定义的PDF提示词
                 if (isPDF) {
-                    messageInput.textContent = `请对这个PDF文档进行分析：
-1. 首先列出文档的详细大纲结构，包括各级标题和对应的主要内容；
-2. 然后根据大纲结构，按照以下方面展开总结：
-   - 文档的主要目的和核心论点
-   - 每个主要部分的关键内容和要点
-   - 重要的数据、图表或研究发现
-   - 作者的结论和建议
-3. 最后，总结文档的创新点、局限性和实际应用价值。
-
-请用清晰的层级结构和要点形式展示以上内容。`;
+                    messageInput.textContent = prompts.pdf;
                 } else {
-                    messageInput.textContent = `请总结这个页面的主要内容。`;
+                    messageInput.textContent = prompts.summary;
                 }
             }
             // 发送消息

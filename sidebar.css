@@ -1534,3 +1534,179 @@ body.temporary-mode::after {
 :root.dark-theme .search-queries-list li:hover {
     background: rgba(255, 255, 255, 0.1);
 }
+
+/* 提示词设置面板样式 */
+#prompt-settings {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--cerebr-bg-color);
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    backdrop-filter: blur(var(--cerebr-blur-radius));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    pointer-events: none;
+    user-select: none;
+}
+
+#prompt-settings::-webkit-scrollbar {
+    display: none;
+}
+
+#prompt-settings.visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    user-select: auto;
+}
+
+.prompt-settings-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.prompt-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.prompt-group label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--cerebr-text-color);
+}
+
+.prompt-group textarea {
+    min-height: 100px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--cerebr-message-ai-bg);
+    border: 1px solid var(--cerebr-border-color);
+    color: var(--cerebr-text-color);
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    transition: all 0.2s ease;
+    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;  /* IE and Edge */
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.prompt-group textarea::-webkit-scrollbar {
+    display: none;
+}
+
+.prompt-group textarea:focus {
+    outline: none;
+    border-color: rgba(0, 122, 255, 0.5);
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
+}
+
+.prompt-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.prompt-actions button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#reset-prompts {
+    background: none;
+    border: 1px solid var(--cerebr-border-color);
+    color: var(--cerebr-text-color);
+}
+
+#reset-prompts:hover {
+    background: var(--cerebr-message-user-bg);
+}
+
+#save-prompts {
+    background: #007AFF;
+    border: none;
+    color: white;
+}
+
+#save-prompts:hover {
+    background: #0066CC;
+}
+
+#save-prompts:active {
+    transform: scale(0.98);
+}
+
+/* 深色模式适配 */
+:root.dark-theme .prompt-group textarea {
+    background: var(--cerebr-message-ai-bg);
+    border-color: var(--cerebr-border-color);
+}
+
+:root.dark-theme #reset-prompts {
+    border-color: var(--cerebr-border-color);
+}
+
+:root.dark-theme #reset-prompts:hover {
+    background: var(--cerebr-message-user-bg);
+}
+
+/* 提示词标签容器样式 */
+.prompt-label-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+/* 单个提示词重置按钮样式 */
+.reset-single-prompt {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--cerebr-text-color);
+    opacity: 0.5;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+}
+
+.reset-single-prompt:hover {
+    opacity: 1;
+    background-color: var(--cerebr-hover-color);
+}
+
+.reset-single-prompt svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    stroke-width: 1.5;
+}
+
+/* 深色模式适配 */
+:root.dark-theme .reset-single-prompt:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* 提示词文本框动画效果 */
+.prompt-group textarea {
+    transition: background-color 0.3s ease;
+}

@@ -56,6 +56,7 @@
       "lib/katex.min.css",
       "lib/auto-render.min.js",
       "sidebar-message-handler.js",
+      "prompt_settings.js",
       "lib/fonts/*",
       "lib/pdf.js",
       "lib/pdf.worker.js"
