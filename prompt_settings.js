@@ -135,6 +135,15 @@ class PromptSettings {
             const textarea = group.querySelector('textarea');
             const promptType = textarea.id.replace('-prompt', '');
 
+            // 创建一个包含标签和按钮的容器
+            const headerContainer = document.createElement('div');
+            headerContainer.className = 'prompt-header-container';
+
+            // 创建一个单独的 span 来显示标签文本
+            const labelText = document.createElement('span');
+            labelText.className = 'prompt-label-text';
+            labelText.textContent = label.textContent;
+
             // 创建重置按钮
             const resetButton = document.createElement('button');
             resetButton.className = 'reset-single-prompt';
@@ -146,19 +155,21 @@ class PromptSettings {
             `;
 
             // 添加点击事件
-            resetButton.addEventListener('click', () => this.resetSinglePrompt(promptType));
+            resetButton.addEventListener('click', (e) => {
+                e.stopPropagation(); // 阻止事件冒泡
+                this.resetSinglePrompt(promptType);
+            });
 
-            // 创建标签容器来包含标签文本和重置按钮
-            const labelContainer = document.createElement('div');
-            labelContainer.className = 'prompt-label-container';
-            
-            // 将原标签内容和重置按钮移动到容器中
-            labelContainer.appendChild(document.createTextNode(label.textContent));
-            labelContainer.appendChild(resetButton);
-            
+            // 将标签文本和重置按钮添加到容器中
+            headerContainer.appendChild(labelText);
+            headerContainer.appendChild(resetButton);
+
             // 替换原标签
             label.textContent = '';
-            label.appendChild(labelContainer);
+            label.setAttribute('for', textarea.id); // 确保标签与文本框的关联
+            
+            // 将新容器插入到原标签之前
+            group.insertBefore(headerContainer, label);
         });
     }
 
@@ -220,12 +231,12 @@ class PromptSettings {
         try {
             const result = await chrome.storage.sync.get(['prompts']);
             if (result.prompts) {
-                this.selectionPrompt.value = result.prompts.selection || DEFAULT_PROMPTS.selection;
-                this.searchPrompt.value = result.prompts.search || DEFAULT_PROMPTS.search;
-                this.systemPrompt.value = result.prompts.system || DEFAULT_PROMPTS.system;
-                this.pdfPrompt.value = result.prompts.pdf || DEFAULT_PROMPTS.pdf;
-                this.summaryPrompt.value = result.prompts.summary || DEFAULT_PROMPTS.summary;
-                this.queryPrompt.value = result.prompts.query || DEFAULT_PROMPTS.query;
+                this.selectionPrompt.value = result.prompts.selection !== undefined ? result.prompts.selection : DEFAULT_PROMPTS.selection;
+                this.searchPrompt.value = result.prompts.search !== undefined ? result.prompts.search : DEFAULT_PROMPTS.search;
+                this.systemPrompt.value = result.prompts.system !== undefined ? result.prompts.system : DEFAULT_PROMPTS.system;
+                this.pdfPrompt.value = result.prompts.pdf !== undefined ? result.prompts.pdf : DEFAULT_PROMPTS.pdf;
+                this.summaryPrompt.value = result.prompts.summary !== undefined ? result.prompts.summary : DEFAULT_PROMPTS.summary;
+                this.queryPrompt.value = result.prompts.query !== undefined ? result.prompts.query : DEFAULT_PROMPTS.query;
             } else {
                 // 如果没有保存的设置，使用默认值
                 this.resetPrompts();
