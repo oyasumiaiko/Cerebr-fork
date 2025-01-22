@@ -576,6 +576,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'TOGGLE_TEMP_MODE':
         iframe?.contentWindow?.postMessage({ type: 'TOGGLE_TEMP_MODE_FROM_EXTENSION' }, '*');
         break;
+      case 'EXPLAIN_IMAGE':
+        if (iframe && message.imageData) {
+          iframe.contentWindow.postMessage({
+            type: 'DROP_IMAGE',
+            imageData: message.imageData
+          }, '*');
+        }
+        break;
     }
 
     sendResponse({ success: true, status: sidebar.isVisible });

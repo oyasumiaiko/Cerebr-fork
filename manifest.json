@@ -13,7 +13,8 @@
     "commands",
     "activeTab",
     "tabs",
-    "webRequest"
+    "webRequest",
+    "contextMenus"
   ],
   "host_permissions": ["<all_urls>", "file:///*", "https://generativelanguage.googleapis.com/*"],
   "action": {
