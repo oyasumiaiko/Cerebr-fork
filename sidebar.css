@@ -157,7 +157,7 @@ body {
 /* 设置按钮和菜单样式 */
 #settings-button {
     padding: 12px;
-    align-self: center;
+    height: 100%;
     background: none;
     border: none;
     cursor: pointer;
@@ -166,6 +166,7 @@ body {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    width: 44px;
 }
 
 #settings-button svg {
@@ -173,13 +174,11 @@ body {
     height: 18px;
     fill: currentColor;
     opacity: 0.6;
-    transition: transform 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55),
-                opacity 0.2s ease;
 }
 
-#settings-button:hover svg {
-    transform: scale(1.25);
-    opacity: 1;
+#settings-button:hover,
+:root.dark-theme #settings-button:hover {
+    background-color: none;
 }
 
 #settings-button:active svg {
@@ -1796,4 +1795,33 @@ body.temporary-mode::after {
 /* 移除旧的样式 */
 .prompt-label-container {
     display: none;
+}
+
+/* 发送按钮样式 */
+#send-button {
+    padding: 12px;
+    height: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--cerebr-icon-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 24px;
+    font-family: system-ui;
+    line-height: 1;
+    width: 44px;
+    opacity: 0.6;
+}
+
+#send-button:disabled {
+    cursor: default;
+    opacity: 0.3;
+}
+
+/* 深色模式适配 */
+:root.dark-theme #send-button:hover {
+    background-color: none;
 }

@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const collapseButton = document.getElementById('collapse-button');
     const feedbackButton = document.getElementById('feedback-button');
     const fullscreenToggle = document.getElementById('fullscreen-toggle');
+    const sendButton = document.getElementById('send-button');
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
@@ -1028,6 +1029,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 监听输入框变化
     messageInput.addEventListener('input', function () {
         adjustTextareaHeight(this);
+        updateSendButtonState();
 
         // 处理 placeholder 的显示
         if (this.textContent.trim() === '' && !this.querySelector('.image-tag')) {
@@ -2163,4 +2165,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             saveSettings('clearOnSearch', e.target.checked);
         });
     }
+
+    // 更新发送按钮状态
+    function updateSendButtonState() {
+        const hasContent = messageInput.textContent.trim() || messageInput.querySelector('.image-tag');
+        sendButton.disabled = !hasContent;
+    }
+
+    // 添加发送按钮点击事件
+    sendButton.addEventListener('click', () => {
+        const text = messageInput.textContent.trim();
+        if (text || messageInput.querySelector('.image-tag')) {
+            sendMessage();
+        }
+    });
+
+    // 初始化发送按钮状态
+    updateSendButtonState();
 });
