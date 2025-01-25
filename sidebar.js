@@ -272,6 +272,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 生成新的请求ID
             const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+            if (messageInput.textContent.trim() === '') {
+                // 如果没有文本内容,添加图片提示词
+                messageInput.innerHTML += prompts.image;
+            }
+            
             // 先添加用户消息到界面和历史记录
             const userMessageDiv = appendMessage(messageInput.innerHTML, 'user');
             messageInput.innerHTML = '';
@@ -899,10 +904,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 更新聊天历史
         if (!skipHistory) {
             const processedContent = processImageTags(text);
-            const parentId = chatHistory.currentNode;
             const node = addMessageToTree(
                 sender === 'user' ? 'user' : 'assistant',
-                processedContent
+                processedContent,
+                chatHistory.currentNode  // 添加 parentId 参数
             );
             
             // 为消息div添加节点ID
