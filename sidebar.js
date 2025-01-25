@@ -1301,7 +1301,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // 创建 API 卡片
+    /**
+     * @function createAPICard
+     * 创建并渲染单个 API 配置卡片
+     * @param {Object} config - API 配置对象
+     * @param {string} [config.apiKey] - API 密钥
+     * @param {string} [config.baseUrl] - API 基础 URL
+     * @param {string} [config.modelName] - 模型名称
+     * @param {number} [config.temperature] - temperature 值（可为 0）
+     * @param {boolean} [config.isFavorite] - 是否收藏
+     * @param {number} index - 该配置在 apiConfigs 数组中的索引
+     * @param {HTMLElement} templateCard - 用于克隆的卡片模板 DOM
+     * @returns {HTMLElement} 渲染后的卡片元素
+     * @throws {Error} 当复制或渲染卡片失败时抛出异常
+     * @example
+     * const card = createAPICard(apiConfigs[0], 0, document.querySelector('.api-card.template'));
+     * document.querySelector('.api-cards').appendChild(card);
+     * @since 1.0.0
+     */
     function createAPICard(config, index, templateCard) {
         // 克隆模板
         const template = templateCard.cloneNode(true);
@@ -1374,11 +1391,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
-        apiKeyInput.value = config.apiKey || '';
-        baseUrlInput.value = config.baseUrl || 'https://api.openai.com/v1/chat/completions';
-        modelNameInput.value = config.modelName || 'gpt-4o';
-        temperatureInput.value = config.temperature || 1;
-        temperatureValue.textContent = (config.temperature || 1).toFixed(1);
+        // 使用 ?? 替代 || 来防止 0 被错误替换
+        apiKeyInput.value = config.apiKey ?? '';
+        baseUrlInput.value = config.baseUrl ?? 'https://api.openai.com/v1/chat/completions';
+        modelNameInput.value = config.modelName ?? 'gpt-4o';
+        temperatureInput.value = config.temperature ?? 1;
+        temperatureValue.textContent = (config.temperature ?? 1).toFixed(1);
 
         // 监听温度变化
         temperatureInput.addEventListener('input', (e) => {
