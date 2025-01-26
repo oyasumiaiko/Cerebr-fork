@@ -137,7 +137,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const htmlElements = [];
         const orderedSources = [];
         const webSearchQueries = groundingMetadata.webSearchQueries || [];
-        
+
         // 创建URL到引用编号的映射
         const urlToRefNumber = new Map();
         let nextRefNumber = 1;
@@ -154,20 +154,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             })
             .sort((a, b) => a.position - b.position);
 
-        textPositions.forEach(({support}, index) => {
+        textPositions.forEach(({ support }, index) => {
             const placeholder = ` 😎REF_${index}😎`;
-            
+
             // 转义正则表达式特殊字符
             const escapedText = support.segment.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const regex = new RegExp(escapedText, 'g');
-            
+
             // 收集该文本片段的所有引用源和对应的置信度
             const sourceRefs = [];
             if (support.groundingChunkIndices?.length > 0) {
                 support.groundingChunkIndices.forEach((chunkIndex, idx) => {
                     const chunk = groundingMetadata.groundingChunks[chunkIndex];
                     const confidence = support.confidenceScores?.[idx] || 0;
-                    
+
                     if (chunk?.web) {
                         const url = chunk.web.uri;
                         if (!urlToRefNumber.has(url)) {
@@ -182,19 +182,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 });
             }
-            
+
             // 按引用编号排序
             sourceRefs.sort((a, b) => a.refNumber - b.refNumber);
-            
+
             // 生成引用标记
-            const refMark = sourceRefs.map(ref => 
+            const refMark = sourceRefs.map(ref =>
                 `<a href="${encodeURI(ref.url)}" 
                     class="reference-number superscript" 
                     target="_blank" 
                     data-ref-number="${ref.refNumber}"
                     >[${ref.refNumber}]</a>`
             ).join('');
-            
+
             // 构建包含所有源信息的tooltip
             const tooltipContent = `
                 <span class="reference-tooltip">
@@ -215,14 +215,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="reference-tooltip-wrapper">${tooltipContent}</span>
                 </span>
             `;
-            
+
             // 替换文本并添加引用标记
             markedText = markedText.replace(regex, `$&${placeholder}`);
             htmlElements.push({
                 placeholder,
                 html: refGroup
             });
-            
+
             // 添加到有序来源列表
             sourceRefs.forEach(ref => {
                 if (!orderedSources.some(s => s.refNumber === ref.refNumber)) {
@@ -234,7 +234,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             });
         });
-        
+
         return {
             text: markedText,
             htmlElements,
@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 如果没有文本内容,添加图片提示词
                 messageInput.innerHTML += prompts.image;
             }
-            
+
             // 先添加用户消息到界面和历史记录
             const userMessageDiv = appendMessage(messageInput.innerHTML, 'user');
             messageInput.innerHTML = '';
@@ -503,17 +503,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                         sourcesList.className = 'sources-list';
                         sourcesList.innerHTML = '<h4>参考来源：</h4>';
                         const ul = document.createElement('ul');
-                        
+
                         // 计算每个来源的平均置信度
                         const sourceConfidences = new Map();
                         const sourceConfidenceCounts = new Map();
-                        
+
                         groundingMetadata.groundingSupports.forEach(support => {
                             if (support.groundingChunkIndices && support.confidenceScores) {
                                 support.groundingChunkIndices.forEach((chunkIndex, idx) => {
                                     const chunk = groundingMetadata.groundingChunks[chunkIndex];
                                     const confidence = support.confidenceScores[idx] || 0;
-                                    
+
                                     if (chunk?.web?.uri) {
                                         const url = chunk.web.uri;
                                         sourceConfidences.set(url, (sourceConfidences.get(url) || 0) + confidence);
@@ -522,22 +522,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 });
                             }
                         });
-                        
+
                         processedResult.sources.forEach(source => {
                             const li = document.createElement('li');
                             const totalConfidence = sourceConfidences.get(source.url) || 0;
                             const count = sourceConfidenceCounts.get(source.url) || 1;
                             const avgConfidence = (totalConfidence / count) * 100;
-                            
+
                             // 创建置信度进度条容器
                             const confidenceBar = document.createElement('div');
                             confidenceBar.className = 'confidence-bar';
-                            
+
                             // 创建进度条
                             const progressBar = document.createElement('div');
                             progressBar.className = 'progress-bar';
                             progressBar.style.width = `${avgConfidence}%`;
-                            
+
                             // 添加进度条到容器
                             confidenceBar.appendChild(progressBar);
 
@@ -558,13 +558,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
 
                             // 创建悬浮提示内容
-                            const tooltipContent = matchingTexts.map(match => 
+                            const tooltipContent = matchingTexts.map(match =>
                                 `<div class="match-item">
                                     <div class="match-text">${match.text}</div>
                                     <div class="match-confidence">${match.confidence.toFixed(1)}%</div>
                                 </div>`
                             ).join('');
-                            
+
                             li.innerHTML = `
                                 <div class="source-item">
                                     <div class="source-info">
@@ -581,14 +581,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     </div>
                                 </div>
                             `;
-                            
+
                             // 将进度条插入到source-item中
                             const sourceItem = li.querySelector('.source-item');
                             sourceItem.appendChild(confidenceBar);
-                            
+
                             ul.appendChild(li);
                         });
-                        
+
                         sourcesList.appendChild(ul);
                         lastMessage.appendChild(sourcesList);
 
@@ -598,7 +598,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             searchQueriesList.className = 'search-queries-list';
                             searchQueriesList.innerHTML = '<h4>搜索查询：</h4>';
                             const ul = document.createElement('ul');
-                            
+
                             processedResult.webSearchQueries.forEach(query => {
                                 const li = document.createElement('li');
                                 li.textContent = query;
@@ -608,7 +608,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 });
                                 ul.appendChild(li);
                             });
-                            
+
                             searchQueriesList.appendChild(ul);
                             lastMessage.appendChild(searchQueriesList);
                         }
@@ -664,21 +664,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             return placeholder;
         });
 
-        // // 替换美元符号包围的块级数学表达式
-        // text = text.replace(/(\$\$[\s\S]+?\$\$)/g, (match, p1) => {
-        //     const placeholder = `😎DOLLARBLOCK_MATH_${counter}😎`;
-        //     mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'dollarblock' });
-        //     counter++;
-        //     return placeholder;
-        // });
+        // 替换美元符号包围的块级数学表达式
+        text = text.replace(/(\$\$[\s\S]+?\$\$)/g, (match, p1) => {
+            const placeholder = `😎DOLLARBLOCK_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'dollarblock' });
+            counter++;
+            return placeholder;
+        });
 
-        // // 替换美元符号包围的行内数学表达式
-        // text = text.replace(/(\$[^\$\n]+?\$)/g, (match, p1) => {
-        //     const placeholder = `😎DOLLAR_MATH_${counter}😎`;
-        //     mathExpressions.push({ placeholder, content: p1.slice(1, -1), originalContent: p1, type: 'dollarinline' });
-        //     counter++;
-        //     return placeholder;
-        // });
+        // 替换美元符号包围的行内数学表达式
+        text = text.replace(/(\$[^\$\n]+?\$)/g, (match, p1) => {
+            const placeholder = `😎DOLLAR_MATH_${counter}😎`;
+            mathExpressions.push({ placeholder, content: p1.slice(1, -1), originalContent: p1, type: 'dollarinline' });
+            counter++;
+            return placeholder;
+        });
 
         return { text, mathExpressions };
     }
@@ -723,11 +723,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             breaks: true,
             gfm: true,
             sanitize: false,
-            highlight: function(code, lang) {
+            highlight: function (code, lang) {
                 if (lang && hljs.getLanguage(lang)) {
                     try {
                         return hljs.highlight(code, { language: lang }).value;
-                    } catch (err) {}
+                    } catch (err) { }
                 }
                 return hljs.highlightAuto(code).value;
             }
@@ -735,7 +735,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 设置表格渲染器
         const renderer = new marked.Renderer();
-        renderer.table = function(header, body) {
+        renderer.table = function (header, body) {
             return `<table class="markdown-table">\n<thead>\n${header}</thead>\n<tbody>\n${body}</tbody>\n</table>\n`;
         };
         marked.use({ renderer });
@@ -908,10 +908,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 processedContent,
                 chatHistory.currentNode  // 添加 parentId 参数
             );
-            
+
             // 为消息div添加节点ID
             messageDiv.setAttribute('data-message-id', node.id);
-            
+
             if (sender === 'ai') {
                 messageDiv.classList.add('updating');
             }
@@ -1507,8 +1507,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const sidebarSelection = window.getSelection().toString().trim();
 
             // 获取选中的文本内容
-            const selectedText = (isSidebarFocused && sidebarSelection) ? 
-                sidebarSelection : 
+            const selectedText = (isSidebarFocused && sidebarSelection) ?
+                sidebarSelection :
                 webpageSelection?.trim() || '';
 
             const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
@@ -1527,9 +1527,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (result.clearOnSearch !== false) { // 默认为true
                     clearChatHistory();
                 }
-                
+
                 // 使用自定义的划词搜索提示词
-                const prompt = isSearchModel ? 
+                const prompt = isSearchModel ?
                     prompts.selection.replace('<SELECTION>', selectedText) :
                     prompts.query.replace('<SELECTION>', selectedText);
                 messageInput.textContent = prompt;
@@ -1538,7 +1538,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     exitTemporaryMode();
                 }
                 clearChatHistory();
-                
+
                 // 为PDF文件使用自定义的PDF提示词
                 if (isPDF) {
                     messageInput.textContent = prompts.pdf;
