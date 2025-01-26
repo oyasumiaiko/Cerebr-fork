@@ -1,19 +1,27 @@
 // 默认提示词
 const DEFAULT_PROMPTS = {
-    system: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。`,
-    image: `如果是图片，请解释图片内容，包括:
+    system: {
+        prompt: `数学公式请使用LaTeX表示，行间公式请使用\\[...\\]表示，行内公式请使用\\(...\\)表示，禁止使用$美元符号包裹数学公式。始终使用**中文**回答用户问题。`,
+        model: 'follow_current'
+    },
+    image: {
+        prompt: `如果是图片，请解释图片内容，包括:
 - 图片类型（照片、图表、截图等）
 - 主要内容和主题
 - 关键信息和重点
 
 如果是图片主体是文本内容，首先提取原始文本，提取后翻译成中文。`,
-
-    selection: `请根据以下内容的复杂度，编写3-20条多方面、多层次、多角度的queries，使用google_search(queries)工具执行。
+        model: 'follow_current'
+    },
+    selection: {
+        prompt: `请根据以下内容的复杂度，编写3-20条多方面、多层次、多角度的queries，使用google_search(queries)工具执行。
 "<SELECTION>"
 
 请全面、客观地总结以下搜索结果，既要突出核心要点，也要保留重要细节`,
-
-    search: `\n\n---\n\n当需要获取最新或更准确的信息时，请使用google_search.search功能。搜索前请先思考：
+        model: 'follow_current'
+    },
+    search: {
+        prompt: `\n\n---\n\n当需要获取最新或更准确的信息时，请使用google_search.search功能。搜索前请先思考：
 
 1. 分析主题的关键概念和要素
 2. 确定需要了解的具体方面
@@ -50,8 +58,10 @@ const DEFAULT_PROMPTS = {
 3. 准确性 - 核实关键信息和数据
 4. 权威性 - 参考可靠来源和专业观点
 5. 客观性 - 平衡不同立场和论据`,
-
-    pdf: `请对这个PDF文档进行分析：
+        model: 'follow_current'
+    },
+    pdf: {
+        prompt: `请对这个PDF文档进行分析：
 1. 首先列出文档的详细大纲结构，包括各级标题和对应的主要内容；
 2. 然后根据大纲结构，按照以下方面展开总结：
    - 文档的主要目的和核心论点
@@ -61,8 +71,10 @@ const DEFAULT_PROMPTS = {
 3. 最后，总结文档的创新点、局限性和实际应用价值。
 
 请用清晰的层级结构和要点形式展示以上内容。`,
-
-    summary: `请对这个页面进行全面分析和总结：
+        model: 'follow_current'
+    },
+    summary: {
+        prompt: `请对这个页面进行全面分析和总结：
 
 1. 页面主要内容：
    - 核心主题和目的
@@ -85,8 +97,10 @@ const DEFAULT_PROMPTS = {
    - 局限性和不足
 
 请用清晰的层次结构和要点形式展示以上内容，突出重点，便于理解和参考。`,
-
-    query: `请分析并解释以下内容：
+        model: 'follow_current'
+    },
+    query: {
+        prompt: `请分析并解释以下内容：
 
 "<SELECTION>"
 
@@ -105,7 +119,9 @@ const DEFAULT_PROMPTS = {
    - 常见问题和解决
    - 最新发展和趋势
 
-请用清晰的结构和通俗的语言进行解释，确保内容准确、全面且易于理解。`
+请用清晰的结构和通俗的语言进行解释，确保内容准确、全面且易于理解。`,
+        model: 'follow_current'
+    }
 };
 
 class PromptSettings {
@@ -124,6 +140,10 @@ class PromptSettings {
         this.queryPrompt = document.getElementById('query-prompt');
         this.imagePrompt = document.getElementById('image-prompt');
 
+        // 模型选择下拉框
+        this.modelSelects = {};
+        this.initModelSelects();
+
         // 为每个提示词文本框添加重置按钮
         this.addResetButtons();
         
@@ -132,6 +152,77 @@ class PromptSettings {
         
         // 初始化提示词设置
         this.loadPromptSettings();
+    }
+
+    // 初始化模型选择下拉框
+    initModelSelects() {
+        const promptTypes = ['selection', 'pdf', 'summary', 'query', 'image'];  // 移除 'search'
+
+        // 获取所有可用的模型
+        const getAvailableModels = () => {
+            // 从 window.apiConfigs 获取所有唯一的模型名称
+            const models = new Set();
+            if (window.apiConfigs) {
+                window.apiConfigs.forEach(config => {
+                    if (config.modelName) {
+                        models.add(config.modelName);
+                    }
+                });
+            }
+            return Array.from(models);
+        };
+
+        promptTypes.forEach(type => {
+            const promptGroup = document.querySelector(`#${type}-prompt`).closest('.prompt-group');
+            const modelSelectContainer = document.createElement('div');
+            modelSelectContainer.className = 'model-select-container';
+            
+            const label = document.createElement('label');
+            label.textContent = '偏好模型：';
+            label.htmlFor = `${type}-model`;
+            
+            const select = document.createElement('select');
+            select.id = `${type}-model`;
+            select.className = 'model-select';
+
+            // 动态更新模型选项的函数
+            const updateModelOptions = () => {
+                const models = getAvailableModels();
+                select.innerHTML = ''; // 清空现有选项
+
+                // 添加"跟随当前 API 设置"选项
+                const followOption = document.createElement('option');
+                followOption.value = 'follow_current';
+                followOption.textContent = '跟随当前 API 设置';
+                select.appendChild(followOption);
+
+                // 添加分隔线
+                const separator = document.createElement('option');
+                separator.disabled = true;
+                separator.textContent = '──────────';
+                select.appendChild(separator);
+                
+                // 添加已配置的模型
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    select.appendChild(option);
+                });
+            };
+
+            // 初始化模型选项
+            updateModelOptions();
+
+            // 监听 API 配置变化
+            window.addEventListener('apiConfigsUpdated', updateModelOptions);
+
+            modelSelectContainer.appendChild(label);
+            modelSelectContainer.appendChild(select);
+            promptGroup.appendChild(modelSelectContainer);
+            
+            this.modelSelects[type] = select;
+        });
     }
 
     // 添加重置按钮
@@ -182,9 +273,10 @@ class PromptSettings {
 
     // 重置单个提示词
     resetSinglePrompt(promptType) {
-        if (confirm(`确定要恢复"${this.getPromptTypeName(promptType)}"的默认提示词吗？`)) {
+        if (confirm(`确定要恢复"${this.getPromptTypeName(promptType)}"的默认提示词和模型设置吗？`)) {
             const textarea = this[`${promptType}Prompt`];
-            textarea.value = DEFAULT_PROMPTS[promptType];
+            textarea.value = DEFAULT_PROMPTS[promptType].prompt;
+            this.modelSelects[promptType].value = DEFAULT_PROMPTS[promptType].model;
             
             // 添加动画效果
             textarea.style.transition = 'background-color 0.3s ease';
@@ -198,13 +290,13 @@ class PromptSettings {
     // 获取提示词类型的中文名称
     getPromptTypeName(promptType) {
         const nameMap = {
-            'selection': '划词搜索提示词',
-            'search': '系统搜索提示词',
             'system': '系统提示词',
-            'pdf': 'PDF提示词',
-            'summary': '页面总结提示词',
-            'query': '直接查询提示词',
-            'image': '图片解释提示词'
+            'search': '系统搜索提示词', 
+            'summary': '快速总结提示词',
+            'query': '非联网模型划词提示词',
+            'selection': '联网模型划词提示词',
+            'pdf': 'PDF快速总结提示词',
+            'image': '图片默认提示词'
         };
         return nameMap[promptType] || promptType;
     }
@@ -225,7 +317,7 @@ class PromptSettings {
 
         // 重置所有按钮
         this.resetPromptsButton.addEventListener('click', () => {
-            if (confirm('确定要恢复所有默认提示词吗？这将覆盖当前的所有自定义提示词。')) {
+            if (confirm('确定要恢复所有默认提示词和模型设置吗？这将覆盖当前的所有自定义设置。')) {
                 this.resetPrompts();
             }
         });
@@ -239,13 +331,13 @@ class PromptSettings {
         try {
             const result = await chrome.storage.sync.get(['prompts']);
             if (result.prompts) {
-                this.selectionPrompt.value = result.prompts.selection !== undefined ? result.prompts.selection : DEFAULT_PROMPTS.selection;
-                this.searchPrompt.value = result.prompts.search !== undefined ? result.prompts.search : DEFAULT_PROMPTS.search;
-                this.systemPrompt.value = result.prompts.system !== undefined ? result.prompts.system : DEFAULT_PROMPTS.system;
-                this.pdfPrompt.value = result.prompts.pdf !== undefined ? result.prompts.pdf : DEFAULT_PROMPTS.pdf;
-                this.summaryPrompt.value = result.prompts.summary !== undefined ? result.prompts.summary : DEFAULT_PROMPTS.summary;
-                this.queryPrompt.value = result.prompts.query !== undefined ? result.prompts.query : DEFAULT_PROMPTS.query;
-                this.imagePrompt.value = result.prompts.image !== undefined ? result.prompts.image : DEFAULT_PROMPTS.image;
+                Object.keys(DEFAULT_PROMPTS).forEach(type => {
+                    const promptData = result.prompts[type] || DEFAULT_PROMPTS[type];
+                    this[`${type}Prompt`].value = promptData.prompt || promptData;
+                    if (this.modelSelects[type]) {
+                        this.modelSelects[type].value = promptData.model || DEFAULT_PROMPTS[type].model;
+                    }
+                });
             } else {
                 // 如果没有保存的设置，使用默认值
                 this.resetPrompts();
@@ -260,17 +352,16 @@ class PromptSettings {
     // 保存提示词设置
     async savePromptSettings() {
         try {
-            await chrome.storage.sync.set({
-                prompts: {
-                    selection: this.selectionPrompt.value,
-                    search: this.searchPrompt.value,
-                    system: this.systemPrompt.value,
-                    pdf: this.pdfPrompt.value,
-                    summary: this.summaryPrompt.value,
-                    query: this.queryPrompt.value,
-                    image: this.imagePrompt.value
-                }
+            const prompts = {};
+            Object.keys(DEFAULT_PROMPTS).forEach(type => {
+                prompts[type] = {
+                    prompt: this[`${type}Prompt`].value,
+                    model: this.modelSelects[type].value
+                };
             });
+
+            await chrome.storage.sync.set({ prompts });
+            
             // 立即关闭设置页面
             this.promptSettings.classList.remove('visible');
             
@@ -290,26 +381,24 @@ class PromptSettings {
 
     // 重置提示词为默认值
     resetPrompts() {
-        this.selectionPrompt.value = DEFAULT_PROMPTS.selection;
-        this.searchPrompt.value = DEFAULT_PROMPTS.search;
-        this.systemPrompt.value = DEFAULT_PROMPTS.system;
-        this.pdfPrompt.value = DEFAULT_PROMPTS.pdf;
-        this.summaryPrompt.value = DEFAULT_PROMPTS.summary;
-        this.queryPrompt.value = DEFAULT_PROMPTS.query;
-        this.imagePrompt.value = DEFAULT_PROMPTS.image;
+        Object.keys(DEFAULT_PROMPTS).forEach(type => {
+            this[`${type}Prompt`].value = DEFAULT_PROMPTS[type].prompt;
+            if (this.modelSelects[type]) {
+                this.modelSelects[type].value = DEFAULT_PROMPTS[type].model;
+            }
+        });
     }
 
     // 获取当前提示词
     getPrompts() {
-        return {
-            selection: this.selectionPrompt.value,
-            search: this.searchPrompt.value,
-            system: this.systemPrompt.value,
-            pdf: this.pdfPrompt.value,
-            summary: this.summaryPrompt.value,
-            query: this.queryPrompt.value,
-            image: this.imagePrompt.value
-        };
+        const prompts = {};
+        Object.keys(DEFAULT_PROMPTS).forEach(type => {
+            prompts[type] = {
+                prompt: this[`${type}Prompt`].value,
+                model: this.modelSelects[type].value
+            };
+        });
+        return prompts;
     }
 }
 

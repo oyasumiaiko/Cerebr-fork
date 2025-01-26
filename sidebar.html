@@ -201,6 +201,7 @@
             <span class="settings-title">提示词设置</span>
         </div>
         <div class="prompt-settings-content">
+            <!-- 基础设置 -->
             <div class="prompt-group">
                 <label>系统提示词</label>
                 <textarea id="system-prompt" placeholder="输入系统提示词..."></textarea>
@@ -209,24 +210,29 @@
                 <label>系统搜索提示词</label>
                 <textarea id="search-prompt" placeholder="输入系统搜索时使用的提示词..."></textarea>
             </div>
+
             <div class="prompt-group">
-                <label>划词搜索提示词</label>
-                <textarea id="selection-prompt" placeholder="输入划词搜索时使用的提示词..."></textarea>
-            </div>
-            <div class="prompt-group">
-                <label>PDF总结提示词</label>
-                <textarea id="pdf-prompt" placeholder="输入PDF文档分析时使用的提示词..."></textarea>
-            </div>
-            <div class="prompt-group">
-                <label>页面总结提示词</label>
+                <label>快速总结提示词</label>
                 <textarea id="summary-prompt" placeholder="输入页面总结时使用的提示词..."></textarea>
             </div>
+
+            <!-- 搜索相关 -->
             <div class="prompt-group">
-                <label>直接查询提示词</label>
+                <label>非联网模型划词提示词</label>
                 <textarea id="query-prompt" placeholder="输入直接查询时使用的提示词..."></textarea>
             </div>
             <div class="prompt-group">
-                <label>图片解释提示词</label>
+                <label>联网模型划词提示词</label>
+                <textarea id="selection-prompt" placeholder="输入划词搜索时使用的提示词..."></textarea>
+            </div>
+
+            <!-- 内容分析 -->
+            <div class="prompt-group">
+                <label>PDF快速总结提示词</label>
+                <textarea id="pdf-prompt" placeholder="输入PDF文档分析时使用的提示词..."></textarea>
+            </div>
+            <div class="prompt-group">
+                <label>图片默认提示词</label>
                 <textarea id="image-prompt" placeholder="输入图片解释时使用的提示词..."></textarea>
             </div>
             <div class="prompt-actions">

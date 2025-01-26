@@ -243,6 +243,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
 
+    // 获取提示词类型
+    function getPromptTypeFromContent(content) {
+        const prompts = promptSettingsManager.getPrompts();
+        
+        // 检查是否包含图片标签
+        if (content.includes('image-tag')) {
+            return 'image';
+        }
+
+        // 检查是否是PDF提示词
+        if (content === prompts.pdf.prompt) {
+            return 'pdf';
+        }
+
+        // 检查是否是页面总结提示词
+        if (content === prompts.summary.prompt) {
+            return 'summary';
+        }
+
+        // 检查是否是划词搜索提示词
+        if (content.startsWith(prompts.selection.prompt.split('<SELECTION>')[0])) {
+            return 'selection';
+        }
+
+        // 检查是否是直接查询提示词
+        if (content.startsWith(prompts.query.prompt.split('<SELECTION>')[0])) {
+            return 'query';
+        }
+
+        // 默认使用系统提示词的设置
+        return 'system';
+    }
+
     async function sendMessage() {
         shouldAutoScroll = true; // 新消息开始时重置自动滚动状态
         const message = messageInput.textContent.trim();
@@ -274,7 +307,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (messageInput.textContent.trim() === '') {
                 // 如果没有文本内容,添加图片提示词
-                messageInput.innerHTML += prompts.image;
+                messageInput.innerHTML += prompts.image.prompt;
             }
 
             // 先添加用户消息到界面和历史记录
@@ -317,7 +350,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ? `\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}`
                 : '';
 
-
             // 获取当前模型名称并根据模型类型添加搜索提示语
             const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
             const isSearchModel = currentModel.endsWith('-search');
@@ -325,7 +357,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 组合完整的系统消息
             const systemMessage = {
                 role: "system",
-                content: prompts.system + (isSearchModel ? prompts.search : '') + pageContentPrompt
+                content: prompts.system.prompt + (isSearchModel ? prompts.search.prompt : '') + pageContentPrompt
             };
 
             // 构建消息数组
@@ -344,6 +376,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 更新加载状态消息
             loadingMessage.textContent = '正在等待 AI 回复...';
 
+            // 确定要使用的模型
+            let modelToUse = config.modelName;
+            const promptType = getPromptTypeFromContent(messageInput.innerHTML);
+            if (promptType && prompts[promptType]) {
+                const preferredModel = prompts[promptType].model;
+                if (preferredModel !== 'follow_current') {
+                    modelToUse = preferredModel;
+                }
+            }
+
             // 发送API请求
             const response = await fetch(config.baseUrl, {
                 method: 'POST',
@@ -353,7 +395,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'X-Request-Id': requestId  // 添加请求ID到header
                 },
                 body: JSON.stringify({
-                    model: config.modelName,
+                    model: modelToUse,
                     messages: messages,  // 直接使用messages，不再添加userMessage
                     stream: true,
                     temperature: config.temperature,
@@ -1162,6 +1204,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             selectedConfigIndex = 0;
         }
 
+        // 暴露 apiConfigs 到 window 对象
+        window.apiConfigs = apiConfigs;
+        // 触发配置更新事件
+        window.dispatchEvent(new Event('apiConfigsUpdated'));
+
         // 确保一定会渲染卡片和收藏列表
         renderAPICards();
         renderFavoriteApis();
@@ -1174,6 +1221,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 apiConfigs,
                 selectedConfigIndex
             });
+            // 更新 window.apiConfigs 并触发事件
+            window.apiConfigs = apiConfigs;
+            window.dispatchEvent(new Event('apiConfigsUpdated'));
         } catch (error) {
             console.error('保存 API 配置失败:', error);
         }

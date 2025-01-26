@@ -1826,3 +1826,86 @@ body.temporary-mode::after {
 :root.dark-theme #send-button:hover {
     background-color: none;
 }
+
+/* 模型选择容器样式 */
+.model-select-container {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: var(--cerebr-message-ai-bg);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.model-select-container label {
+    color: var(--cerebr-text-color);
+    font-size: 0.9em;
+    white-space: nowrap;
+    opacity: 0.8;
+}
+
+/* 下拉框样式 */
+.model-select {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    background-color: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+    font-size: 0.9em;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.2s ease;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 16px;
+    padding-right: 32px;
+}
+
+.model-select:hover {
+    border-color: color-mix(in srgb, var(--cerebr-text-color) 50%, transparent);
+    background-color: color-mix(in srgb, var(--cerebr-input-bg) 95%, var(--cerebr-text-color));
+}
+
+.model-select:focus {
+    border-color: var(--cerebr-text-color);
+    box-shadow: 0 0 0 1px var(--cerebr-border-color);
+}
+
+/* 下拉选项样式 */
+.model-select option {
+    background-color: var(--cerebr-background-color);
+    color: var(--cerebr-text-color);
+    padding: 8px;
+}
+
+.model-select option:disabled {
+    color: color-mix(in srgb, var(--cerebr-text-color) 50%, transparent);
+    background-color: var(--cerebr-message-ai-bg);
+}
+
+/* 深色模式适配 */
+:root.dark-theme .model-select {
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23abb2bf' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+}
+
+:root.dark-theme .model-select:hover {
+    background-color: color-mix(in srgb, var(--cerebr-input-bg) 95%, white);
+}
+
+/* Firefox 特定样式 */
+@-moz-document url-prefix() {
+    .model-select {
+        background-image: none;
+        padding-right: 8px;
+    }
+    
+    .model-select::-moz-focus-inner {
+        border: 0;
+    }
+}
