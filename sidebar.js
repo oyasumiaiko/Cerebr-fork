@@ -442,28 +442,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /**
      * 更新AI消息内容
-     * @param {string} text - 消息文本内容
+     * @param {string} aiResponse - 消息文本内容
      * @param {Object|null} groundingMetadata - 引用元数据对象，包含引用信息
      */
-    function updateAIMessage(text, groundingMetadata) {
+    function updateAIMessage(aiResponse, groundingMetadata) {
         const lastMessage = chatContainer.querySelector('.ai-message:last-child');
-        let rawText = text;
 
         if (lastMessage) {
             // 获取当前显示的文本
             const currentText = lastMessage.getAttribute('data-original-text') || '';
             // 如果新文本比当前文本长，说明有新内容需要更新
-            if (text.length > currentText.length) {
+            if (aiResponse.length > currentText.length) {
                 // 更新原始文本属性
-                lastMessage.setAttribute('data-original-text', text);
+                lastMessage.setAttribute('data-original-text', aiResponse);
 
-                let processedText = text;
+                let processedText = aiResponse;
                 let htmlElements = [];
-                let processedResult = text;
+                let processedResult = aiResponse;
 
                 // 处理引用标记和来源信息(如果存在)
                 if (groundingMetadata) {
-                    processedResult = addGroundingToMessage(text, groundingMetadata);
+                    processedResult = addGroundingToMessage(aiResponse, groundingMetadata);
                     if (typeof processedResult === 'object') {
                         processedText = processedResult.text;
                         htmlElements = processedResult.htmlElements;
@@ -621,7 +620,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (messageId && chatHistory.messages) {
                     const node = chatHistory.messages.find(msg => msg.id === messageId);
                     if (node) {
-                        node.content = rawText;
+                        node.content = aiResponse;
                     }
                 }
 
@@ -629,7 +628,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 scrollToBottom();
             }
         } else {
-            appendMessage(rawText, 'ai');
+            appendMessage(aiResponse, 'ai');
         }
     }
     // 提取公共配置
@@ -750,10 +749,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
     function fixBoldParsingIssue(text) {
-        // 匹配 '**任意内容**后无空格且直接紧跟字母数字下划线'
-        // 其中 (?![\\s\\p{P}]) 用来确保后面不是空格、标点之类的分隔符
-        // 也可以根据需求拓展匹配范围
-        return text.replace(/\*\*([^*]+)\*\*(?![\s\p{P}])([A-Za-z0-9_])/g, '**$1**\u200B$2');
+        // 在所有**前后添加零宽空格，以修复粗体解析问题
+        return text.replace(/\*\*/g, '\u200B**\u200B');
     }
 
     // 监听来自 content script 的消息
