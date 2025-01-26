@@ -407,6 +407,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     hasStartedResponse = true;
                                 }
                                 aiResponse += deltaContent;
+                                aiResponse = aiResponse.replace(/\nabla/g, '\\nabla');
+                                console.log(aiResponse);
                                 updateAIMessage(aiResponse, data.choices?.[0]?.groundingMetadata);
                             }
                         } catch (e) {
