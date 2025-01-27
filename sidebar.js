@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const contextMenu = document.getElementById('context-menu');
     const copyMessageButton = document.getElementById('copy-message');
     const stopUpdateButton = document.getElementById('stop-update');
+    const clearChatContextButton = document.getElementById('clear-chat-context');
     const settingsButton = document.getElementById('settings-button');
     const settingsMenu = document.getElementById('settings-menu');
     const toggleTheme = document.getElementById('toggle-theme');
@@ -2163,4 +2164,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 初始化发送按钮状态
     updateSendButtonState();
+
+    // 添加清空聊天右键菜单项的点击事件处理
+    clearChatContextButton.addEventListener('click', () => {
+        clearChatHistory();
+        hideContextMenu();
+    });
 });
