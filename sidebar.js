@@ -1699,6 +1699,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 监听 AI 消息的右键点击
     chatContainer.addEventListener('contextmenu', (e) => {
+        // 如果按住了Ctrl、Shift或Alt键，则不阻止默认行为，显示浏览器默认菜单
+        if (e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+        }
+        
+        // 否则显示自定义上下文菜单
+        e.preventDefault();
         const messageElement = e.target.closest('.ai-message');
         if (messageElement) {
             showContextMenu(e, messageElement);
