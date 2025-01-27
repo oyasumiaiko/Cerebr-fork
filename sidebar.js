@@ -38,12 +38,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearHistory
     } = createChatHistoryManager();
 
-    // 初始化聊天历史开关状态
-    chrome.storage.local.get(['shouldSendChatHistory'], (result) => {
-        shouldSendChatHistory = result.shouldSendChatHistory !== false;
-        sendChatHistorySwitch.checked = shouldSendChatHistory;
-    });
-
     // 监听聊天历史开关变化
     sendChatHistorySwitch.addEventListener('change', (e) => {
         shouldSendChatHistory = e.target.checked;
@@ -170,7 +164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             .sort((a, b) => a.position - b.position);
 
         textPositions.forEach(({ support }, index) => {
-            const placeholder = ` 😎REF_${index}😎`;
+            const placeholder = `\u200B😎REF_${index}😎\u200B`;
 
             // 转义正则表达式特殊字符
             const escapedText = support.segment.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1057,14 +1051,30 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 统一的键盘事件监听器
     messageInput.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter') {
+            if (e.shiftKey) {
+                // Shift+Enter 插入换行
+                return;
+            }
+            
             if (isComposing) {
                 // 如果正在使用输入法或正在处理消息，不发送消息
                 return;
             }
+            
             e.preventDefault();
+            
             const text = this.textContent.trim();
             if (text || this.querySelector('.image-tag')) {  // 检查是否有文本或图片
+                if (e.ctrlKey) {
+                    // Ctrl+Enter: 将输入内容作为selection类型发送
+                    const prompts = promptSettingsManager.getPrompts();
+                    const selectionPrompt = prompts.selection.prompt;
+                    if (selectionPrompt) {
+                        this.textContent = selectionPrompt.replace('<SELECTION>', text);
+                    }
+                }
+                // 发送消息
                 sendMessage();
             }
         } else if (e.key === 'Escape') {
@@ -2034,7 +2044,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 初始化设置
     async function initSettings() {
         try {
-            const result = await chrome.storage.sync.get(['sidebarWidth', 'fontSize', 'scaleFactor', 'autoScroll', 'clearOnSearch']);
+            const result = await chrome.storage.sync.get([
+                'sidebarWidth', 
+                'fontSize', 
+                'scaleFactor', 
+                'autoScroll', 
+                'clearOnSearch',
+                'shouldSendChatHistory'
+            ]);
             if (result.sidebarWidth) {
                 document.documentElement.style.setProperty('--cerebr-sidebar-width', `${result.sidebarWidth}px`);
                 sidebarWidth.value = result.sidebarWidth;
@@ -2063,6 +2080,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const clearOnSearchSwitch = document.getElementById('clear-on-search-switch');
             if (clearOnSearchSwitch) {
                 clearOnSearchSwitch.checked = result.clearOnSearch !== false; // 默认为true
+            }
+            // 初始化聊天历史开关状态
+            if (result.shouldSendChatHistory !== undefined) {
+                shouldSendChatHistory = result.shouldSendChatHistory;
+                const sendChatHistorySwitch = document.getElementById('send-chat-history-switch');
+                if (sendChatHistorySwitch) {
+                    sendChatHistorySwitch.checked = shouldSendChatHistory;
+                }
             }
         } catch (error) {
             console.error('初始化设置失败:', error);
