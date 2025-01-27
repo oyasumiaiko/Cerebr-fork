@@ -20,46 +20,6 @@ const DEFAULT_PROMPTS = {
 请全面、客观地总结以下搜索结果，既要突出核心要点，也要保留重要细节`,
         model: 'follow_current'
     },
-    search: {
-        prompt: `\n\n---\n\n当需要获取最新或更准确的信息时，请使用google_search.search功能。搜索前请先思考：
-
-1. 分析主题的关键概念和要素
-2. 确定需要了解的具体方面
-3. 考虑不同的视角和维度
-4. 思考时间跨度和地域范围
-5. 识别可能的专业术语
-
-然后按以下原则设计queries：
-
-1. 结合中英文，大部分使用英文，遵循以下模式：
-   - [核心概念] + [具体方面/属性]
-   - [主题] + [年份/时间范围] + [统计/研究/review]
-   - [专业术语] + [definition/example/application]
-   
-2. 每个要点设计3-4个不同queries：
-   - 使用同义词和相关词
-   - 从一般到具体
-   - 结合不同领域视角
-
-3. 总共可以使用10-20个渐进式queries：
-   - 先搜索基础概念和背景
-   - 再搜索具体细节和案例
-   - 最后搜索最新进展和争议
-
-4. 搜索结果分析和整合：
-   - 交叉验证不同来源
-   - 对比不同观点
-   - 提取关键数据和论据
-   - 总结主流观点和新趋势
-
-即使用户没有明确要求，也要主动搜索以确保信息：
-1. 时效性 - 了解最新发展和变化
-2. 全面性 - 覆盖不同角度和层面
-3. 准确性 - 核实关键信息和数据
-4. 权威性 - 参考可靠来源和专业观点
-5. 客观性 - 平衡不同立场和论据`,
-        model: 'follow_current'
-    },
     pdf: {
         prompt: `请对这个PDF文档进行分析：
 1. 首先列出文档的详细大纲结构，包括各级标题和对应的主要内容；
@@ -133,7 +93,6 @@ class PromptSettings {
         this.resetPromptsButton = document.getElementById('reset-prompts');
         this.savePromptsButton = document.getElementById('save-prompts');
         this.selectionPrompt = document.getElementById('selection-prompt');
-        this.searchPrompt = document.getElementById('search-prompt');
         this.systemPrompt = document.getElementById('system-prompt');
         this.pdfPrompt = document.getElementById('pdf-prompt');
         this.summaryPrompt = document.getElementById('summary-prompt');
@@ -156,7 +115,7 @@ class PromptSettings {
 
     // 初始化模型选择下拉框
     initModelSelects() {
-        const promptTypes = ['selection', 'pdf', 'summary', 'query', 'image'];  // 移除 'search'
+        const promptTypes = ['selection', 'pdf', 'summary', 'image']; 
 
         // 获取所有可用的模型
         const getAvailableModels = () => {
@@ -291,7 +250,6 @@ class PromptSettings {
     getPromptTypeName(promptType) {
         const nameMap = {
             'system': '系统提示词',
-            'search': '系统搜索提示词', 
             'summary': '快速总结提示词',
             'query': '非联网模型划词提示词',
             'selection': '联网模型划词提示词',
@@ -354,9 +312,16 @@ class PromptSettings {
         try {
             const prompts = {};
             Object.keys(DEFAULT_PROMPTS).forEach(type => {
+                const textarea = this[`${type}Prompt`];
+                if (!textarea) {
+                    // console.error(`找不到提示词文本框: ${type}`);
+                    return;
+                }
+
                 prompts[type] = {
-                    prompt: this[`${type}Prompt`].value,
-                    model: this.modelSelects[type].value
+                    prompt: textarea.value,
+                    // 如果存在模型选择下拉框就使用其值，否则使用默认值
+                    model: this.modelSelects[type]?.value || DEFAULT_PROMPTS[type].model
                 };
             });
 
@@ -393,9 +358,16 @@ class PromptSettings {
     getPrompts() {
         const prompts = {};
         Object.keys(DEFAULT_PROMPTS).forEach(type => {
+            const textarea = this[`${type}Prompt`];
+            if (!textarea) {
+                console.error(`找不到提示词文本框: ${type}`);
+                return;
+            }
+
             prompts[type] = {
-                prompt: this[`${type}Prompt`].value,
-                model: this.modelSelects[type].value
+                prompt: textarea.value,
+                // 如果存在模型选择下拉框就使用其值，否则使用默认值
+                model: this.modelSelects[type]?.value || DEFAULT_PROMPTS[type].model
             };
         });
         return prompts;

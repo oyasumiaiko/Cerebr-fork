@@ -1254,7 +1254,7 @@ body.temporary-mode::after {
 
 /* 引用标记样式 */
 .reference-mark-group {
-    margin: 0px -0.25em;
+    margin: 0px;
     position: relative;
 }
 

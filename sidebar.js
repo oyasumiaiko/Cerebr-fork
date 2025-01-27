@@ -243,33 +243,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
 
-    // 获取提示词类型
+    /**
+     * 获取提示词类型
+     * @param {HTMLElement|string} content - 输入内容，可以是HTML元素或字符串
+     * @returns {string} 提示词类型 ('image'|'pdf'|'summary'|'selection'|'query'|'system')
+     */
     function getPromptTypeFromContent(content) {
         const prompts = promptSettingsManager.getPrompts();
-        
-        // 检查是否包含图片标签
-        if (content.includes('image-tag')) {
-            return 'image';
-        }
 
         // 检查是否是PDF提示词
-        if (content === prompts.pdf.prompt) {
+        if (prompts.pdf.prompt && content === prompts.pdf.prompt) {
             return 'pdf';
         }
 
         // 检查是否是页面总结提示词
-        if (content === prompts.summary.prompt) {
+        if (prompts.summary.prompt && content === prompts.summary.prompt) {
             return 'summary';
         }
 
         // 检查是否是划词搜索提示词
-        if (content.startsWith(prompts.selection.prompt.split('<SELECTION>')[0])) {
+        if (prompts.selection.prompt && content.startsWith(prompts.selection.prompt.split('<SELECTION>')[0])) {
             return 'selection';
-        }
-
-        // 检查是否是直接查询提示词
-        if (content.startsWith(prompts.query.prompt.split('<SELECTION>')[0])) {
-            return 'query';
         }
 
         // 默认使用系统提示词的设置
@@ -283,7 +277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (!message && imageTags.length === 0) return;
 
-        const config = apiConfigs[selectedConfigIndex];
+        let config = apiConfigs[selectedConfigIndex];
         if (!config?.baseUrl || !config?.apiKey) {
             appendMessage('请在设置中完善 API 配置', 'ai', true);
             return;
@@ -305,8 +299,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 生成新的请求ID
             const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+            // 如果没有文本内容，添加图片提示词
             if (messageInput.textContent.trim() === '') {
-                // 如果没有文本内容,添加图片提示词
                 messageInput.innerHTML += prompts.image.prompt;
             }
 
@@ -350,14 +344,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ? `\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}`
                 : '';
 
-            // 获取当前模型名称并根据模型类型添加搜索提示语
-            const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
-            const isSearchModel = currentModel.endsWith('-search');
-
             // 组合完整的系统消息
             const systemMessage = {
                 role: "system",
-                content: prompts.system.prompt + (isSearchModel ? prompts.search.prompt : '') + pageContentPrompt
+                content: prompts.system.prompt + pageContentPrompt
             };
 
             // 构建消息数组
@@ -376,15 +366,33 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 更新加载状态消息
             loadingMessage.textContent = '正在等待 AI 回复...';
 
-            // 确定要使用的模型
-            let modelToUse = config.modelName;
-            const promptType = getPromptTypeFromContent(messageInput.innerHTML);
-            if (promptType && prompts[promptType]) {
-                const preferredModel = prompts[promptType].model;
-                if (preferredModel !== 'follow_current') {
-                    modelToUse = preferredModel;
+            // 确定要使用的模型配置
+            let targetConfig = null;
+            // 获取最后一条消息
+            const lastMessage = messages[messages.length - 1] || {};
+            const lastMessageContent = lastMessage.content;
+
+            // 检查最后一条消息是否包含图片
+            const hasImage = Array.isArray(lastMessageContent) && 
+                lastMessageContent.some(item => item.type === 'image_url');
+
+            if (hasImage) {
+                // 如果图片提示词的模型不是"跟随当前API设置"，则使用设置中指定的模型
+                if (prompts.image?.model !== 'follow_current') {
+                    // 查找对应模型的apiConfig
+                    targetConfig = apiConfigs.find(c => c.modelName === prompts.image.model);
                 }
             }
+            else{
+                // 检查最后一条消息的文字内容是否匹配其他提示词类型
+                const promptType = getPromptTypeFromContent(lastMessageContent);
+                if (prompts[promptType]?.model !== 'follow_current') {
+                    targetConfig = apiConfigs.find(c => c.modelName === prompts[promptType].model);
+                }
+            }
+            
+            // 如果没找到目标配置，使用当前配置
+            config = targetConfig || config;
 
             // 发送API请求
             const response = await fetch(config.baseUrl, {
@@ -392,17 +400,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${config.apiKey}`,
-                    'X-Request-Id': requestId  // 添加请求ID到header
+                    'X-Request-Id': requestId
                 },
                 body: JSON.stringify({
-                    model: modelToUse,
-                    messages: messages,  // 直接使用messages，不再添加userMessage
+                    model: config.modelName,
+                    messages: messages,
                     stream: true,
                     temperature: config.temperature,
                     top_p: 0.95,
                     max_tokens: 8192,
                 }),
-                signal  // 添加 signal 到请求中
+                signal
             });
 
             if (!response.ok) {
@@ -450,7 +458,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 }
                                 aiResponse += deltaContent;
                                 aiResponse = aiResponse.replace(/\nabla/g, '\\nabla');
-                                console.log(aiResponse);
+                                // console.log(aiResponse);
                                 updateAIMessage(aiResponse, data.choices?.[0]?.groundingMetadata);
                             }
                         } catch (e) {
@@ -1561,9 +1569,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 sidebarSelection :
                 webpageSelection?.trim() || '';
 
-            const currentModel = apiConfigs[selectedConfigIndex]?.modelName || '';
-            const isSearchModel = currentModel.endsWith('-search');
-
             // 获取页面类型
             const contentType = await getDocumentType();
             const isPDF = contentType === 'application/pdf';
@@ -1578,11 +1583,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     clearChatHistory();
                 }
 
-                // 使用自定义的划词搜索提示词
-                const prompt = isSearchModel ?
-                    prompts.selection.replace('<SELECTION>', selectedText) :
-                    prompts.query.replace('<SELECTION>', selectedText);
+                // 根据模型名称决定使用哪个提示词
+                const promptType = (prompts.selection.model || '').endsWith('-search') ? 'selection' : 'query';
+                const prompt = prompts[promptType].prompt.replace('<SELECTION>', selectedText);
                 messageInput.textContent = prompt;
+
+                // 发送消息
+                await sendMessage();
             } else {
                 if (wasTemporaryMode) {
                     exitTemporaryMode();
@@ -1591,13 +1598,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 为PDF文件使用自定义的PDF提示词
                 if (isPDF) {
-                    messageInput.textContent = prompts.pdf;
+                    messageInput.textContent = prompts.pdf.prompt;
                 } else {
-                    messageInput.textContent = prompts.summary;
+                    messageInput.textContent = prompts.summary.prompt;
                 }
+                // 发送消息
+                await sendMessage();
             }
-            // 发送消息
-            await sendMessage();
         } catch (error) {
             console.error('获取选中文本失败:', error);
         } finally {
