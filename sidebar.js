@@ -567,6 +567,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         });
                     }
 
+                    // 清理任何剩余的未替换placeholder
+                    lastMessage.innerHTML = lastMessage.innerHTML.replace(/\u200B😎REF_\d+😎\u200B/g, '');
+
                     // 添加引用来源列表
                     if (typeof processedResult === 'object' && processedResult.sources && processedResult.sources.length > 0) {
                         const sourcesList = document.createElement('div');
@@ -964,12 +967,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             fragment.appendChild(messageDiv);
         } else {
             chatContainer.appendChild(messageDiv);
-            // 只在发送新消息时强制滚动，其他情况根据shouldAutoScroll决定
-            if (sender === 'user' && !skipHistory) {
-                scrollToBottom(true); // 用户新消息强制滚动
-            } else {
-                scrollToBottom(); // AI回复根据shouldAutoScroll决定
-            }
+            // 修改这里：移除用户消息的强制滚动
+            scrollToBottom(); // 统一使用自动滚动设置
         }
 
         // 更新聊天历史
@@ -2170,12 +2169,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 简化滚动到底部的函数
-    function scrollToBottom(force = false) {
-        if (!isAutoScrollEnabled && !force) {
+    function scrollToBottom() { // 移除 force 参数
+        if (!isAutoScrollEnabled) {
             return;
         }
 
-        if (force || shouldAutoScroll) {
+        if (shouldAutoScroll) {
             requestAnimationFrame(() => {
                 chatContainer.scrollTo({
                     top: chatContainer.scrollHeight,

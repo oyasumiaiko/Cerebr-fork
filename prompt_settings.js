@@ -147,6 +147,7 @@ class PromptSettings {
             // 动态更新模型选项的函数
             const updateModelOptions = () => {
                 const models = getAvailableModels();
+                const currentValue = select.value; // 保存当前选中的值
                 select.innerHTML = ''; // 清空现有选项
 
                 // 添加"跟随当前 API 设置"选项
@@ -168,6 +169,13 @@ class PromptSettings {
                     option.textContent = model;
                     select.appendChild(option);
                 });
+
+                // 恢复之前选中的值，如果该值仍然存在于选项中
+                if (currentValue === 'follow_current' || models.includes(currentValue)) {
+                    select.value = currentValue;
+                } else {
+                    select.value = 'follow_current'; // 如果之前的值不再存在，则默认使用"跟随当前 API 设置"
+                }
             };
 
             // 初始化模型选项
