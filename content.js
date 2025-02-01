@@ -118,7 +118,7 @@ class CerebrSidebar {
           width: calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor});
           height: calc(100vh - calc(40px * var(--scale-ratio, 1)));
           color: var(--cerebr-text-color, #000000);
-          box-shadow: -2px 0 15px rgba(0,0,0,0.1);
+          //box-shadow: -2px 0 15px rgba(0,0,0,0.1);
           z-index: 2147483647;
           border-radius: calc(12px * var(--scale-ratio, 1));
           overflow: hidden;
