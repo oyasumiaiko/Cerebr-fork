@@ -38,7 +38,8 @@ function createMessageNode(role, content, parentId = null) {
     role,
     content,
     parentId,
-    children: []
+    children: [],
+    timestamp: Date.now()
   };
 }
 

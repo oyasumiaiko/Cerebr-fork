@@ -1553,8 +1553,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         apiSettings.classList.remove('visible');
     });
 
-    // 清空聊天记录功能
+    // 清空聊天记录功能，并保存当前对话至持久存储（每次聊天会话结束自动保存）
     function clearChatHistory() {
+        // 保存当前对话，如果有消息
+        if (chatHistory.messages.length > 0) {
+            saveCurrentConversation();
+        }
         // 如果有正在进行的请求，停止它
         if (currentController) {
             currentController.abort();
@@ -2249,4 +2253,179 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearChatHistory();
         hideContextMenu();
     });
+
+    /**
+     * 保存当前对话至持久存储 (使用 chrome.storage.local)
+     * 每次对话结束（例如点击清空聊天记录时）自动调用
+     */
+    function saveCurrentConversation() {
+        if (chatHistory.messages.length === 0) return;
+        const domain = new URL(window.location.href).hostname;
+        const messages = chatHistory.messages.slice(); // 复制当前消息
+        const timestamps = messages.map(msg => msg.timestamp);
+        const startTime = Math.min(...timestamps);
+        const endTime = Math.max(...timestamps);
+        // 使用第一条用户消息作为简要（截取前50个字符）
+        const firstUserMessage = messages.find(msg => msg.role === 'user');
+        let summary = '';
+        if (firstUserMessage) {
+            summary = firstUserMessage.content.substring(0, 50);
+        } else if (messages.length > 0) {
+            summary = messages[0].content.substring(0, 50);
+        }
+        const conversation = {
+            id: `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            domain,
+            startTime,
+            endTime,
+            messages,
+            summary,
+            messageCount: messages.length
+        };
+        chrome.storage.local.get({ conversationHistories: [] }, (result) => {
+            const histories = result.conversationHistories;
+            histories.push(conversation);
+            chrome.storage.local.set({ conversationHistories: histories }, () => {
+                console.log('已保存对话记录:', conversation);
+            });
+        });
+    }
+
+    /**
+     * 显示聊天记录面板，用于读取以前的对话记录
+     */
+    function showChatHistoryPanel() {
+        let panel = document.getElementById('chat-history-panel');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = 'chat-history-panel';
+            // 使用简单内联样式
+            panel.style.position = 'fixed';
+            panel.style.top = '50%';
+            panel.style.left = '50%';
+            panel.style.transform = 'translate(-50%, -50%)';
+            panel.style.width = '80%';
+            panel.style.maxWidth = '600px';
+            panel.style.maxHeight = '80%';
+            panel.style.overflowY = 'auto';
+            panel.style.backgroundColor = 'var(--cerebr-bg-color)';
+            panel.style.border = '1px solid var(--cerebr-border-color)';
+            panel.style.borderRadius = '8px';
+            panel.style.padding = '16px';
+            panel.style.zIndex = '9999';
+            
+            // 添加标题栏
+            const header = document.createElement('div');
+            header.style.display = 'flex';
+            header.style.justifyContent = 'space-between';
+            header.style.alignItems = 'center';
+            header.style.marginBottom = '16px';
+            
+            const title = document.createElement('span');
+            title.textContent = '聊天记录';
+            title.style.fontSize = '16px';
+            title.style.fontWeight = 'bold';
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '关闭';
+            closeBtn.addEventListener('click', () => { panel.remove(); });
+            
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+            panel.appendChild(header);
+            
+            // 域名筛选输入框
+            const filterContainer = document.createElement('div');
+            filterContainer.style.marginBottom = '12px';
+            const filterInput = document.createElement('input');
+            filterInput.type = 'text';
+            filterInput.placeholder = '按域名筛选...';
+            filterInput.style.width = '100%';
+            filterInput.style.padding = '8px';
+            filterInput.style.boxSizing = 'border-box';
+            filterInput.addEventListener('input', () => {
+                loadConversationHistories(panel, filterInput.value);
+            });
+            filterContainer.appendChild(filterInput);
+            panel.appendChild(filterContainer);
+            
+            // 列表容器
+            const listContainer = document.createElement('div');
+            listContainer.id = 'chat-history-list';
+            panel.appendChild(listContainer);
+            document.body.appendChild(panel);
+        }
+        // 加载默认（不过滤）的对话记录列表
+        loadConversationHistories(panel, '');
+    }
+    
+    /**
+     * 从存储中加载聊天记录，并填充到面板中
+     * @param {HTMLElement} panel - 聊天记录面板
+     * @param {string} filterText - 域名筛选内容
+     */
+    function loadConversationHistories(panel, filterText) {
+        const listContainer = panel.querySelector('#chat-history-list');
+        listContainer.innerHTML = '';
+        chrome.storage.local.get({ conversationHistories: [] }, (result) => {
+            let histories = result.conversationHistories || [];
+            if (filterText) {
+                histories = histories.filter(conv => conv.domain.includes(filterText));
+            }
+            if (histories.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.textContent = '暂无聊天记录';
+                listContainer.appendChild(emptyMsg);
+                return;
+            }
+            // 按结束时间降序排序
+            histories.sort((a, b) => b.endTime - a.endTime);
+            histories.forEach(conv => {
+                const item = document.createElement('div');
+                item.className = 'chat-history-item';
+                item.style.borderBottom = '1px solid var(--cerebr-border-color)';
+                item.style.padding = '8px 0';
+                item.style.cursor = 'pointer';
+                const summaryDiv = document.createElement('div');
+                summaryDiv.textContent = conv.summary;
+                summaryDiv.style.fontWeight = 'bold';
+                const infoDiv = document.createElement('div');
+                infoDiv.style.fontSize = '12px';
+                infoDiv.style.color = 'var(--cerebr-text-color)';
+                const date = new Date(conv.startTime).toLocaleString();
+                infoDiv.textContent = `消息数: ${conv.messageCount}，时间: ${date}，域名: ${conv.domain}`;
+                item.appendChild(summaryDiv);
+                item.appendChild(infoDiv);
+                item.addEventListener('click', () => {
+                    loadConversationIntoChat(conv);
+                    panel.remove();
+                });
+                listContainer.appendChild(item);
+            });
+        });
+    }
+    
+    /**
+     * 加载选中的对话记录到当前聊天窗口
+     * @param {Object} conversation - 对话记录对象
+     */
+    function loadConversationIntoChat(conversation) {
+        // 清空当前聊天容器
+        chatContainer.innerHTML = '';
+        // 遍历对话中的每条消息并显示
+        conversation.messages.forEach(msg => {
+            appendMessage(msg.content, msg.role, true);
+        });
+        // 清空当前对话管理（开始新会话）
+        clearHistory();
+    }
+
+    // 添加聊天记录菜单项监听
+    const chatHistoryMenuItem = document.getElementById('chat-history-menu');
+    if (chatHistoryMenuItem) {
+        chatHistoryMenuItem.addEventListener('click', () => {
+            showChatHistoryPanel();
+            toggleSettingsMenu(false);
+        });
+    }
 });
