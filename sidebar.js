@@ -30,6 +30,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let pageContent = null;  // 预存储的网页文本内容
     let shouldSendChatHistory = true; // 是否发送聊天历史
     let currentConversationId = null; // 当前会话ID
+    let currentUrl = null; // 存储当前URL
+
 
     // Create ChatHistoryManager instance
     const {
@@ -891,9 +893,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             selection.removeAllRanges();
             selection.addRange(range);
         } else if (event.data.type === 'URL_CHANGED') {
-            // console.log('[收到URL变化]', event.data.url);
-            // 加载新URL的聊天记录
-            // loadChatHistory(event.data.url);
+            // 更新存储的URL和域名
+            currentUrl = event.data.url;
             // 清空页面内容，等待下次发送消息时重新获取
             pageContent = null;
         } else if (event.data.type === 'UPDATE_PLACEHOLDER') {
@@ -2267,7 +2268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     function saveCurrentConversation() {
         if (chatHistory.messages.length === 0) return;
-        const domain = new URL(window.location.href).hostname;
+        const domain = currentUrl;
         const messages = chatHistory.messages.slice(); // 复制当前消息
         const timestamps = messages.map(msg => msg.timestamp);
         const startTime = Math.min(...timestamps);
@@ -2296,21 +2297,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.log('已保存对话记录:', conversation);
             });
         });
-    }
-
-    /**
-     * 获取当前页面的真实域名
-     * @returns {string} 当前页面的域名
-     */
-    function getCurrentDomain() {
-        try {
-            // 尝试从 URL 参数获取当前页面 URL
-            const parentUrl = window.parent.location.href;
-            return new URL(parentUrl).hostname;
-        } catch (error) {
-            console.error('获取父页面域名失败:', error);
-            return window.location.hostname; // 降级使用扩展页面域名
-        }
     }
 
     // 修改 saveOrUpdateCurrentConversation 函数中的域名获取
