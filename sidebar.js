@@ -2468,7 +2468,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 遍历对话中的每条消息并显示，并确保 AI 消息的角色为 "ai"
         conversation.messages.forEach(msg => {
             const role = msg.role.toLowerCase() === 'assistant' ? 'ai' : msg.role;
-            appendMessage(msg.content, role, true);
+            if (Array.isArray(msg.content)) {
+                // 如果消息内容为数组，则逐个处理文本和图片块
+                msg.content.forEach(part => {
+                    if (part.type === 'text') {
+                        appendMessage(part.text, role, true);
+                    } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+                        // 以 <img> 标签形式显示图片
+                        appendMessage(`<img src="${part.image_url.url}" alt="image" />`, role, true);
+                    }
+                });
+            } else {
+                appendMessage(msg.content, role, true);
+            }
         });
         // 清空当前对话管理（开始新会话）
         clearHistory();
