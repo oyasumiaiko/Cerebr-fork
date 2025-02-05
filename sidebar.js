@@ -893,6 +893,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             selection.removeAllRanges();
             selection.addRange(range);
         } else if (event.data.type === 'URL_CHANGED') {
+            console.log('收到URL_CHANGED消息:', event.data);
             // 更新存储的URL和域名
             currentUrl = event.data.url;
             // 清空页面内容，等待下次发送消息时重新获取

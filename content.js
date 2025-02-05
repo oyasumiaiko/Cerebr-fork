@@ -261,10 +261,13 @@ class CerebrSidebar {
         console.log('侧边栏初始化完成');
       });
 
-      iframe.contentWindow.postMessage({
-        type: 'URL_CHANGED',
-        url: window.location.href
-      }, '*');
+      // 延迟发送 URL_CHANGED 消息，等待 iframe 加载完毕
+      iframe.addEventListener('load', () => {
+         iframe.contentWindow.postMessage({
+           type: 'URL_CHANGED',
+           url: window.location.href
+         }, '*');
+      });
     } catch (error) {
       console.error('初始化侧边栏失败:', error);
     }
