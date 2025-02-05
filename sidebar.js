@@ -2551,6 +2551,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // 如果有筛选关键字, 尝试提取所有匹配关键字附近的内容作为 snippet
                     if (filterText && filterText.trim() !== "") {
                         let snippets = [];
+                        let totalMatches = 0;
                         // 对 filterText 进行转义，避免正则特殊字符问题
                         const escapedFilter = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                         const lowerFilter = filterText.toLowerCase();
@@ -2567,12 +2568,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     while (true) {
                                         const index = contentLower.indexOf(lowerFilter, startIndex);
                                         if (index === -1) break;
-                                        const snippetStart = Math.max(0, index - 30);
-                                        const snippetEnd = Math.min(content.length, index + filterText.length + 30);
-                                        let snippet = content.substring(snippetStart, snippetEnd);
-                                        // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
-                                        snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
-                                        snippets.push(snippet);
+                                        totalMatches++;
+                                        if (snippets.length < 5) {
+                                            const snippetStart = Math.max(0, index - 30);
+                                            const snippetEnd = Math.min(content.length, index + filterText.length + 30);
+                                            let snippet = content.substring(snippetStart, snippetEnd);
+                                            // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
+                                            snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
+                                            snippets.push(snippet);
+                                        }
                                         startIndex = index + 1;
                                     }
                                 }
@@ -2581,8 +2585,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (snippets.length > 0) {
                             const snippetDiv = document.createElement('div');
                             snippetDiv.className = 'highlight-snippet';
-                            // 用 <br> 分隔多个 snippet
-                            snippetDiv.innerHTML = snippets.map(s => '…' + s + '…').join('<br>');
+                            let displaySnippets = snippets.map(s => '…' + s + '…');
+                            if (totalMatches > snippets.length) {
+                                displaySnippets.push(`…… 共 ${totalMatches} 匹配`);
+                            }
+                            snippetDiv.innerHTML = displaySnippets.join('<br>');
                             item.appendChild(snippetDiv);
                         }
                     }
