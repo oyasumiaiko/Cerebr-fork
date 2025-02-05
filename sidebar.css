@@ -1921,13 +1921,14 @@ body.hide-references .reference-number.superscript {
 /* 聊天记录面板样式 */
 #chat-history-panel {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 80%;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: auto; /* 自动计算上下左右的空隙，从而居中 */
+    width: 80%;          /* 或者指定具体宽度 */
     max-width: 600px;
-    /* 固定高度，避免搜索时闪烁 */
-    height: 80vh;
+    height: 80vh;        /* 明确高度 */
     background-color: var(--cerebr-bg-color);
     border: 1px solid var(--cerebr-border-color);
     border-radius: 8px;
@@ -1986,7 +1987,6 @@ body.hide-references .reference-number.superscript {
     flex: 1 1 auto;
     overflow-y: auto;
     overflow-x: hidden;
-    max-height: calc(80vh - 120px); /* 保持原有最大高度设置 */
     /* Firefox 下的滚动条 */
     scrollbar-width: thin;
     scrollbar-color: var(--cerebr-border-color) transparent;
