@@ -2413,7 +2413,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         chrome.storage.local.get({ conversationHistories: [] }, (result) => {
             let histories = result.conversationHistories || [];
             if (filterText) {
-                histories = histories.filter(conv => conv.url.includes(filterText));
+                const lowerFilter = filterText.toLowerCase();
+                histories = histories.filter(conv => {
+                    const url = (conv.url || '').toLowerCase();
+                    const summary = (conv.summary || '').toLowerCase();
+                    const messagesContent = conv.messages && conv.messages.length
+                        ? conv.messages.map(msg => msg.content || '').join(' ')
+                        : '';
+                    const lowerMessages = messagesContent.toLowerCase();
+                    return url.includes(lowerFilter) || summary.includes(lowerFilter) || lowerMessages.includes(lowerFilter);
+                });
             }
 
             if (histories.length === 0) {
