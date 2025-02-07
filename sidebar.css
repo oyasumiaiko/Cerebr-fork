@@ -2044,3 +2044,26 @@ body.hide-references .reference-number.superscript {
     color: var(--cerebr-text-color);
     margin-top: 4px;
 }
+
+/* 右键菜单：聊天记录上下文菜单 */
+.chat-history-context-menu {
+    position: fixed;
+    background: var(--cerebr-bg-color);
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    padding: 4px 0;
+    z-index: 10001;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* 右键菜单选项 */
+.chat-history-context-menu-option {
+    padding: 6px 16px;
+    cursor: pointer;
+    color: var(--cerebr-text-color);
+}
+
+/* 鼠标悬停时改变背景 */
+.chat-history-context-menu-option:hover {
+    background-color: var(--cerebr-message-user-bg);
+}

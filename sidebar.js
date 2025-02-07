@@ -1564,7 +1564,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function clearChatHistory() {
         // 保存当前对话，如果有消息
         if (chatHistory.messages.length > 0) {
-            saveCurrentConversation(false); // 明确指定为非更新操作
+            saveCurrentConversation(true); // 修改传入 true 以更新已有对话记录，避免重复保存
         }
         // 如果有正在进行的请求，停止它
         if (currentController) {
@@ -2594,10 +2594,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     }
                     
+                    // 添加聊天记录项的点击事件（加载对话）
                     item.addEventListener('click', () => {
                         loadConversationIntoChat(conv);
                         // 保持聊天记录面板打开
                     });
+                    // 新增：添加右键事件，显示删除菜单
+                    item.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        showChatHistoryItemContextMenu(e, conv.id);
+                    });
+                    
                     listContainer.appendChild(item);
                 });
             });
@@ -2628,8 +2635,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 appendMessage(msg.content, role, true);
             }
         });
-        // 清空当前对话管理（开始新会话）
-        clearHistory();
+        // 修改：恢复加载的对话历史到聊天管理器，避免覆盖已加载历史
+        chatHistory.messages = conversation.messages.slice();
+        chatHistory.currentNode = conversation.messages.length > 0 ? conversation.messages[conversation.messages.length - 1] : null;
     }
 
     // 添加聊天记录菜单项监听
@@ -2638,6 +2646,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatHistoryMenuItem.addEventListener('click', () => {
             showChatHistoryPanel();
             toggleSettingsMenu(false);
+        });
+    }
+
+    // 在 DOMContentLoaded 内部，新增如下两个辅助函数
+
+    /**
+     * 显示聊天记录项的右键菜单
+     * @param {MouseEvent} e - 右键事件
+     * @param {string} conversationId - 对话记录ID
+     */
+    function showChatHistoryItemContextMenu(e, conversationId) {
+        e.preventDefault();
+        // 如果已存在菜单，则删除
+        const existingMenu = document.getElementById('chat-history-context-menu');
+        if (existingMenu) {
+            existingMenu.remove();
+        }
+        // 创建菜单容器
+        const menu = document.createElement('div');
+        menu.id = 'chat-history-context-menu';
+        // 动态设置菜单位置
+        menu.style.top = e.clientY + 'px';
+        menu.style.left = e.clientX + 'px';
+        // 添加 CSS 类，设置其他样式
+        menu.classList.add('chat-history-context-menu');
+ 
+        const deleteOption = document.createElement('div');
+        deleteOption.textContent = '删除聊天记录';
+        deleteOption.classList.add('chat-history-context-menu-option');
+
+        deleteOption.addEventListener('click', () => {
+            deleteConversation(conversationId);
+            menu.remove();
+        });
+
+        menu.appendChild(deleteOption);
+        document.body.appendChild(menu);
+
+        // 点击其他地方时移除菜单
+        document.addEventListener('click', function onDocClick() {
+            if (menu.parentElement) {
+                menu.remove();
+            }
+            document.removeEventListener('click', onDocClick);
+        });
+    }
+
+    /**
+     * 删除指定的对话记录历史，并刷新聊天记录列表
+     * @param {string} conversationId - 对话记录ID
+     */
+    function deleteConversation(conversationId) {
+        chrome.storage.local.get({ conversationHistories: [] }, (result) => {
+            let histories = result.conversationHistories;
+            histories = histories.filter(conv => conv.id !== conversationId);
+            chrome.storage.local.set({ conversationHistories: histories }, () => {
+                console.log('已删除对话记录:', conversationId);
+                const panel = document.getElementById('chat-history-panel');
+                if (panel) {
+                    const filterInput = panel.querySelector('input[type="text"]');
+                    const filterText = filterInput ? filterInput.value : '';
+                    loadConversationHistories(panel, filterText);
+                }
+            });
         });
     }
 });
