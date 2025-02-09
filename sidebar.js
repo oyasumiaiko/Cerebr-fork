@@ -2298,12 +2298,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         const timestamps = messages.map(msg => msg.timestamp);
         const startTime = Math.min(...timestamps);
         const endTime = Math.max(...timestamps);
+
+        // Helper function: 将消息内容转换为纯文本字符串，处理包含图片的情况
+        function getPlainText(content) {
+            if (typeof content === 'string') return content;
+            if (Array.isArray(content)) {
+                return content.map(item => {
+                    // 如果是文本块则返回文字，否则用 [图片] 表示
+                    return item.type === 'text' ? item.text : '[图片]';
+                }).join(' ');
+            }
+            return '';
+        }
         
-        // 找到第一条有文字内容的消息
-        const firstMessageWithContent = messages.find(msg => msg.content?.trim());
+        // 找到第一条有文字内容的消息（使用 getPlainText 处理数组情况）
+        const firstMessageWithContent = messages.find(msg => getPlainText(msg.content).trim());
         let summary = '';
         if (firstMessageWithContent?.content) {
-            let content = firstMessageWithContent.content;
+            // 使用 getPlainText 转换为字符串
+            let content = getPlainText(firstMessageWithContent.content);
             // 替换预设模板为模板名称
             const prompts = promptSettingsManager.getPrompts();
             if (content.includes(prompts.selection.prompt)) {
