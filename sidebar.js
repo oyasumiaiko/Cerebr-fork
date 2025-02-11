@@ -279,9 +279,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             return 'summary';
         }
 
-        // 检查是否是划词搜索提示词
-        if (prompts.selection.prompt && content.startsWith(prompts.selection.prompt.split('<SELECTION>')[0])) {
-            return 'selection';
+        // 修改：检查是否是划词搜索提示词，将 selection prompt 中的 "<SELECTION>" 移除后进行匹配
+        if (prompts.selection.prompt) {
+            const selectionPromptKeyword = prompts.selection.prompt.replace('<SELECTION>', '').trim();
+            if (selectionPromptKeyword && content.startsWith(selectionPromptKeyword)) {
+                return 'selection';
+            }
         }
 
         // 默认使用系统提示词的设置
@@ -2353,20 +2356,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             let content = getPlainText(firstMessageWithContent.content);
             // 替换预设模板为模板名称
             const prompts = promptSettingsManager.getPrompts();
-            if (content.includes(prompts.selection.prompt)) {
-                content = content.replace(prompts.selection.prompt, '[划词搜索]');
+            const selectionPrompt = prompts.selection.prompt.split('<SELECTION>')[0].trim();
+            if (content.includes(selectionPrompt)) {
+                content = content.replace(selectionPrompt, '[搜索]');
             }
+            const queryPrompt = prompts.query.prompt.split('<SELECTION>')[0].trim();
+            if (content.includes(queryPrompt)) {
+                content = content.replace(queryPrompt, '[解释]');
+            }
+
             if (content.includes(prompts.pdf.prompt)) {
                 content = content.replace(prompts.pdf.prompt, '[PDF总结]');
             }
             if (content.includes(prompts.summary.prompt)) {
-                content = content.replace(prompts.summary.prompt, '[页面总结]');
-            }
-            if (content.includes(prompts.query.prompt)) {
-                content = content.replace(prompts.query.prompt, '[划词解释]');
+                content = content.replace(prompts.summary.prompt, '[总结]');
             }
             if (content.includes(prompts.image.prompt)) {
-                content = content.replace(prompts.image.prompt, '[图片分析]');
+                content = content.replace(prompts.image.prompt, '[图片]');
             }
             summary = content.substring(0, 50);
         }
