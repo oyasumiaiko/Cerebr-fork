@@ -267,7 +267,12 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @returns {string} 提示词类型 ('image'|'pdf'|'summary'|'selection'|'query'|'system')
      */
     function getPromptTypeFromContent(content) {
+        // 如果content是空字符串，就判断为图片提示词
         const prompts = promptSettingsManager.getPrompts();
+
+        if (content === '') {
+            return 'image';
+        }
 
         // 检查是否是PDF提示词
         if (prompts.pdf.prompt && content === prompts.pdf.prompt) {
@@ -279,7 +284,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return 'summary';
         }
 
-        // 修改：检查是否是划词搜索提示词，将 selection prompt 中的 "<SELECTION>" 移除后进行匹配
+        // 检查是否是划词搜索提示词，将 selection prompt 中的 "<SELECTION>" 移除后进行匹配
         if (prompts.selection.prompt) {
             const selectionPromptKeyword = prompts.selection.prompt.replace('<SELECTION>', '').trim();
             if (selectionPromptKeyword && content.startsWith(selectionPromptKeyword)) {
@@ -287,8 +292,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
-        // 默认使用系统提示词的设置
-        return 'system';
+        return 'none';
+    }
+
+    // 在 getPromptTypeFromContent 函数之后，新增如下辅助函数
+
+    /**
+     * 从提示词文本中提取系统插入内容
+     * @param {string} promptText - 包含特殊语法的提示词文本
+     * @returns {string} 提取出的系统内容（如果存在），否则返回空字符串
+     * @example
+     * // 输入 "请总结以下内容 %%begin_system%%额外指令%%end_system%%"，返回 "额外指令"
+     */
+    function extractSystemContent(promptText) {
+        if (!promptText) return '';
+        const regex = /{{system}}([\s\S]*?){{end_system}}/; // 使用捕获组
+        const match = promptText.match(regex);
+        return match ? match[1].trim() : '';
     }
 
     async function sendMessage() {
@@ -296,10 +316,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         const message = messageInput.textContent.trim();
         const imageTags = messageInput.querySelectorAll('.image-tag');
 
-        // Added: Determine the current prompt type from the user message.
-        const currentPromptType = getPromptTypeFromContent(message);
-
+        // 如果消息为空且没有图片标签，则不发送消息
         if (!message && imageTags.length === 0) return;
+
+        // 添加图片提示词
+        if (messageInput.textContent.trim() === '' && imageTags.length > 0) {
+            messageInput.innerHTML += prompts.image.prompt;
+        }
+
+        // 获取当前提示词设置
+        const prompts = promptSettingsManager.getPrompts();
+        const currentPromptType = getPromptTypeFromContent(message);
 
         let config = apiConfigs[selectedConfigIndex];
         if (!config?.baseUrl || !config?.apiKey) {
@@ -307,6 +334,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        let loadingMessage; // 提前声明，使得 catch 块可访问
         try {
             // 如果存在之前的请求，先中止它
             if (currentController) {
@@ -316,19 +344,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // 设置处理状态为true
             isProcessingMessage = true;
+
             // 当开始生成时，给聊天容器添加 glow 效果
             chatContainer.classList.add('auto-scroll-glow');
-        
-            // 获取当前提示词设置
-            const prompts = promptSettingsManager.getPrompts();
 
             // 生成新的请求ID
             const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-            // 如果没有文本内容，添加图片提示词
-            if (messageInput.textContent.trim() === '') {
-                messageInput.innerHTML += prompts.image.prompt;
-        }
+            // 移除用户消息中已被提取到系统消息中的部分
+            if (currentPromptType !== 'none') {
+                messageInput.innerHTML = messageInput.innerHTML.replace(/{{system}}([\s\S]*?){{end_system}}/g, '');
+            }
 
             // 先添加用户消息到界面和历史记录
             const userMessageDiv = appendMessage(messageInput.innerHTML, 'user');
@@ -336,7 +362,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             adjustTextareaHeight(messageInput);
 
             // 添加加载状态消息
-            const loadingMessage = appendMessage('正在处理...', 'ai', true);
+            loadingMessage = appendMessage('正在处理...', 'ai', true);
             loadingMessage.classList.add('loading-message');
 
             // 如果不是临时模式，获取网页内容
@@ -371,14 +397,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                 : '';
 
             // 组合完整的系统消息
+            let systemMessageContent = prompts.system.prompt;
+            
+            // 若当前提示词类型不是 none，尝试从对应提示词中提取自定义系统指令
+            if (currentPromptType !== 'none' && prompts[currentPromptType] && prompts[currentPromptType].prompt) {
+                const additionalSystemContent = extractSystemContent(prompts[currentPromptType].prompt);
+                if (additionalSystemContent) {
+                    systemMessageContent += "\n" + additionalSystemContent;
+                }
+            }
+            systemMessageContent += pageContentPrompt;
+
             const systemMessage = {
                 role: "system",
-                content: prompts.system.prompt + pageContentPrompt
+                content: systemMessageContent
             };
 
             // 构建消息数组
             const messages = [];
-            // 如果是第一条消息或第一条不是系统消息，添加系统消息
+            // 添加系统消息
             if (conversationChain.length === 0 || conversationChain[0].role !== "system") {
                 messages.push(systemMessage);
             }
@@ -401,36 +438,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            // 更新加载状态消息
-            loadingMessage.textContent = '正在等待 AI 回复...';
-
             // 确定要使用的模型配置
             let targetConfig = null;
-            // 获取最后一条消息
-            const lastMessage = messages[messages.length - 1] || {};
-            const lastMessageContent = lastMessage.content;
-
-            // 检查最后一条消息是否包含图片
-            const hasImage = Array.isArray(lastMessageContent) && 
-                lastMessageContent.some(item => item.type === 'image_url');
-
-            if (hasImage) {
-                // 如果图片提示词的模型不是"跟随当前API设置"，则使用设置中指定的模型
-                if (prompts.image?.model !== 'follow_current') {
-                    // 查找对应模型的apiConfig
-                    targetConfig = apiConfigs.find(c => c.modelName === prompts.image.model);
-                }
+            // 只判断一次 prompttype，重用之前的 currentPromptType
+            if (prompts[currentPromptType]?.model !== 'follow_current') {
+                targetConfig = apiConfigs.find(c => c.modelName === prompts[currentPromptType].model);
             }
-            else{
-                // 检查最后一条消息的文字内容是否匹配其他提示词类型
-                const promptType = getPromptTypeFromContent(lastMessageContent);
-                if (prompts[promptType]?.model !== 'follow_current') {
-                    targetConfig = apiConfigs.find(c => c.modelName === prompts[promptType].model);
-                }
-            }
-            
+
             // 如果没找到目标配置，使用当前配置
             config = targetConfig || config;
+
+            // 更新加载状态消息
+            loadingMessage.textContent = '正在等待 AI 回复...';
 
             // 发送API请求
             const response = await fetch(config.baseUrl, {
@@ -468,7 +487,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     loadingMessage.classList.add('error-message');
                 }
                 throw new Error(`API错误 (${response.status}): ${error}`);
-        }
+            }
 
             const reader = response.body.getReader();
             let hasStartedResponse = false;
@@ -485,7 +504,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (line.startsWith('data: ')) {
                         const content = line.slice(6);
                         if (content.trim() === '[DONE]') continue;
-        try {
+                        try {
                             const data = JSON.parse(content);
                             const deltaContent = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content;
                             if (deltaContent) {
@@ -1077,14 +1096,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // Shift+Enter 插入换行
                 return;
             }
-            
+
             if (isComposing) {
                 // 如果正在使用输入法或正在处理消息，不发送消息
                 return;
             }
-            
+
             e.preventDefault();
-            
+
             const text = this.textContent.trim();
             if (text || this.querySelector('.image-tag')) {  // 检查是否有文本或图片
                 if (e.ctrlKey) {
@@ -1800,7 +1819,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.ctrlKey || e.shiftKey || e.altKey) {
             return;
         }
-        
+
         // 否则显示自定义上下文菜单
         e.preventDefault();
         const messageElement = e.target.closest('.ai-message');
@@ -2115,10 +2134,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function initSettings() {
         try {
             const result = await chrome.storage.sync.get([
-                'sidebarWidth', 
-                'fontSize', 
-                'scaleFactor', 
-                'autoScroll', 
+                'sidebarWidth',
+                'fontSize',
+                'scaleFactor',
+                'autoScroll',
                 'clearOnSearch',
                 'shouldSendChatHistory',
                 'showReference' // 添加新的配置键
@@ -2347,7 +2366,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             return '';
         }
-        
+
         // 找到第一条有文字内容的消息（使用 getPlainText 处理数组情况）
         const firstMessageWithContent = messages.find(msg => getPlainText(msg.content).trim());
         let summary = '';
@@ -2376,12 +2395,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             summary = content.substring(0, 50);
         }
-        
+
         const generateConversationId = () => `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const conversation = {
             id: isUpdate ? (currentConversationId || generateConversationId()) : generateConversationId(),
             url: currentUrl,
-            startTime, 
+            startTime,
             endTime,
             messages,
             summary,
@@ -2390,7 +2409,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         chrome.storage.local.get({ conversationHistories: [] }, (result) => {
             let histories = result.conversationHistories;
-            
+
             if (isUpdate && currentConversationId) {
                 const index = histories.findIndex(conv => conv.id === currentConversationId);
                 if (index !== -1) {
@@ -2406,7 +2425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         });
     }
-    
+
     /**
      * 显示聊天记录面板，用于读取以前的对话记录
      */
@@ -2415,23 +2434,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!panel) {
             panel = document.createElement('div');
             panel.id = 'chat-history-panel';
-            
+
             // 添加标题栏
             const header = document.createElement('div');
             header.className = 'panel-header';
-            
+
             const title = document.createElement('span');
             title.textContent = '聊天记录';
             title.className = 'panel-title';
-            
+
             const closeBtn = document.createElement('button');
             closeBtn.textContent = '关闭';
             closeBtn.addEventListener('click', () => { panel.remove(); });
-            
+
             header.appendChild(title);
             header.appendChild(closeBtn);
             panel.appendChild(header);
-            
+
             // 域名筛选输入框
             const filterContainer = document.createElement('div');
             filterContainer.className = 'filter-container';
@@ -2447,7 +2466,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             filterContainer.appendChild(filterInput);
             panel.appendChild(filterContainer);
-            
+
             // 列表容器
             const listContainer = document.createElement('div');
             listContainer.id = 'chat-history-list';
@@ -2488,7 +2507,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 加载默认（不过滤）的对话记录列表
         loadConversationHistories(panel, '');
     }
-    
+
     /**
      * 格式化相对时间字符串
      * @param {Date} date - 日期对象
@@ -2599,7 +2618,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 groups[groupLabel].forEach(conv => {
                     const item = document.createElement('div');
                     item.className = 'chat-history-item';
-                    
+
                     const summaryDiv = document.createElement('div');
                     summaryDiv.className = 'summary';
                     let displaySummary = conv.summary;
@@ -2612,7 +2631,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     infoDiv.className = 'info';
                     const convDate = new Date(conv.startTime);
                     const relativeTime = formatRelativeTime(convDate);
-                    
+
                     // 提取 URL 中的 domain
                     let domain = '';
                     if (conv.url) {
@@ -2625,14 +2644,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     } else {
                         domain = '未知';
                     }
-                    
+
                     infoDiv.textContent = `${relativeTime} · 消息数: ${conv.messageCount} · ${domain}`;
                     // 新增：鼠标悬停显示具体的日期时间
                     infoDiv.title = convDate.toLocaleString();
-                    
+
                     item.appendChild(summaryDiv);
                     item.appendChild(infoDiv);
-                    
+
                     // 如果有筛选关键字, 尝试提取所有匹配关键字附近的内容作为 snippet
                     if (filterText && filterText.trim() !== "") {
                         let snippets = [];
@@ -2678,7 +2697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             item.appendChild(snippetDiv);
                         }
                     }
-                    
+
                     // 添加聊天记录项的点击事件（加载对话）
                     item.addEventListener('click', () => {
                         loadConversationIntoChat(conv);
@@ -2689,13 +2708,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         e.preventDefault();
                         showChatHistoryItemContextMenu(e, conv.id);
                     });
-                    
+
                     listContainer.appendChild(item);
                 });
             });
         });
     }
-    
+
     /**
      * 加载选中的对话记录到当前聊天窗口
      * @param {Object} conversation - 对话记录对象
@@ -2758,7 +2777,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         menu.style.left = e.clientX + 'px';
         // 添加 CSS 类，设置其他样式
         menu.classList.add('chat-history-context-menu');
- 
+
         const deleteOption = document.createElement('div');
         deleteOption.textContent = '删除聊天记录';
         deleteOption.classList.add('chat-history-context-menu-option');
