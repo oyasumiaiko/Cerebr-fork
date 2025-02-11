@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fullscreenToggle = document.getElementById('fullscreen-toggle');
     const sendButton = document.getElementById('send-button');
     const sendChatHistorySwitch = document.getElementById('send-chat-history-switch');
+    const showReferenceSwitch = document.getElementById('show-reference-switch');
+
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
@@ -228,12 +230,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </span>
             `;
 
-            // 替换文本并添加引用标记
-            markedText = markedText.replace(regex, `$&${placeholder}`);
-            htmlElements.push({
-                placeholder,
-                html: refGroup
-            });
+            if (showReferenceSwitch.checked) {
+                // 替换文本并添加引用标记
+                markedText = markedText.replace(regex, `$&${placeholder}`);
+                htmlElements.push({
+                    placeholder,
+                    html: refGroup
+                });
+            }
 
             // 添加到有序来源列表
             sourceRefs.forEach(ref => {
@@ -2127,7 +2131,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
             // 新增：初始化显示引用标记设置（默认显示）
-            const showReferenceSwitch = document.getElementById('show-reference-switch');
             if (showReferenceSwitch) {
                 if (result.showReference === undefined) {
                     showReferenceSwitch.checked = true;
