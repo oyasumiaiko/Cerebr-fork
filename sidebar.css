@@ -31,6 +31,14 @@
     --cerebr-background-color: #21252b;
 }
 
+:root.night-theme {
+    --cerebr-opacity: 0.8;
+    --cerebr-bg-color: rgb(0 0 0 / 80%);
+    --cerebr-text-color: hsl(0deg 0% 85%);
+    --cerebr-message-user-bg: hsl(0deg 0% 26% / 50%);
+    --cerebr-message-ai-bg: hsl(0deg 0% 19.53% / 27%);
+}
+
 /* 基础样式 */
 body {
     margin: 0;
