@@ -111,6 +111,7 @@ class CerebrSidebar {
           all: initial;
           contain: style layout size;
         }
+          
         .cerebr-sidebar {
           position: fixed;
           top: calc(20px * var(--scale-ratio, 1));
@@ -118,7 +119,6 @@ class CerebrSidebar {
           width: calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor});
           height: calc(100vh - calc(40px * var(--scale-ratio, 1)));
           color: var(--cerebr-text-color, #000000);
-          //box-shadow: -2px 0 15px rgba(0,0,0,0.1);
           z-index: 2147483647;
           border-radius: calc(12px * var(--scale-ratio, 1));
           overflow: hidden;
@@ -126,9 +126,16 @@ class CerebrSidebar {
           transform: translateX(calc(100% + calc(20px * var(--scale-ratio, 1))));
           pointer-events: none;
           isolation: isolate;
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          /* border: 1px solid rgba(255, 255, 255, 0.1); */
           contain: layout style;
-          transition: all 0.3s ease;
+          transition: transform 0.3s ease, visibility 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .cerebr-sidebar.visible {
+          pointer-events: auto;
+          visibility: visible;
+          transform: translateX(0);
+          box-shadow: -2px 0 15px rgba(0,0,0,0.1);
         }
 
         .cerebr-sidebar__content {
@@ -137,14 +144,22 @@ class CerebrSidebar {
           border-radius: calc(12px * var(--scale-ratio, 1));
           position: relative;
           background: rgba(255, 255, 255, 0);
-          backdrop-filter: blur(30px) saturate(250%);
+          backdrop-filter: blur(120px) saturate(250%);
           contain: layout style;
           pointer-events: auto;
         }
+        .cerebr-sidebar__content {
+          height: 100%;
+          overflow: hidden;
+          border-radius: 0;
+          contain: style layout size;
+        }
 
         .cerebr-sidebar.fullscreen {
-          top: -1px;
-          right: -1px;
+          transition: all 0s !important;
+
+          top: 0px;
+          right: 0px;
           width: 100vw !important;
           height: 100vh;
           margin-right: 0;
@@ -154,28 +169,11 @@ class CerebrSidebar {
         .cerebr-sidebar.fullscreen.visible {
           transform: translateX(0) !important;
         }
-        .cerebr-sidebar.initialized {
-          visibility: visible;
-          transition: transform 0.3s ease;
-          pointer-events: auto;
-        }
-
-        .cerebr-sidebar.visible {
-          transform: translateX(0);
-        }
-
-        .cerebr-sidebar.fullscreen.visible {
-          transform: translateX(0);
-        }
-        .cerebr-sidebar__content {
-          height: 100%;
-          overflow: hidden;
-          border-radius: 0;
-          contain: style layout size;
-        }
         .cerebr-sidebar.fullscreen .cerebr-sidebar__content {
           border-radius: 0;
         }
+
+
         .cerebr-sidebar__iframe {
           width: 100%;
           height: 100%;
@@ -335,6 +333,10 @@ class CerebrSidebar {
       iframe.contentWindow.postMessage({ type: 'FOCUS_INPUT' }, '*');
     }
   }
+  /**
+   * 切换侧边栏的显示状态
+   * @param {boolean|null} forceShow - 明确指定显示(true)或隐藏(false)，或为null时取反当前状态
+   */
   toggle(forceShow = null) {
     if (!this.initialized) return;
 
@@ -357,6 +359,12 @@ class CerebrSidebar {
       if (this.isVisible) {
         // 显示侧边栏
         this.sidebar.classList.add('visible');
+
+        // 如果当前为全屏模式，则隐藏滚动条
+        if (this.isFullscreen) {
+          document.documentElement.style.overflow = 'hidden';
+        }
+
         // 如果之前是隐藏状态，则聚焦输入框
         if (!wasVisible) {
           this.focusInput();
@@ -364,6 +372,17 @@ class CerebrSidebar {
       } else {
         // 隐藏侧边栏
         this.sidebar.classList.remove('visible');
+
+        // 如果当前为全屏模式，关闭侧边栏时需要还原滚动条状态
+        if (this.isFullscreen) {
+          document.documentElement.style.overflow = '';
+        }
+
+        // 当侧边栏关闭时，确保不聚焦侧栏内的输入框
+        const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+        if (iframe) {
+          iframe.contentWindow.postMessage({ type: 'BLUR_INPUT' }, '*');
+        }
       }
     } catch (error) {
       console.error('切换侧边栏失败:', error);
