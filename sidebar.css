@@ -2098,3 +2098,16 @@ body.hide-references .reference-number.superscript {
     transition: opacity 1s ease-out;
     animation: breathing 3s ease-in-out infinite;
 }
+
+.api-card .custom-params {
+    min-height: 40px;               /* 调整为较小高度 */
+    padding: 6px 8px;               /* 较小的内边距 */
+    border-radius: 4px;
+    background: var(--cerebr-input-bg);
+    border: 1px solid var(--cerebr-border-color);
+    color: var(--cerebr-text-color);
+    font-size: 13px;
+    line-height: 1.4;
+    resize: vertical;
+    transition: all 0.2s ease;
+}

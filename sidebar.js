@@ -451,6 +451,25 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 更新加载状态消息
             loadingMessage.textContent = '正在等待 AI 回复...';
 
+            // 构造 API 请求体
+            let requestBody = {
+                model: config.modelName,
+                messages: messages,
+                stream: true,
+                temperature: config.temperature,
+                top_p: 0.95,
+            };
+
+            // 如果存在自定义参数，则尝试解析 JSON 字符串并合并到请求体中
+            if (config.customParams) {
+                try {
+                    const extraParams = JSON.parse(config.customParams);
+                    requestBody = { ...requestBody, ...extraParams };
+                } catch (e) {
+                    console.error("解析自定义参数 JSON 失败，请检查格式。", e);
+                }
+            }
+
             // 发送API请求
             const response = await fetch(config.baseUrl, {
                 method: 'POST',
@@ -459,14 +478,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'Authorization': `Bearer ${config.apiKey}`,
                     'X-Request-Id': requestId
                 },
-                body: JSON.stringify({
-                    model: config.modelName,
-                    messages: messages,
-                    stream: true,
-                    temperature: config.temperature,
-                    top_p: 0.95,
-                    // max_tokens: 8192,
-                }),
+                body: JSON.stringify(requestBody),
                 signal
             });
 
@@ -1511,6 +1523,58 @@ document.addEventListener('DOMContentLoaded', async () => {
                 renderAPICards();
             }
         });
+
+        // 新增：处理自定义参数输入
+        const customParamsInput = template.querySelector('.custom-params');
+        if (customParamsInput) {
+            customParamsInput.value = config.customParams || '';
+            customParamsInput.addEventListener('change', () => {
+                apiConfigs[index].customParams = customParamsInput.value;
+                saveAPIConfigs();
+            });
+            // 当输入完成后，尝试格式化为美化后的 JSON 格式，并在格式错误时在UI上提示
+            customParamsInput.addEventListener('blur', () => {
+                // 如果输入内容为空，则不作解析
+                if (customParamsInput.value.trim() === "") {
+                    customParamsInput.style.borderColor = "";
+                    let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
+                    if (errorElem) {
+                        errorElem.remove();
+                    }
+                    apiConfigs[index].customParams = "";
+                    saveAPIConfigs();
+                    return;
+                }
+                try {
+                    const parsed = JSON.parse(customParamsInput.value);
+                    // 格式化为两格缩进的 JSON 字符串
+                    customParamsInput.value = JSON.stringify(parsed, null, 2);
+                    apiConfigs[index].customParams = customParamsInput.value;
+                    // 如果存在错误提示，则移除
+                    let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
+                    if (errorElem) {
+                        errorElem.remove();
+                    }
+                    customParamsInput.style.borderColor = "";
+                    saveAPIConfigs();
+                } catch (e) {
+                    // 设置红色边框
+                    customParamsInput.style.borderColor = "red";
+                    // 创建或更新错误提示元素
+                    let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
+                    if (!errorElem) {
+                        errorElem = document.createElement("div");
+                        errorElem.className = "custom-params-error";
+                        errorElem.style.color = "red";
+                        errorElem.style.fontSize = "12px";
+                        errorElem.style.marginTop = "4px";
+                        customParamsInput.parentNode.appendChild(errorElem);
+                    }
+                    errorElem.textContent = "格式化失败：请检查 JSON 格式";
+                    console.error("自定义参数格式化失败:", e);
+                }
+            });
+        }
 
         return template;
     }
