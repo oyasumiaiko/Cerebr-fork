@@ -553,13 +553,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                             const deltaContent = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content;
                             if (deltaContent) {
                                 if (!hasStartedResponse) {
-                                    // 移除加载状态消息
+                                    // First tokens received: remove the loading message and auto-scroll immediately.
                                     loadingMessage.remove();
                                     hasStartedResponse = true;
+                                    scrollToBottom(); // <-- New call to ensure auto-scroll on first tokens.
                                 }
                                 aiResponse += deltaContent;
                                 aiResponse = aiResponse.replace(/\nabla/g, '\\nabla');
-                                // console.log(aiResponse);
                                 updateAIMessage(aiResponse, data.choices?.[0]?.groundingMetadata);
                             }
                         } catch (e) {
