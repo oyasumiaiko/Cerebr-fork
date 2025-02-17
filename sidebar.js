@@ -329,13 +329,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 在 getPromptTypeFromContent 函数之后，新增如下辅助函数
 
-    /**
-     * 从提示词文本中提取系统插入内容
-     * @param {string} promptText - 包含特殊语法的提示词文本
-     * @returns {string} 提取出的系统内容（如果存在），否则返回空字符串
-     * @example
-     * // 输入 "请总结以下内容 %%begin_system%%额外指令%%end_system%%"，返回 "额外指令"
-     */
+    /** 
+     * 提取提示文本中的系统消息内容
+     *
+     * 此函数扫描输入的提示文本，并提取被 {{system}} 和 {{end_system}} 标记包裹的内容，
+     * 该内容通常作为系统级指令被单独处理。
+      *
+      * @param {string} promptText - 包含自定义系统标记的提示文本
+      * @returns {string} 返回提取出的系统消息内容；如果不存在则返回空字符串
+      * @example
+      * // 输入 "请总结以下内容 {{system}}额外指令{{end_system}}"，返回 "额外指令"
+      */
     function extractSystemContent(promptText) {
         if (!promptText) return '';
         const regex = /{{system}}([\s\S]*?){{end_system}}/; // 使用捕获组
@@ -867,9 +871,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     function processMathAndMarkdown(text) {
         // 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
         const preHandledText = fixBoldParsingIssue(text);
+        // 对消息进行折叠处理，将从文本开头到首次出现 "\n# " 之前的部分折叠为可展开元素
+        const foldedText = foldMessageContent(preHandledText);
 
         // 预处理数学表达式
-        const { text: escapedText, mathExpressions } = preMathEscape(preHandledText);
+        const { text: escapedText, mathExpressions } = preMathEscape(foldedText);
 
         // 处理未闭合的代码块
         let processedText = escapedText;
@@ -877,7 +883,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (((processedText || '').match(codeBlockRegex) || []).length % 2 > 0) {
             processedText += '\n```';
         }
-
+        
         // 配置marked
         marked.setOptions({
             breaks: true,
@@ -913,6 +919,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     function fixBoldParsingIssue(text) {
         // 在所有**前后添加零宽空格，以修复粗体解析问题
         return text.replace(/\*\*/g, '\u200B**\u200B');
+    }
+
+    /**
+     * 根据正则折叠消息文本，将从文本开头到首次出现 "\n# " 之间的部分折叠为可展开元素。
+     * @param {string} text - 原始消息文本
+     * @returns {string} 处理后的消息文本，其中符合条件的部分被包裹在一个折叠元素中
+     * @example
+     * // 输入 "简介内容\n# 正文开始"，返回格式化后的HTML，其中"简介内容"被折叠
+     */
+    function foldMessageContent(text) {
+        const regex = /^([\s\S]*?)(?=\n# )/;
+        const match = text.match(regex);
+        if (!match || match[1].trim() === '') {
+            return text;
+        }
+        const foldedPart = match[1];
+        const remainingPart = text.slice(match[1].length);
+        // 将折叠部分包裹在 <blockquote> 中，以实现 Markdown 引用效果
+        const quotedFoldedPart = `<blockquote>${foldedPart}</blockquote>`;
+        return `<details class="folded-message"><summary>搜索过程</summary><div>\n${quotedFoldedPart}</div></details>\n${remainingPart}`;
     }
 
     // 监听来自 content script 的消息
