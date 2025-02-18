@@ -117,12 +117,72 @@ function clearChatHistory(chatHistory) {
 }
 
 /**
+ * 新增：删除指定消息节点，并维护消息的继承关系
+ * 如果删除的消息存在父节点，则：
+ *   - 从父节点的 children 数组中移除该消息的 id
+ *   - 将删除消息的子节点重新分派到该父节点（即更新子节点的 parentId 为父节点 id，并添加到父节点的 children 列表中）
+ * 如果删除的消息为根节点，则：
+ *   - 若只有一个子节点，将其设为新根；若有多个子节点，则将所有子节点的 parentId 设为 null，并选第一个作为新根
+ * 同时，如果当前节点是被删除的消息，则更新为父节点或 null。
+ * @param {ChatHistory} chatHistory - 聊天历史对象
+ * @param {string} messageId - 待删除消息的ID
+ * @returns {boolean} - 删除成功返回 true，否则返回 false
+ */
+function deleteMessageFromHistory(chatHistory, messageId) {
+  const index = chatHistory.messages.findIndex(msg => msg.id === messageId);
+  if (index === -1) return false;
+  const message = chatHistory.messages[index];
+
+  if (message.parentId) {
+    const parent = chatHistory.messages.find(msg => msg.id === message.parentId);
+    if (parent) {
+      parent.children = parent.children.filter(childId => childId !== messageId);
+      // 将删除节点的所有子节点重新分派给其父节点
+      message.children.forEach(childId => {
+        const child = chatHistory.messages.find(msg => msg.id === childId);
+        if (child) {
+          child.parentId = parent.id;
+          parent.children.push(child.id);
+        }
+      });
+    }
+  } else {
+    // 如果删除的是根节点
+    if (message.children.length > 0) {
+      if (message.children.length === 1) {
+        const newRoot = chatHistory.messages.find(msg => msg.id === message.children[0]);
+        chatHistory.root = newRoot ? newRoot.id : null;
+        if (newRoot) newRoot.parentId = null;
+      } else {
+        const firstChild = chatHistory.messages.find(msg => msg.id === message.children[0]);
+        chatHistory.root = firstChild ? firstChild.id : null;
+        message.children.forEach(childId => {
+          const child = chatHistory.messages.find(msg => msg.id === childId);
+          if (child) {
+            child.parentId = null;
+          }
+        });
+      }
+    } else {
+      chatHistory.root = null;
+    }
+  }
+
+  if (chatHistory.currentNode === messageId) {
+    chatHistory.currentNode = message.parentId || null;
+  }
+  chatHistory.messages.splice(index, 1);
+  return true;
+}
+
+/**
  * 创建一个新的 ChatHistory 对象以及相关操作函数
  * @returns {{
  *   chatHistory: ChatHistory,
  *   addMessageToTree: (role: string, content: string, parentId?: string|null) => MessageNode,
  *   getCurrentConversationChain: () => Array<MessageNode>,
- *   clearHistory: () => void
+ *   clearHistory: () => void,
+ *   deleteMessage: (messageId: string) => boolean
  * }} - 工厂函数返回一组管理函数
  * @example
  * const { chatHistory, addMessageToTree, getCurrentConversationChain } = createChatHistoryManager();
@@ -139,6 +199,7 @@ export function createChatHistoryManager() {
     chatHistory,
     addMessageToTree: (role, content, parentId = null) => addMessageToTree(chatHistory, role, content, parentId),
     getCurrentConversationChain: () => getCurrentConversationChain(chatHistory),
-    clearHistory: () => clearChatHistory(chatHistory)
+    clearHistory: () => clearChatHistory(chatHistory),
+    deleteMessage: (messageId) => deleteMessageFromHistory(chatHistory, messageId)
   };
 } 

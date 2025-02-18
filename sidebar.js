@@ -74,7 +74,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatHistory,
         addMessageToTree,
         getCurrentConversationChain,
-        clearHistory
+        clearHistory,
+        deleteMessage
     } = createChatHistoryManager();
 
     // 监听聊天历史开关变化
@@ -1929,18 +1930,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 监听 AI 消息的右键点击
+    // 监听消息（用户或 AI）右键点击
     chatContainer.addEventListener('contextmenu', (e) => {
-        // 如果按住了Ctrl、Shift或Alt键，则不阻止默认行为，显示浏览器默认菜单
+        // 如果按住了Ctrl、Shift或Alt键，则显示默认菜单
         if (e.ctrlKey || e.shiftKey || e.altKey) {
             return;
         }
-
-        // 否则显示自定义上下文菜单
-        e.preventDefault();
-        const messageElement = e.target.closest('.ai-message');
+        // 修改：允许用户和 AI 消息都触发右键菜单
+        const messageElement = e.target.closest('.message');
         if (messageElement) {
-            showContextMenu(e, messageElement);
+        e.preventDefault();
+        showContextMenu(e, messageElement);
         }
     });
 
@@ -2821,10 +2821,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 appendMessage(msg.content, role, true);
             }
         });
-        // 修改：恢复加载的对话历史到聊天管理器，避免覆盖已加载历史
+        // 恢复加载的对话历史到聊天管理器
         chatHistory.messages = conversation.messages.slice();
-        chatHistory.currentNode = conversation.messages.length > 0 ? conversation.messages[conversation.messages.length - 1] : null;
-        // 新增：将加载的对话记录ID保存到全局变量，用于后续更新操作
+        // 修复：将 currentNode 设置为最后一条消息的 id，而不是整个对象
+        chatHistory.currentNode = conversation.messages.length > 0 ? conversation.messages[conversation.messages.length - 1].id : null;
+        // 保存加载的对话记录ID，用于后续更新操作
         currentConversationId = conversation.id;
     }
 
@@ -2889,4 +2890,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     copyCodeButton.addEventListener('click', copyCodeContent);
+    const deleteMessageButton = document.getElementById('delete-message');
+    if (deleteMessageButton) {
+        deleteMessageButton.addEventListener('click', deleteMessageContent);
+    }
+
+    /**
+     * 删除指定消息的函数，更新 UI 和聊天历史树（维护继承关系）
+     */
+    function deleteMessageContent() {
+        if (!currentMessageElement) return;
+        const messageId = currentMessageElement.getAttribute('data-message-id');
+        if (!messageId) {
+            console.error("未找到消息ID, 无法删除消息");
+            hideContextMenu();
+            return;
+        }
+
+        // 从 DOM 中删除该消息元素
+        currentMessageElement.remove();
+
+        // 删除聊天历史中的消息，并更新继承关系
+        const success = deleteMessage(messageId);
+        if (!success) {
+            console.error("删除消息失败: 未找到对应的消息节点");
+        }
+        hideContextMenu();
+    }
 });
