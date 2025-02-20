@@ -1,6 +1,7 @@
 import { PromptSettings } from './prompt_settings.js';
 import { createChatHistoryManager } from './chat_history_manager.js';
 import { getAllConversations, putConversation, deleteConversation } from './indexeddb_helper.js';
+import { initTreeDebugger } from './tree_debugger.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
@@ -2928,5 +2929,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             saveCurrentConversation(true);
         }
         hideContextMenu();
+    }
+
+    // 调试聊天记录树按钮绑定（该按钮在 sidebar.html 中设置了 id="debug-chat-tree-btn"）
+    const debugTreeButton = document.getElementById('debug-chat-tree-btn');
+    if (debugTreeButton) {
+        debugTreeButton.addEventListener('click', () => {
+            // 使用当前聊天记录树 chatHistory（由 createChatHistoryManager() 提供）初始化调试窗口
+            initTreeDebugger(chatHistory);
+        });
     }
 });
