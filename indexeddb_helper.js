@@ -66,4 +66,20 @@ export async function deleteConversation(conversationId) {
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+}
+
+/**
+ * 根据对话 ID 获取单条对话记录
+ * @param {string} conversationId - 要查找的对话记录 id
+ * @returns {Promise<Object|null>} 返回匹配的对话记录对象，如果不存在则返回 null
+ */
+export async function getConversationById(conversationId) {
+  const db = await openChatHistoryDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('conversations', 'readonly');
+    const store = transaction.objectStore('conversations');
+    const request = store.get(conversationId);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
 } 

@@ -1,6 +1,6 @@
 import { PromptSettings } from './prompt_settings.js';
 import { createChatHistoryManager } from './chat_history_manager.js';
-import { getAllConversations, putConversation, deleteConversation } from './indexeddb_helper.js';
+import { getAllConversations, putConversation, deleteConversation, getConversationById } from './indexeddb_helper.js';
 import { initTreeDebugger } from './tree_debugger.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -576,7 +576,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             // 消息处理完成后，自动保存会话
-            saveCurrentConversation(true); // 指定为更新操作
+            if (currentConversationId) {
+                saveCurrentConversation(true); // 更新现有会话记录
+            } else {
+                saveCurrentConversation(false); // 新会话，生成新的 conversation id
+            }
 
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -2539,7 +2543,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             panel = document.createElement('div');
             panel.id = 'chat-history-panel';
 
-            // 添加标题栏
+            // 添加标题栏（包含标题、备份、还原和关闭按钮在同一行）
             const header = document.createElement('div');
             header.className = 'panel-header';
 
@@ -2547,12 +2551,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             title.textContent = '聊天记录';
             title.className = 'panel-title';
 
+            // 创建按钮容器，将备份、还原和关闭按钮放在同一行，样式与关闭按钮一致
+            const headerActions = document.createElement('div');
+            headerActions.className = 'header-actions';
+
+            const backupButton = document.createElement('button');
+            backupButton.textContent = '备份 IndexedDB';
+            backupButton.addEventListener('click', backupConversations);
+
+            const restoreButton = document.createElement('button');
+            restoreButton.textContent = '还原 IndexedDB';
+            restoreButton.addEventListener('click', restoreConversations);
+
             const closeBtn = document.createElement('button');
             closeBtn.textContent = '关闭';
             closeBtn.addEventListener('click', () => { panel.remove(); });
 
+            headerActions.appendChild(backupButton);
+            headerActions.appendChild(restoreButton);
+            headerActions.appendChild(closeBtn);
+
             header.appendChild(title);
-            header.appendChild(closeBtn);
+            header.appendChild(headerActions);
             panel.appendChild(header);
 
             // 域名筛选输入框
@@ -2938,5 +2958,71 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 使用当前聊天记录树 chatHistory（由 createChatHistoryManager() 提供）初始化调试窗口
             initTreeDebugger(chatHistory);
         });
+    }
+
+    // 在DOM加载后（例如在 document.addEventListener('DOMContentLoaded', async () => { 内部合适位置新增如下代码）
+
+    /**
+     * 备份当前 IndexedDB 中的所有对话记录为 JSON 文件
+     * @returns {Promise<void>}
+     */
+    async function backupConversations() {
+        try {
+            const allConversations = await getAllConversations();
+            const jsonStr = JSON.stringify(allConversations, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            // 创建临时下载链接
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'chat_backup_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert('备份成功！');
+        } catch (error) {
+            console.error('备份失败:', error);
+            alert('备份失败，请检查浏览器控制台。');
+        }
+    }
+
+    /**
+     * 从备份文件中还原对话记录，仅增量还原（根据 id 检查，不覆盖已有记录）
+     */
+    function restoreConversations() {
+        // 创建一个 file input 元素用于选择文件
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json';
+        input.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const backupData = JSON.parse(text);
+                if (!Array.isArray(backupData)) {
+                    alert('备份文件格式不正确！');
+                    return;
+                }
+                let countAdded = 0;
+                for (const conv of backupData) {
+                    try {
+                        const existing = await getConversationById(conv.id);
+                        if (!existing) {
+                            await putConversation(conv);
+                            countAdded++;
+                        }
+                    } catch (error) {
+                        console.error(`还原对话 ${conv.id} 时出错:`, error);
+                    }
+                }
+                alert(`还原完成，新增 ${countAdded} 条记录。`);
+            } catch (error) {
+                console.error('读取备份文件失败:', error);
+                alert('读取备份文件失败，请检查文件格式。');
+            }
+        });
+        input.click();
     }
 });
