@@ -2830,6 +2830,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         // 恢复加载的对话历史到聊天管理器
         chatHistory.messages = conversation.messages.slice();
+        // 若存在消息，则设置第一条消息的 id 为根节点
+        chatHistory.root = conversation.messages.length > 0 ? conversation.messages[0].id : null;
         // 将 currentNode 更新为最后一条消息的 id
         chatHistory.currentNode = conversation.messages.length > 0 ? conversation.messages[conversation.messages.length - 1].id : null;
         // 保存加载的对话记录ID，用于后续更新操作
@@ -2921,6 +2923,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const success = deleteMessage(messageId);
         if (!success) {
             console.error("删除消息失败: 未找到对应的消息节点");
+        } else {
+            // 更新并持久化聊天记录
+            saveCurrentConversation(true);
         }
         hideContextMenu();
     }
