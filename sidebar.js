@@ -305,10 +305,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 如果content是空字符串，就判断为图片提示词
         const prompts = promptSettingsManager.getPrompts();
 
-        if (content === '') {
-            return 'image';
-        }
-
         // 检查是否是PDF提示词
         if (prompts.pdf.prompt && content === prompts.pdf.prompt) {
             return 'pdf';
@@ -350,54 +346,76 @@ document.addEventListener('DOMContentLoaded', async () => {
         return match ? match[1].trim() : '';
     }
 
+
+    //这段逻辑太扯淡了，需要重构
+    //为什么扯淡：
+    //1. 本来应该用参数传递的消息，居然绕了一大圈，先append到界面，再清空，再获取消息内容
+
+    // 怎么重构：
+    //1. 用参数传递消息，不要绕一大圈
+
+
+
+
     async function sendMessage() {
-        shouldAutoScroll = true; // 新消息开始时重置自动滚动状态
-        const message = messageInput.textContent.trim();
-        const imageTags = messageInput.querySelectorAll('.image-tag');
-
-        // 如果消息为空且没有图片标签，则不发送消息
-        if (!message && imageTags.length === 0) return;
-
-        // 添加图片提示词
-        if (messageInput.textContent.trim() === '' && imageTags.length > 0) {
-            messageInput.innerHTML += prompts.image.prompt;
+        
+        function clearMessageInput() {
+            messageInput.innerHTML = '';
+            imageContainer.innerHTML = '';
         }
+
+        function checkAPI(){
+            let config = apiConfigs[selectedConfigIndex];
+            if (!config?.baseUrl || !config?.apiKey) {
+                appendMessage('请在设置中完善 API 配置', 'ai', true);
+                return;
+            }    
+        }
+        
+        const imageTags = imageContainer.querySelectorAll('.image-tag');
+        const messageText = messageInput.textContent.trim();
+        
+        // 如果消息为空且没有图片标签，则不发送消息
+        if (!messageText && imageTags.length === 0) return;
 
         // 获取当前提示词设置
         const prompts = promptSettingsManager.getPrompts();
-        const currentPromptType = getPromptTypeFromContent(message);
+        const currentPromptType = imageTags.length > 0 && messageText === '' ? 'image' : getPromptTypeFromContent(messageText);
 
-        let config = apiConfigs[selectedConfigIndex];
-        if (!config?.baseUrl || !config?.apiKey) {
-            appendMessage('请在设置中完善 API 配置', 'ai', true);
-            return;
-        }
+        adjustTextareaHeight(messageInput);
 
-        let loadingMessage; // 提前声明，使得 catch 块可访问
+        // 提前创建 loadingMessage 配合finally使用
+        let loadingMessage;
+
         try {
+            // 开始处理消息
+            isProcessingMessage = true;
+            shouldAutoScroll = true;
+
             // 如果存在之前的请求，先中止它
             if (currentController) {
                 currentController.abort();
                 currentController = null;
             }
 
-            // 设置处理状态为true
-            isProcessingMessage = true;
+            // 创建新的 AbortController
+            currentController = new AbortController();
+            const signal = currentController.signal;
 
             // 当开始生成时，给聊天容器添加 glow 效果
             chatContainer.classList.add('auto-scroll-glow');
 
-            // 生成新的请求ID
-            const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            // 提取提示词中注入的系统消息
+            const systemMessageRegex = /{{system}}([\s\S]*?){{end_system}}/g;
+            const injectedSystemMessages = [];
+            messageInput.innerHTML = messageInput.innerHTML.replace(systemMessageRegex, (match, capture) => {
+                injectedSystemMessages.push(capture);
+                return '';
+            });
 
-            // 移除用户消息中已被提取到系统消息中的部分
-            if (currentPromptType !== 'none') {
-                messageInput.innerHTML = messageInput.innerHTML.replace(/{{system}}([\s\S]*?){{end_system}}/g, '');
-            }
-
-            // 先添加用户消息到界面和历史记录
+            // 添加用户消息到界面和历史记录
             const userMessageDiv = appendMessage(messageInput.innerHTML, 'user');
-            messageInput.innerHTML = '';
+            clearMessageInput();
             adjustTextareaHeight(messageInput);
 
             // 添加加载状态消息
@@ -425,39 +443,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                 pageContent = null;  // 临时模式下不使用网页内容
             }
 
-            // 创建新的 AbortController
-            currentController = new AbortController();
-            const signal = currentController.signal;
+            // 构建消息数组
+            const messages = [];
 
-            // Retrieve conversation chain from the manager
-            const conversationChain = getCurrentConversationChain();
             const pageContentPrompt = pageContent
                 ? `\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}`
                 : '';
 
-            // 组合完整的系统消息
+            // 组合系统消息+注入的系统消息+网页内容
             let systemMessageContent = prompts.system.prompt;
-            
-            // 若当前提示词类型不是 none，尝试从对应提示词中提取自定义系统指令
-            if (currentPromptType !== 'none' && prompts[currentPromptType] && prompts[currentPromptType].prompt) {
-                const additionalSystemContent = extractSystemContent(prompts[currentPromptType].prompt);
-                if (additionalSystemContent) {
-                    systemMessageContent += "\n" + additionalSystemContent;
-                }
-            }
+            systemMessageContent += "\n" + injectedSystemMessages.join('\n');
             systemMessageContent += pageContentPrompt;
 
+            // 构建系统消息对象
             const systemMessage = {
                 role: "system",
                 content: systemMessageContent
             };
+            
+            // 将系统消息添加到消息数组
+            messages.push(systemMessage);
 
-            // 构建消息数组
-            const messages = [];
-            // 添加系统消息
-            if (conversationChain.length === 0 || conversationChain[0].role !== "system") {
-                messages.push(systemMessage);
-            }
+            // 获取当前会话链
+            const conversationChain = getCurrentConversationChain();
 
             // 根据设置决定是否发送聊天历史
             const SendChatHistory = shouldSendChatHistory && currentPromptType !== 'selection';
@@ -485,7 +493,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             // 如果没找到目标配置，使用当前配置
-            config = targetConfig || config;
+            const config = targetConfig || apiConfigs[selectedConfigIndex];
 
             // 更新加载状态消息
             loadingMessage.textContent = '正在等待 AI 回复...';
@@ -515,7 +523,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${config.apiKey}`,
-                    'X-Request-Id': requestId
                 },
                 body: JSON.stringify(requestBody),
                 signal
@@ -523,20 +530,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (!response.ok) {
                 const error = await response.text();
-                // 更新加载状态消息显示具体的错误信息
-                if (loadingMessage) {
-                    let errorDisplay = `API错误 (${response.status}): `;
-                    try {
-                        // 尝试解析错误JSON
-                        const errorJson = JSON.parse(error);
-                        errorDisplay += errorJson.error?.message || errorJson.message || error;
-                    } catch {
-                        // 如果不是JSON，直接显示错误文本
-                        errorDisplay += error;
-                    }
-                    loadingMessage.textContent = errorDisplay;
-                    loadingMessage.classList.add('error-message');
-                }
                 throw new Error(`API错误 (${response.status}): ${error}`);
             }
 
@@ -594,13 +587,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 loadingMessage.textContent = '发送失败: ' + error.message;
                 loadingMessage.classList.add('error-message');
             }
-            // 从 chatHistory 中移除最后一条记录（用户的问题）
-            chatHistory.messages.pop();
         } finally {
             // 无论成功还是失败，都重置处理状态
             isProcessingMessage = false;
+            shouldAutoScroll = false;
             // 当生成结束时，移除 glow 效果
             chatContainer.classList.remove('auto-scroll-glow');
+            // 当生成结束时，移除 loading 效果
             const lastMessage = chatContainer.querySelector('.ai-message:last-child');
             if (lastMessage) {
                 lastMessage.classList.remove('updating');
@@ -1145,18 +1138,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             e.preventDefault();
 
             const text = this.textContent.trim();
-            if (text || this.querySelector('.image-tag')) {  // 检查是否有文本或图片
-                if (e.ctrlKey) {
-                    // Ctrl+Enter: 将输入内容作为selection类型发送
-                    const prompts = promptSettingsManager.getPrompts();
-                    const selectionPrompt = prompts.selection.prompt;
-                    if (selectionPrompt) {
-                        this.textContent = selectionPrompt.replace('<SELECTION>', text);
-                    }
+            if (e.ctrlKey) {
+                // Ctrl+Enter: 将输入内容作为selection类型发送
+                const prompts = promptSettingsManager.getPrompts();
+                const selectionPrompt = prompts.selection.prompt;
+                if (selectionPrompt) {
+                    this.textContent = selectionPrompt.replace('<SELECTION>', text);
                 }
-                // 发送消息
-                sendMessage();
             }
+            // 发送消息
+            sendMessage();
         } else if (e.key === 'Escape') {
             // 按 ESC 键时让输入框失去焦点
             messageInput.blur();
@@ -2017,7 +2008,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // 创建公共的图片处理函数
     function handleImageDrop(e, target) {
         e.preventDefault();
         e.stopPropagation();
@@ -2029,42 +2019,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
                     reader.onload = () => {
-                        const base64Data = reader.result;
-                        const imageTag = createImageTag(base64Data, file.name);
-
-                        // 确保输入框有焦点
-                        messageInput.focus();
-
-                        // 获取或创建选区
-                        const selection = window.getSelection();
-                        let range;
-
-                        // 检查是否有现有选区
-                        if (selection.rangeCount > 0) {
-                            range = selection.getRangeAt(0);
-                        } else {
-                            // 创建新的选区
-                            range = document.createRange();
-                            // 将选区设置到输入框的末尾
-                            range.selectNodeContents(messageInput);
-                            range.collapse(false);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
-                        }
-
-                        // 插入图片标签
-                        range.deleteContents();
-                        range.insertNode(imageTag);
-
-                        // 移动光标到图片标签后面
-                        const newRange = document.createRange();
-                        newRange.setStartAfter(imageTag);
-                        newRange.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
-
-                        // 触发输入事件以调整高度
-                        messageInput.dispatchEvent(new Event('input'));
+                        addImageToContainer(reader.result, file.name);
                     };
                     reader.readAsDataURL(file);
                     return;
@@ -2077,41 +2032,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const imageData = JSON.parse(data);
                     if (imageData.type === 'image') {
-                        const imageTag = createImageTag(imageData.data, imageData.name);
-
-                        // 确保输入框有焦点
-                        messageInput.focus();
-
-                        // 获取或创建选区
-                        const selection = window.getSelection();
-                        let range;
-
-                        // 检查是否有现有选区
-                        if (selection.rangeCount > 0) {
-                            range = selection.getRangeAt(0);
-                        } else {
-                            // 创建新的选区
-                            range = document.createRange();
-                            // 将选区设置到输入框的末尾
-                            range.selectNodeContents(messageInput);
-                            range.collapse(false);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
-                        }
-
-                        // 插入图片标签
-                        range.deleteContents();
-                        range.insertNode(imageTag);
-
-                        // 移动光标到图片标签后面
-                        const newRange = document.createRange();
-                        newRange.setStartAfter(imageTag);
-                        newRange.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
-
-                        // 触发输入事件以调整高度
-                        messageInput.dispatchEvent(new Event('input'));
+                        addImageToContainer(imageData.data, imageData.name);
                     }
                 } catch (error) {
                     console.error('处理拖放数据失败:', error);
@@ -2122,29 +2043,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 为输入框添加拖放事件监听器
-    messageInput.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
-    messageInput.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
     messageInput.addEventListener('drop', (e) => handleImageDrop(e, messageInput));
-
-    // 为聊天区域添加拖放事件监听器
-    chatContainer.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
-    chatContainer.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    });
 
     chatContainer.addEventListener('drop', (e) => handleImageDrop(e, chatContainer));
 
@@ -2461,11 +2360,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             headerActions.className = 'header-actions';
 
             const backupButton = document.createElement('button');
-            backupButton.textContent = '备份 IndexedDB';
+            backupButton.textContent = '备份';
             backupButton.addEventListener('click', backupConversations);
 
             const restoreButton = document.createElement('button');
-            restoreButton.textContent = '还原 IndexedDB';
+            restoreButton.textContent = '还原';
             restoreButton.addEventListener('click', restoreConversations);
 
             const closeBtn = document.createElement('button');
@@ -2931,10 +2830,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         input.click();
     }
 
-    // 新增：辅助函数 将图片数据转化为图片标签后统一添加到图片容器
+    // 新增：辅助函数 将图片数据生成图片标签后，统一添加到图片容器
     function addImageToContainer(imageData, fileName) {
         const imageTag = createImageTag(imageData, fileName);
         imageContainer.appendChild(imageTag);
+        // 触发输入事件以保证界面刷新
         messageInput.dispatchEvent(new Event('input'));
         console.log("图片插入到图片容器");
     }
@@ -2942,5 +2842,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 新增：dummy 方法，用于显示已发送的图片消息（先删除旧的显示方式，后续再改）
     function dummyDisplayImageMessage() {
         return "[图片消息已删除]";
+    }
+
+    // 新增：统一关闭聊天记录面板的函数
+    function closeChatHistoryPanel() {
+        const panel = document.getElementById('chat-history-panel');
+        if (panel) {
+            panel.remove();
+        }
     }
 });
