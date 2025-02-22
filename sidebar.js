@@ -98,19 +98,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 添加公共的图片处理函数
-    function processImageTags(content) {
+    function processImageTags(content, imagesHTML) {
         const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = content;
+        tempDiv.innerHTML = imagesHTML;
         const imageTags = tempDiv.querySelectorAll('.image-tag');
 
         if (imageTags.length > 0) {
             const result = [];
             // 添加文本内容
-            const textContent = content.replace(/<span class="image-tag"[^>]*>.*?<\/span>/g, '').trim();
-            if (textContent) {
+            if (content) {
                 result.push({
                     type: "text",
-                    text: textContent
+                    text: content
                 });
             }
             // 添加图片
@@ -373,7 +372,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         const imageTags = imageContainer.querySelectorAll('.image-tag');
-        const messageText = messageInput.textContent.trim();
+        const messageText = messageInput.textContent;
         
         // 如果消息为空且没有图片标签，则不发送消息
         if (!messageText && imageTags.length === 0) return;
@@ -381,8 +380,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 获取当前提示词设置
         const prompts = promptSettingsManager.getPrompts();
         const currentPromptType = imageTags.length > 0 && messageText === '' ? 'image' : getPromptTypeFromContent(messageText);
-
-        adjustTextareaHeight(messageInput);
 
         // 提前创建 loadingMessage 配合finally使用
         let loadingMessage;
@@ -414,8 +411,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return '';
             });
 
-            // 添加用户消息到界面和历史记录
-            const userMessageDiv = appendMessage(messageInput.textContent, 'user');
+            // 添加用户消息，同时包含文本和图片区域
+            appendMessage(messageText, 'user', false, null, imageContainer.innerHTML);
+            
             clearMessageInput();
             adjustTextareaHeight(messageInput);
 
@@ -995,7 +993,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    function appendMessage(text, sender, skipHistory = false, fragment = null) {
+    /**
+     * 添加消息到聊天窗口，同时支持文本和图片区域。
+     * @param {string} text - 文本消息内容
+     * @param {string} sender - 消息发送者 ('user' 或 'ai')
+     * @param {boolean} skipHistory - 是否不更新历史记录
+     * @param {HTMLElement|null} fragment - 如使用文档片段则追加到此处，否则直接追加到聊天容器
+     * @param {string|null} imagesHTML - 图片部分的 HTML 内容（可为空）
+     * @returns {HTMLElement} 新生成的消息元素
+     */
+    function appendMessage(text, sender, skipHistory = false, fragment = null, imagesHTML = null) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', `${sender}-message`);
 
@@ -1007,15 +1014,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 存储原始文本用于复制
         messageDiv.setAttribute('data-original-text', text);
 
-        // 处理数学公式和 Markdown
+        // 创建文本内容容器，并处理 Markdown 与数学公式
+        const textContentDiv = document.createElement('div');
+        textContentDiv.classList.add('text-content');
         try {
-            messageDiv.innerHTML = processMathAndMarkdown(text);
+            textContentDiv.innerHTML = processMathAndMarkdown(text);
         } catch (error) {
             console.error('处理数学公式和Markdown失败:', error);
-            messageDiv.innerHTML = text; // 出错时使用原始文本
+            textContentDiv.innerText = text;
         }
-
-        // 处理消息中的链接
+        messageDiv.appendChild(textContentDiv);
+        
+        // 如果存在图片内容，则创建图片区域容器
+        if (imagesHTML && imagesHTML.trim()) {
+            const imageContentDiv = document.createElement('div');
+            imageContentDiv.classList.add('image-content');
+            imageContentDiv.innerHTML = imagesHTML;
+            // 为图片添加点击预览事件
+            imageContentDiv.querySelectorAll('img').forEach(img => {
+                img.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showImagePreview(img.src);
+                });
+            });
+            messageDiv.appendChild(imageContentDiv);
+        }
+        
+        // 处理消息中的其他元素
         messageDiv.querySelectorAll('a').forEach(link => {
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
@@ -1024,19 +1050,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 处理代码块的语法高亮
         messageDiv.querySelectorAll('pre code').forEach(block => {
             hljs.highlightElement(block);
-        });
-
-        // 处理消息中的图片标签
-        messageDiv.querySelectorAll('.image-tag').forEach(tag => {
-            const img = tag.querySelector('img');
-            const base64Data = tag.getAttribute('data-image');
-            if (img && base64Data) {
-                img.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    showImagePreview(base64Data);
-                });
-            }
         });
 
         // 渲染 LaTeX 公式
@@ -1052,12 +1065,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             fragment.appendChild(messageDiv);
         } else {
             chatContainer.appendChild(messageDiv);
-            // 不在这里自动滚动，等待 AI 消息流式接收时触发滚动
         }
-
-        // 更新聊天历史
+        
+        // 更新聊天历史，将文本和图片信息封装到一个对象中
         if (!skipHistory) {
-            const processedContent = processImageTags(text);
+            const processedContent = processImageTags(text, imagesHTML);
             const node = addMessageToTree(
                 sender === 'user' ? 'user' : 'assistant',
                 processedContent,
@@ -2282,12 +2294,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         const startTime = Math.min(...timestamps);
         const endTime = Math.max(...timestamps);
 
-        // 找到第一条有文字内容的消息（使用 getPlainText 处理数组情况）
-        const firstMessageWithContent = messages.find(msg => msg.content.trim());
+        const firstMessageTextContent = messages.map(msg => {
+            if (typeof msg.content === 'string') {
+                return msg.content.trim();
+            } else if (Array.isArray(msg.content)) {
+                return msg.content.map(part => part.type === 'image_url' ? '[图片]' : part.text.trim()).join(' ');
+            }
+            return '';
+        }).find(text => text !== '');
+
+        console.log(firstMessageTextContent);
+        
         let summary = '';
-        if (firstMessageWithContent?.content) {
+        if (firstMessageTextContent) {
             // 使用 getPlainText 转换为字符串
-            let content = firstMessageWithContent.content;
+            let content = firstMessageTextContent;
             const prompts = promptSettingsManager.getPrompts();
             
             // 替换预设模板为模板名称
@@ -2314,9 +2335,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             if (content.includes(prompts.summary.prompt)) {
                 content = content.replace(prompts.summary.prompt, '[总结]');
-            }
-            if (content.includes(prompts.image.prompt)) {
-                content = content.replace(prompts.image.prompt, '[图片]');
             }
             summary = content.substring(0, 50);
         }
