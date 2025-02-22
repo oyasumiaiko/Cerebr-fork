@@ -49,7 +49,12 @@ class CerebrSidebar {
           console.log('发送URL变化消息到iframe');
           iframe.contentWindow.postMessage({
             type: 'URL_CHANGED',
-            url: currentUrl
+            url: currentUrl,
+            title: document.title,
+            referrer: document.referrer,
+            lastModified: document.lastModified,
+            lang: document.documentElement.lang,
+            charset: document.characterSet
           }, '*');
         }
       }
@@ -263,7 +268,12 @@ class CerebrSidebar {
       iframe.addEventListener('load', () => {
          iframe.contentWindow.postMessage({
            type: 'URL_CHANGED',
-           url: window.location.href
+           url: window.location.href,
+           title: document.title,
+           referrer: document.referrer,
+           lastModified: document.lastModified,
+           lang: document.documentElement.lang,
+           charset: document.characterSet
          }, '*');
       });
     } catch (error) {

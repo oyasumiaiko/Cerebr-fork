@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let pageContent = null;  // 预存储的网页文本内容
     let shouldSendChatHistory = true; // 是否发送聊天历史
     let currentConversationId = null; // 当前会话ID
-    let currentUrl = null; // 存储当前URL
+    let currentPageInfo = null;
     let currentCodeBlock = null;
 
     /**
@@ -961,7 +961,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (event.data.type === 'URL_CHANGED') {
             console.log('收到URL_CHANGED消息:', event.data);
             // 更新存储的URL和域名
-            currentUrl = event.data.url;
+            currentPageInfo = event.data;
             // 清空页面内容，等待下次发送消息时重新获取
             pageContent = null;
         } else if (event.data.type === 'UPDATE_PLACEHOLDER') {
@@ -2273,33 +2273,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         const startTime = Math.min(...timestamps);
         const endTime = Math.max(...timestamps);
 
-        // Helper function: 将消息内容转换为纯文本字符串，处理包含图片的情况
-        function getPlainText(content) {
-            if (typeof content === 'string') return content;
-            if (Array.isArray(content)) {
-                return content.map(item => {
-                    // 如果是文本块则返回文字，否则用 [图片] 表示
-                    return item.type === 'text' ? item.text : '[图片]';
-                }).join(' ');
-            }
-            return '';
-        }
-
         // 找到第一条有文字内容的消息（使用 getPlainText 处理数组情况）
-        const firstMessageWithContent = messages.find(msg => getPlainText(msg.content).trim());
+        const firstMessageWithContent = messages.find(msg => msg.content.trim());
         let summary = '';
         if (firstMessageWithContent?.content) {
             // 使用 getPlainText 转换为字符串
-            let content = getPlainText(firstMessageWithContent.content);
-            // 替换预设模板为模板名称
+            let content = firstMessageWithContent.content;
             const prompts = promptSettingsManager.getPrompts();
-            const selectionPrompt = prompts.selection.prompt.split('<SELECTION>')[0].trim();
-            if (content.includes(selectionPrompt)) {
-                content = content.replace(selectionPrompt, '[搜索]');
+            
+            // 替换预设模板为模板名称
+            const selectionPrompt = prompts.selection.prompt.split('<SELECTION>');
+            const selectionPromptPrefix = selectionPrompt[0].trim();
+            if (content.includes(selectionPromptPrefix)) {
+                content = content.replace(selectionPromptPrefix, '[搜索]');
+                if (selectionPrompt.length > 1) {
+                    content = content.replace(selectionPrompt[1], '');
+                }
             }
-            const queryPrompt = prompts.query.prompt.split('<SELECTION>')[0].trim();
-            if (content.includes(queryPrompt)) {
-                content = content.replace(queryPrompt, '[解释]');
+            
+            const queryPrompt = prompts.query.prompt.split('<SELECTION>');
+            const queryPromptPrefix = queryPrompt[0].trim();
+            if (content.includes(queryPromptPrefix)) {
+                content = content.replace(queryPromptPrefix, '[解释]');
+                if (queryPrompt.length > 1) {
+                    content = content.replace(queryPrompt[1], '');
+                }
             }
 
             if (content.includes(prompts.pdf.prompt)) {
@@ -2314,10 +2312,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             summary = content.substring(0, 50);
         }
 
+        let urlToSave = currentPageInfo.url;
+        let titleToSave = currentPageInfo.title;
+        // 如果是更新操作并且已存在记录，则固定使用首次保存的 url
+        if (isUpdate && currentConversationId) {
+            try {
+                const existingConversation = await getConversationById(currentConversationId);
+                if (existingConversation) {
+                    urlToSave = existingConversation.url;
+                    titleToSave = existingConversation.title;
+                }
+            } catch (error) {
+                console.error("获取会话记录失败:", error);
+            }
+        }
+
         const generateConversationId = () => `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const conversation = {
             id: isUpdate ? (currentConversationId || generateConversationId()) : generateConversationId(),
-            url: currentUrl,
+            url: urlToSave,
+            title: titleToSave,
             startTime,
             endTime,
             messages,
@@ -2352,6 +2366,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const headerActions = document.createElement('div');
             headerActions.className = 'header-actions';
 
+            const refreshButton = document.createElement('button');
+            refreshButton.textContent = '刷新';
+            refreshButton.addEventListener('click', refreshChatHistory);
+
             const backupButton = document.createElement('button');
             backupButton.textContent = '备份';
             backupButton.addEventListener('click', backupConversations);
@@ -2364,6 +2382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             closeBtn.textContent = '关闭';
             closeBtn.addEventListener('click', () => { panel.remove(); });
 
+            headerActions.appendChild(refreshButton);
             headerActions.appendChild(backupButton);
             headerActions.appendChild(restoreButton);
             headerActions.appendChild(closeBtn);
@@ -2543,9 +2562,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                         domain = '未知';
                     }
 
-                    infoDiv.textContent = `${relativeTime} · 消息数: ${conv.messageCount} · ${domain}`;
+                    let title = conv.title;
+
+                    const displayInfos = [relativeTime, `消息数: ${conv.messageCount}`, domain, title].filter(Boolean).join(' · ');
+                    infoDiv.textContent = displayInfos;
                     // 新增：鼠标悬停显示具体的日期时间
-                    infoDiv.title = convDate.toLocaleString();
+
+                    const details = [convDate.toLocaleString(), title, conv.url].filter(Boolean).join('\n');
+                    infoDiv.title = details;
 
                     item.appendChild(summaryDiv);
                     item.appendChild(infoDiv);
@@ -2781,6 +2805,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (error) {
             console.error('备份失败:', error);
             alert('备份失败，请检查浏览器控制台。');
+        }
+    }
+
+    /** 
+     * 刷新聊天记录
+     */
+    function refreshChatHistory() {
+        const panel = document.getElementById('chat-history-panel');
+        if (panel) {
+            const filterInput = panel.querySelector('input[type="text"]');
+            loadConversationHistories(panel, filterInput ? filterInput.value : '');
         }
     }
 
