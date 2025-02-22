@@ -1975,8 +1975,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             e.preventDefault();
             e.stopPropagation();
             container.remove();
-            // 发输入事件以调整高度
-            messageInput.dispatchEvent(new Event('input'));
         });
 
         container.appendChild(thumbnail);
