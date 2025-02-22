@@ -129,17 +129,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return content;
     }
 
-    // 修改 processMessageContent 函数
-    function processMessageContent(msg) {
-        if (typeof msg.content === 'string' && msg.content.includes('image-tag')) {
-            return {
-                ...msg,
-                content: processImageTags(msg.content)
-            };
-        }
-        return msg;
-    }
-
     // 获取网页内容
     async function getPageContent() {
         try {
@@ -375,7 +364,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const messageText = messageInput.textContent;
         
         // 如果消息为空且没有图片标签，则不发送消息
-        if (!messageText && imageTags.length === 0) return;
+        const isEmptyMessage = !messageText && imageTags.length === 0;
 
         // 获取当前提示词设置
         const prompts = promptSettingsManager.getPrompts();
@@ -411,9 +400,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return '';
             });
 
-            // 添加用户消息，同时包含文本和图片区域
-            const userMessageDiv = appendMessage(messageText, 'user', false, null, imageContainer.innerHTML);
-            
+            let userMessageDiv;
+            if (!isEmptyMessage) {
+                // 添加用户消息，同时包含文本和图片区域
+                userMessageDiv = appendMessage(messageText, 'user', false, null, imageContainer.innerHTML);
+            }
+
             clearMessageInput();
             adjustTextareaHeight(messageInput);
 
@@ -433,7 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const contentLength = pageContent.content ? pageContent.content.length : 0;
                     footer.textContent = `↑ ${contentLength.toLocaleString()}`;
                     // 添加到用户消息下方
-                    userMessageDiv.appendChild(footer);
+                    userMessageDiv?.appendChild(footer);
                 } else {
                     pageContent = null;
                     console.error('获取网页内容失败。');
@@ -1013,17 +1005,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 存储原始文本用于复制
         messageDiv.setAttribute('data-original-text', text);
-
-        // 创建文本内容容器，并处理 Markdown 与数学公式
-        const textContentDiv = document.createElement('div');
-        textContentDiv.classList.add('text-content');
-        try {
-            textContentDiv.innerHTML = processMathAndMarkdown(text);
-        } catch (error) {
-            console.error('处理数学公式和Markdown失败:', error);
-            textContentDiv.innerText = text;
-        }
-        messageDiv.appendChild(textContentDiv);
         
         // 如果存在图片内容，则创建图片区域容器
         if (imagesHTML && imagesHTML.trim()) {
@@ -1040,6 +1021,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             messageDiv.appendChild(imageContentDiv);
         }
+
+        // 创建文本内容容器，并处理 Markdown 与数学公式
+        const textContentDiv = document.createElement('div');
+        textContentDiv.classList.add('text-content');
+        try {
+            textContentDiv.innerHTML = processMathAndMarkdown(text);
+        } catch (error) {
+            console.error('处理数学公式和Markdown失败:', error);
+            textContentDiv.innerText = text;
+        }
+        messageDiv.appendChild(textContentDiv);
         
         // 处理消息中的其他元素
         messageDiv.querySelectorAll('a').forEach(link => {
@@ -1967,11 +1959,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         container.className = 'image-tag';
         container.contentEditable = false;
         container.setAttribute('data-image', base64Data);
-        container.title = fileName || '图片'; // 添加悬停提示
+        container.title = fileName || ''; // 添加悬停提示
 
         const thumbnail = document.createElement('img');
         thumbnail.src = base64Data;
-        thumbnail.alt = fileName || '图片';
+        thumbnail.alt = fileName || '';
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'delete-btn';
@@ -2282,6 +2274,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         hideContextMenu();
     });
 
+
+
+
+
+    /**
+     * 提取消息的纯文本内容
+     * @param {Object} msg - 消息对象
+     * @returns {string} 纯文本内容
+     */
+    function extractMessagePlainText(msg) {
+        if (typeof msg.content === 'string') {
+            return msg.content.trim();
+        } else if (Array.isArray(msg.content)) {
+            return msg.content.map(part => part.type === 'image_url' ? '[图片]' : part.text.trim()).join(' ');
+        }
+        return '';
+    }
+
     /**
      * 保存或更新当前对话至持久存储 (使用 chrome.storage.local)
      * @param {boolean} [isUpdate=false] - 是否为更新操作
@@ -2294,16 +2304,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const startTime = Math.min(...timestamps);
         const endTime = Math.max(...timestamps);
 
-        const firstMessageTextContent = messages.map(msg => {
-            if (typeof msg.content === 'string') {
-                return msg.content.trim();
-            } else if (Array.isArray(msg.content)) {
-                return msg.content.map(part => part.type === 'image_url' ? '[图片]' : part.text.trim()).join(' ');
-            }
-            return '';
-        }).find(text => text !== '');
-
-        console.log(firstMessageTextContent);
+        // 提取第一条消息的纯文本内容
+        const firstMessageTextContent = extractMessagePlainText(messages.find(msg => extractMessagePlainText(msg) !== ''));
         
         let summary = '';
         if (firstMessageTextContent) {
@@ -2612,8 +2614,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const highlightRegex = new RegExp(escapedFilter, 'gi');
                         if (conv.messages && Array.isArray(conv.messages)) {
                             for (const msg of conv.messages) {
-                                if (msg.content) {
-                                    const content = msg.content;
+                                const plainText = extractMessagePlainText(msg);
+                                if (plainText) {
+                                    const content = plainText;
                                     const contentLower = content.toLowerCase();
                                     // 若当前消息中未包含关键字，则跳过
                                     if (contentLower.indexOf(lowerFilter) === -1) continue;
@@ -2829,7 +2832,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            alert('备份成功！');
+            // alert('备份成功！');
         } catch (error) {
             console.error('备份失败:', error);
             alert('备份失败，请检查浏览器控制台。');
