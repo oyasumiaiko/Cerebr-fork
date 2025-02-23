@@ -648,23 +648,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         iframe?.contentWindow?.postMessage({ type: 'TOGGLE_TEMP_MODE_FROM_EXTENSION' }, '*');
         break;
       case 'EXPLAIN_IMAGE':
-        if (iframe) {
-          if (message.url) {
-            // 如果消息中提供了 url，则使用辅助函数复用 dragstart 的逻辑
-            fetchImageData(message.url)
-              .then((imageData) => {
-                if (imageData) {
-                  iframe.contentWindow.postMessage({
-                    type: 'DROP_IMAGE',
-                    imageData: imageData,
-                    explain: true
-                  }, '*');
-                }
-              })
-              .catch(error => {
-                console.error('获取图片数据失败:', error);
-              });
-          }
+        if (iframe && message.imageData) {
+          iframe.contentWindow.postMessage({
+            type: 'DROP_IMAGE',
+            imageData: message.imageData,
+            explain: true
+          }, '*');
         }
         break;
     }
@@ -1073,26 +1062,4 @@ async function extractTextFromPDF(url) {
     }
     return null;
   }
-}
-
-// 辅助函数：通过 URL 获取图片数据并返回包含 base64 数据的对象
-function fetchImageData(url) {
-  return fetch(url)
-    .then(response => response.blob())
-    .then(blob => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        resolve({
-          type: 'image',
-          data: reader.result,
-          name: '' // 根据需要可以从 URL 中提取文件名
-        });
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    }))
-    .catch(error => {
-      console.error("fetchImageData error:", error);
-      throw error;
-    });
 }

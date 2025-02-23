@@ -230,19 +230,52 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // 处理右键菜单点击
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === 'explain-image') {
-      try {
-          // 先打开侧边栏
-          await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SIDEBAR' });
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'EXPLAIN_IMAGE',
-            url: info.srcUrl
-        });
-      } catch (error) {
-          console.error('处理图片失败:', error);
-      }
-  }
-}); 
+    if (info.menuItemId === 'explain-image') {
+        try {
+            // 检查标签页是否已连接
+            const isConnected = await isTabConnected(tab.id);
+            if (!isConnected) {
+                console.log('标签页未连接，等待重试...');
+                await new Promise(resolve => setTimeout(resolve, 500));
+                const retryConnection = await isTabConnected(tab.id);
+                if (!retryConnection) {
+                    console.log('重试失败，标签页仍未连接');
+                    return;
+                }
+            }
+
+            // 获取图片数据
+            const response = await fetch(info.srcUrl);
+            const blob = await response.blob();
+            const reader = new FileReader();
+            
+            reader.onloadend = async () => {
+                const base64Data = reader.result;
+                const imageData = {
+                    type: 'image',
+                    data: base64Data,
+                    name: 'right-click-image'
+                };
+
+                // 先打开侧边栏
+                await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SIDEBAR' });
+
+                // 等待一下确保侧边栏已打开
+                setTimeout(async () => {
+                    // 发送图片数据到content script
+                    await chrome.tabs.sendMessage(tab.id, {
+                        type: 'EXPLAIN_IMAGE',
+                        imageData: imageData
+                    });
+                }, 500);
+            };
+
+            reader.readAsDataURL(blob);
+        } catch (error) {
+            console.error('处理图片失败:', error);
+        }
+    }
+});
 
 // 简化标签页连接检查
 async function isTabConnected(tabId) {
