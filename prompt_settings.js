@@ -269,13 +269,6 @@ class PromptSettings {
 
     // 绑定事件处理器
     bindEvents() {
-        // 显示/隐藏提示词设置面板
-        this.promptSettingsToggle.addEventListener('click', () => {
-            this.promptSettings.classList.add('visible');
-            // 调用外部函数关闭设置菜单
-            window.toggleSettingsMenu(false);
-        });
-
         // 返回按钮
         this.promptBackButton.addEventListener('click', () => {
             this.promptSettings.classList.remove('visible');

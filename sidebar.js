@@ -2,6 +2,7 @@ import { PromptSettings } from './prompt_settings.js';
 import { createChatHistoryManager } from './chat_history_manager.js';
 import { getAllConversations, putConversation, deleteConversation, getConversationById } from './indexeddb_helper.js';
 import { initTreeDebugger } from './tree_debugger.js';
+import { GoogleGenerativeAI } from './lib/generative-ai.js'; // 导入生成式 AI 模块
 
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
@@ -25,7 +26,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const showReferenceSwitch = document.getElementById('show-reference-switch');
     const copyCodeButton = document.getElementById('copy-code');
     const imageContainer = document.getElementById('image-container');
-
+    const promptSettingsToggle = document.getElementById('prompt-settings-toggle');
+    const promptSettings = document.getElementById('prompt-settings');
+    
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
@@ -94,7 +97,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             type: 'TOGGLE_FULLSCREEN',
             isFullscreen: isFullscreen
         }, '*');
-        settingsMenu.classList.remove('visible');
     });
 
     // 添加公共的图片处理函数
@@ -361,7 +363,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         const imageTags = imageContainer.querySelectorAll('.image-tag');
-        const messageText = messageInput.textContent;
+        let messageText = messageInput.textContent;
         
         // 如果消息为空且没有图片标签，则不发送消息
         const isEmptyMessage = !messageText && imageTags.length === 0;
@@ -394,7 +396,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 提取提示词中注入的系统消息
             const systemMessageRegex = /{{system}}([\s\S]*?){{end_system}}/g;
             const injectedSystemMessages = [];
-            messageInput.textContent = messageInput.textContent.replace(systemMessageRegex, (match, capture) => {
+            messageText = messageText.replace(systemMessageRegex, (match, capture) => {
                 injectedSystemMessages.push(capture);
                 console.log('捕获注入的系统消息：', injectedSystemMessages);
                 return '';
@@ -1207,8 +1209,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         toggleSettingsMenu(false);
     });
 
-    let closeTimeout;
-
     // 设置按钮悬停事件
     settingsButton.addEventListener('mouseenter', () => {
         toggleSettingsMenu(true);
@@ -1227,7 +1227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 添加输入框的事件监听器
     messageInput.addEventListener('focus', () => {
-        settingsMenu.classList.remove('visible');
+        toggleSettingsMenu(false);
     });
 
     // 主题切换
@@ -1652,7 +1652,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     selectedConfigIndex = configIndex;
                     saveAPIConfigs();
                     renderAPICards();
-                    toggleSettingsMenu(false);
                 }
             });
 
@@ -1665,10 +1664,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 显示/隐藏 API 设置
     apiSettingsToggle.addEventListener('click', () => {
-        apiSettings.classList.add('visible');
-        toggleSettingsMenu(false);
-        // 确保每次打开设置时都重新渲染卡片
-        renderAPICards();
+        const wasVisible = apiSettings.classList.contains('visible');
+        closeExclusivePanels();
+
+        if (!wasVisible) {
+            apiSettings.classList.toggle('visible');
+            renderAPICards();
+        }
     });
 
     // 返回聊天界面
@@ -2713,8 +2715,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const chatHistoryMenuItem = document.getElementById('chat-history-menu');
     if (chatHistoryMenuItem) {
         chatHistoryMenuItem.addEventListener('click', () => {
+            closeExclusivePanels();
             showChatHistoryPanel();
-            toggleSettingsMenu(false);
         });
     }
 
@@ -2930,6 +2932,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape'){
             toggleChatHistoryPanel();
             e.preventDefault();
+        }
+    });
+
+    // 新增互斥面板切换函数
+    function closeExclusivePanels() {
+        // 定义需要互斥的面板ID列表
+        const panels = ['chat-history-panel', 'api-settings', 'prompt-settings'];
+        closeChatHistoryPanel();
+        panels.forEach(pid => {
+            const panel = document.getElementById(pid);
+            if (panel && panel.classList.contains('visible')) {
+                panel.classList.remove('visible');
+            }
+        });
+    }
+
+    // 显示/隐藏提示词设置面板
+    promptSettingsToggle.addEventListener('click', () => {
+        const wasVisible = promptSettings.classList.contains('visible');
+        closeExclusivePanels();
+
+        if (!wasVisible) {
+            promptSettings.classList.toggle('visible');
         }
     });
 });
