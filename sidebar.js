@@ -3,6 +3,7 @@ import { createChatHistoryManager } from './chat_history_manager.js';
 import { getAllConversations, putConversation, deleteConversation, getConversationById } from './indexeddb_helper.js';
 import { initTreeDebugger } from './tree_debugger.js';
 import { GoogleGenerativeAI } from './lib/generative-ai.js'; // 导入生成式 AI 模块
+import { createMessageProcessor } from './message_processor.js'; // 导入消息处理模块
 
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
@@ -93,6 +94,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteMessage
     } = createChatHistoryManager();
 
+    // 初始化图片预览元素
+    const previewModal = document.querySelector('.image-preview-modal');
+    const previewImage = previewModal.querySelector('img');
+    const closeButton = previewModal.querySelector('.image-preview-close');
+
+    // 图片预览功能函数定义
+    function showImagePreview(base64Data) {
+        previewImage.src = base64Data;
+        previewModal.classList.add('visible');
+    }
+
+    // 隐藏图片预览功能
+    function hideImagePreview() {
+        previewModal.classList.remove('visible');
+        previewImage.src = '';
+    }
+
+    // 绑定图片预览相关事件
+    closeButton.addEventListener('click', hideImagePreview);
+    previewModal.addEventListener('click', (e) => {
+        if (previewModal === e.target) {
+            hideImagePreview();
+        }
+    });
+
+    // 创建消息处理器实例
+    const messageProcessor = createMessageProcessor({
+        chatContainer: chatContainer,
+        chatHistory: chatHistory,
+        addMessageToTree: addMessageToTree,
+        scrollToBottom: scrollToBottom,
+        showImagePreview: showImagePreview,
+        processImageTags: processImageTags,
+        showReference: showReferenceSwitch.checked
+    });
+
+    // 监听引用标记开关变化，更新消息处理器的showReference设置
+    showReferenceSwitch.addEventListener('change', (e) => {
+        updateReferenceVisibility(e.target.checked);
+        saveSettings('showReference', e.target.checked);
+    });
+
     // 监听聊天历史开关变化
     sendChatHistorySwitch.addEventListener('change', (e) => {
         shouldSendChatHistory = e.target.checked;
@@ -155,145 +198,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-
     /**
      * 为消息添加引用标记和来源信息
      * @param {string} text - 原始消息文本
      * @param {Object} groundingMetadata - 引用元数据对象
-     * @param {Array<Object>} groundingMetadata.groundingSupports - 引用支持数组
-     * @param {Object} groundingMetadata.groundingSupports[].segment - 文本片段对象
-     * @param {string} groundingMetadata.groundingSupports[].segment.text - 需要添加引用的文本
-     * @param {Array<number>} groundingMetadata.groundingSupports[].groundingChunkIndices - 引用块索引数组
-     * @param {Array<number>} groundingMetadata.groundingSupports[].confidenceScores - 置信度分数数组
-     * @param {Array<Object>} groundingMetadata.groundingChunks - 引用块数组
-     * @param {Object} groundingMetadata.groundingChunks[].web - 网页引用信息
-     * @param {string} groundingMetadata.groundingChunks[].web.title - 网页标题
-     * @param {string} groundingMetadata.groundingChunks[].web.uri - 网页URL
-     * @param {Array<string>} groundingMetadata.webSearchQueries - 网页搜索查询数组
      * @returns {(string|Object)} 如果没有引用信息返回原文本，否则返回包含处理后文本和引用信息的对象
-     * @returns {string} returns.text - 处理后的文本，包含引用标记占位符
-     * @returns {Array<Object>} returns.htmlElements - HTML元素数组，用于替换占位符
-     * @returns {Array<Object>} returns.htmlElements[].placeholder - 占位符字符串
-     * @returns {string} returns.htmlElements[].html - 用于替换占位符的HTML字符串
-     * @returns {Array<Object>} returns.sources - 排序后的引用来源数组
-     * @returns {number} returns.sources[].refNumber - 引用编号
-     * @returns {string} returns.sources[].domain - 来源网站域名
-     * @returns {string} returns.sources[].url - 来源URL
-     * @returns {Array<string>} returns.webSearchQueries - 网页搜索查询数组
      */
     function addGroundingToMessage(text, groundingMetadata) {
-        if (!groundingMetadata?.groundingSupports) return text;
-
-        let markedText = text;
-        const htmlElements = [];
-        const orderedSources = [];
-        const webSearchQueries = groundingMetadata.webSearchQueries || [];
-
-        // 创建URL到引用编号的映射
-        const urlToRefNumber = new Map();
-        let nextRefNumber = 1;
-
-        // 记录每个文本片段在原文中的位置
-        const textPositions = groundingMetadata.groundingSupports
-            .filter(support => support.segment?.text)
-            .map(support => {
-                const pos = text.indexOf(support.segment.text);
-                return {
-                    support,
-                    position: pos >= 0 ? pos : Number.MAX_SAFE_INTEGER
-                };
-            })
-            .sort((a, b) => a.position - b.position);
-
-        textPositions.forEach(({ support }, index) => {
-            const placeholder = `\u200B😎REF_${index}😎\u200B`;
-
-            // 转义正则表达式特殊字符
-            const escapedText = support.segment.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(escapedText, 'g');
-
-            // 收集该文本片段的所有引用源和对应的置信度
-            const sourceRefs = [];
-            if (support.groundingChunkIndices?.length > 0) {
-                support.groundingChunkIndices.forEach((chunkIndex, idx) => {
-                    const chunk = groundingMetadata.groundingChunks[chunkIndex];
-                    const confidence = support.confidenceScores?.[idx] || 0;
-
-                    if (chunk?.web) {
-                        const url = chunk.web.uri;
-                        if (!urlToRefNumber.has(url)) {
-                            urlToRefNumber.set(url, nextRefNumber++);
-                        }
-                        sourceRefs.push({
-                            refNumber: urlToRefNumber.get(url),
-                            title: chunk.web.title,
-                            url: url,
-                            confidence: confidence
-                        });
-                    }
-                });
-            }
-
-            // 按引用编号排序
-            sourceRefs.sort((a, b) => a.refNumber - b.refNumber);
-
-            // 生成引用标记
-            const refMark = sourceRefs.map(ref =>
-                `<a href="${encodeURI(ref.url)}" 
-                    class="reference-number superscript" 
-                    target="_blank" 
-                    data-ref-number="${ref.refNumber}"
-                    >[${ref.refNumber}]</a>`
-            ).join('');
-
-            // 构建包含所有源信息的tooltip
-            const tooltipContent = `
-                <span class="reference-tooltip">
-                    ${sourceRefs.map(ref => `
-                        <span class="reference-source">
-                            <span class="ref-number">[${ref.refNumber}]</span>
-                            <a href="${encodeURI(ref.url)}" target="_blank">${ref.title}</a>
-                            <span class="confidence">${(ref.confidence * 100).toFixed(1)}%</span>
-                        </span>
-                    `).join('')}
-                </span>
-            `;
-
-            // 包装引用标记组
-            const refGroup = `
-                <span class="reference-mark-group">
-                    ${refMark}
-                    <span class="reference-tooltip-wrapper">${tooltipContent}</span>
-                </span>
-            `;
-
-            if (showReferenceSwitch.checked) {
-                // 替换文本并添加引用标记
-                markedText = markedText.replace(regex, `$&${placeholder}`);
-                htmlElements.push({
-                    placeholder,
-                    html: refGroup
-                });
-            }
-
-            // 添加到有序来源列表
-            sourceRefs.forEach(ref => {
-                if (!orderedSources.some(s => s.refNumber === ref.refNumber)) {
-                    orderedSources.push({
-                        refNumber: ref.refNumber,
-                        domain: ref.title,
-                        url: ref.url
-                    });
-                }
-            });
-        });
-
-        return {
-            text: markedText,
-            htmlElements,
-            sources: orderedSources.sort((a, b) => a.refNumber - b.refNumber),
-            webSearchQueries
-        };
+        return messageProcessor.addGroundingToMessage(text, groundingMetadata);
     }
 
     /**
@@ -302,33 +214,8 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @returns {string} 提示词类型 ('image'|'pdf'|'summary'|'selection'|'query'|'system')
      */
     function getPromptTypeFromContent(content) {
-        // 如果content是空字符串，就判断为图片提示词
         const prompts = promptSettingsManager.getPrompts();
-
-        // 如果content是图片提示词，则返回image
-        if (prompts.image.prompt && content === prompts.image.prompt) {
-            return 'image';
-        }
-
-        // 检查是否是PDF提示词
-        if (prompts.pdf.prompt && content === prompts.pdf.prompt) {
-            return 'pdf';
-        }
-
-        // 检查是否是页面总结提示词
-        if (prompts.summary.prompt && content === prompts.summary.prompt) {
-            return 'summary';
-        }
-
-        // 检查是否是划词搜索提示词，将 selection prompt 中的 "<SELECTION>" 移除后进行匹配
-        if (prompts.selection.prompt) {
-            const selectionPromptKeyword = prompts.selection.prompt.split('<SELECTION>')[0];
-            if (selectionPromptKeyword && content.startsWith(selectionPromptKeyword)) {
-                return 'selection';
-            }
-        }
-
-        return 'none';
+        return messageProcessor.getPromptTypeFromContent(content, prompts);
     }
 
     // 在 getPromptTypeFromContent 函数之后，新增如下辅助函数
@@ -345,10 +232,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       * // 输入 "请总结以下内容 {{system}}额外指令{{end_system}}"，返回 "额外指令"
       */
     function extractSystemContent(promptText) {
-        if (!promptText) return '';
-        const regex = /{{system}}([\s\S]*?){{end_system}}/; // 使用捕获组
-        const match = promptText.match(regex);
-        return match ? match[1].trim() : '';
+        return messageProcessor.extractSystemContent(promptText);
     }
 
     async function sendMessage() {
@@ -615,203 +499,9 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @param {Object|null} groundingMetadata - 引用元数据对象，包含引用信息
      */
     function updateAIMessage(aiResponse, groundingMetadata) {
-        const lastMessage = chatContainer.querySelector('.ai-message:last-child');
-
-        if (lastMessage) {
-            // 获取当前显示的文本
-            const currentText = lastMessage.getAttribute('data-original-text') || '';
-            // 如果新文本比当前文本长，说明有新内容需要更新
-            if (aiResponse.length > currentText.length) {
-                // 更新原始文本属性
-                lastMessage.setAttribute('data-original-text', aiResponse);
-
-                let processedText = aiResponse;
-                let htmlElements = [];
-                let processedResult = aiResponse;
-
-                // 处理引用标记和来源信息(如果存在)
-                if (groundingMetadata) {
-                    processedResult = addGroundingToMessage(aiResponse, groundingMetadata);
-                    if (typeof processedResult === 'object') {
-                        processedText = processedResult.text;
-                        htmlElements = processedResult.htmlElements;
-                    }
-                }
-
-                // 处理数学公式和Markdown
-                let renderedHtml = processMathAndMarkdown(processedText);
-                lastMessage.innerHTML = renderedHtml;
-
-                // 处理新渲染的链接
-                lastMessage.querySelectorAll('a').forEach(link => {
-                    link.target = '_blank';
-                    link.rel = 'noopener noreferrer';
-                });
-
-                // 处理代码块的语法高亮
-                lastMessage.querySelectorAll('pre code').forEach(block => {
-                    hljs.highlightElement(block);
-                });
-
-                // 渲染LaTeX公式
-                renderMathInElement(lastMessage, MATH_DELIMITERS.renderConfig);
-
-                if (groundingMetadata) {
-                    // 替换引用标记占位符为HTML元素
-                    if (htmlElements && htmlElements.length > 0) {
-                        htmlElements.forEach(element => {
-                            const placeholder = element.placeholder;
-                            const html = element.html;
-                            lastMessage.innerHTML = lastMessage.innerHTML.replace(placeholder, html);
-                        });
-                    }
-
-                    // 清理任何剩余的未替换placeholder
-                    lastMessage.innerHTML = lastMessage.innerHTML.replace(/\u200B😎REF_\d+😎\u200B/g, '');
-
-                    // 添加引用来源列表
-                    if (typeof processedResult === 'object' && processedResult.sources && processedResult.sources.length > 0) {
-                        const sourcesList = document.createElement('div');
-                        sourcesList.className = 'sources-list';
-                        sourcesList.innerHTML = '<h4>参考来源：</h4>';
-                        const ul = document.createElement('ul');
-
-                        // 计算每个来源的平均置信度
-                        const sourceConfidences = new Map();
-                        const sourceConfidenceCounts = new Map();
-
-                        groundingMetadata.groundingSupports.forEach(support => {
-                            if (support.groundingChunkIndices && support.confidenceScores) {
-                                support.groundingChunkIndices.forEach((chunkIndex, idx) => {
-                                    const chunk = groundingMetadata.groundingChunks[chunkIndex];
-                                    const confidence = support.confidenceScores[idx] || 0;
-
-                                    if (chunk?.web?.uri) {
-                                        const url = chunk.web.uri;
-                                        sourceConfidences.set(url, (sourceConfidences.get(url) || 0) + confidence);
-                                        sourceConfidenceCounts.set(url, (sourceConfidenceCounts.get(url) || 0) + 1);
-                                    }
-                                });
-                            }
-                        });
-
-                        processedResult.sources.forEach(source => {
-                            const li = document.createElement('li');
-                            const totalConfidence = sourceConfidences.get(source.url) || 0;
-                            const count = sourceConfidenceCounts.get(source.url) || 1;
-                            const avgConfidence = (totalConfidence / count) * 100;
-
-                            // 创建置信度进度条容器
-                            const confidenceBar = document.createElement('div');
-                            confidenceBar.className = 'confidence-bar';
-
-                            // 创建进度条
-                            const progressBar = document.createElement('div');
-                            progressBar.className = 'progress-bar';
-                            progressBar.style.width = `${avgConfidence}%`;
-
-                            // 添加进度条到容器
-                            confidenceBar.appendChild(progressBar);
-
-                            // 收集该来源的所有匹配文本和置信度
-                            const matchingTexts = [];
-                            groundingMetadata.groundingSupports.forEach(support => {
-                                if (support.groundingChunkIndices && support.confidenceScores) {
-                                    support.groundingChunkIndices.forEach((chunkIndex, idx) => {
-                                        const chunk = groundingMetadata.groundingChunks[chunkIndex];
-                                        if (chunk?.web?.uri === source.url) {
-                                            matchingTexts.push({
-                                                text: support.segment.text,
-                                                confidence: support.confidenceScores[idx] * 100
-                                            });
-                                        }
-                                    });
-                                }
-                            });
-
-                            // 创建悬浮提示内容
-                            const tooltipContent = matchingTexts.map(match =>
-                                `<div class="match-item">
-                                    <div class="match-text">${match.text}</div>
-                                    <div class="match-confidence">${match.confidence.toFixed(1)}%</div>
-                                </div>`
-                            ).join('');
-
-                            li.innerHTML = `
-                                <div class="source-item">
-                                    <div class="source-info">
-                                        [${source.refNumber}] <a href="${encodeURI(source.url)}" target="_blank">${source.domain}</a>
-                                        <span class="confidence-text">
-                                            ${avgConfidence.toFixed(1)}% (${count}次引用)
-                                        </span>
-                                    </div>
-                                    <div class="source-tooltip">
-                                        <div class="tooltip-content">
-                                            <h4>匹配内容：</h4>
-                                            ${tooltipContent}
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-
-                            // 新增：添加点击事件，使点击 .confidence-text 打开对应网页
-                            const confidenceTextElem = li.querySelector('.confidence-text');
-                            if (confidenceTextElem) {
-                                confidenceTextElem.style.cursor = 'pointer';
-                                confidenceTextElem.addEventListener('click', () => {
-                                    window.open(source.url, '_blank');
-                                });
-                            }
-
-                            // 将进度条插入到source-item中
-                            const sourceItem = li.querySelector('.source-item');
-                            sourceItem.appendChild(confidenceBar);
-
-                            ul.appendChild(li);
-                        });
-
-                        sourcesList.appendChild(ul);
-                        lastMessage.appendChild(sourcesList);
-
-                        // Add web search queries section if available
-                        if (groundingMetadata.webSearchQueries && groundingMetadata.webSearchQueries.length > 0) {
-                            const searchQueriesList = document.createElement('div');
-                            searchQueriesList.className = 'search-queries-list';
-                            searchQueriesList.innerHTML = '<h4>搜索查询：</h4>';
-                            const ul = document.createElement('ul');
-
-                            groundingMetadata.webSearchQueries.forEach(query => {
-                                const li = document.createElement('li');
-                                li.textContent = query;
-                                li.addEventListener('click', () => {
-                                    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-                                    window.open(searchUrl, '_blank');
-                                });
-                                ul.appendChild(li);
-                            });
-
-                            searchQueriesList.appendChild(ul);
-                            lastMessage.appendChild(searchQueriesList);
-                        }
-                    }
-                }
-
-                // 更新历史记录
-                const messageId = lastMessage.getAttribute('data-message-id');
-                if (messageId && chatHistory.messages) {
-                    const node = chatHistory.messages.find(msg => msg.id === messageId);
-                    if (node) {
-                        node.content = aiResponse;
-                    }
-                }
-
-                // 执行滚动
-                scrollToBottom();
-            }
-        } else {
-            appendMessage(aiResponse, 'ai');
-        }
+        return messageProcessor.updateAIMessage(aiResponse, groundingMetadata);
     }
+
     // 提取公共配置
     const MATH_DELIMITERS = {
         delimiters: [
@@ -824,138 +514,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         throwOnError: false
     };
 
-    // 预处理数学表达式
-    function preMathEscape(text) {
-        let counter = 0;
-        const mathExpressions = [];
-
-        // 替换块级数学表达式
-        text = text.replace(/(\\\[[\s\S]+?\\\])/g, (match, p1) => {
-            const placeholder = `😎BLOCK_MATH_${counter}😎`;
-            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'block' });
-            counter++;
-            return placeholder;
-        });
-
-        // 替换行内数学表达式
-        text = text.replace(/(\\\([\s\S]+?\\\))/g, (match, p1) => {
-            const placeholder = `😎INLINE_MATH_${counter}😎`;
-            mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'inline' });
-            counter++;
-            return placeholder;
-        });
-
-        // // 替换美元符号包围的块级数学表达式
-        // text = text.replace(/(\$\$[\s\S]+?\$\$)/g, (match, p1) => {
-        //     const placeholder = `😎DOLLARBLOCK_MATH_${counter}😎`;
-        //     mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'dollarblock' });
-        //     counter++;
-        //     return placeholder;
-        // });
-
-        // // 替换美元符号包围的行内数学表达式
-        // text = text.replace(/(\$[^\$\n]+?\$)/g, (match, p1) => {
-        //     const placeholder = `😎DOLLAR_MATH_${counter}😎`;
-        //     mathExpressions.push({ placeholder, content: p1.slice(1, -1), originalContent: p1, type: 'dollarinline' });
-        //     counter++;
-        //     return placeholder;
-        // });
-
-        return { text, mathExpressions };
-    }
-
-    // 后处理数学表达式
-    function postMathReplace(text, mathExpressions) {
-        mathExpressions.forEach(({ placeholder, content, originalContent, type }) => {
-            let rendered;
-            try {
-                if (type === 'block' || type === 'dollarblock') {
-                    rendered = katex.renderToString(content, { displayMode: true, throwOnError: true });
-                } else if (type === 'inline' || type === 'dollarinline') {
-                    rendered = katex.renderToString(content, { displayMode: false, throwOnError: true });
-                }
-            } catch (e) {
-                console.error('KaTeX error:', e);
-                rendered = originalContent;
-            }
-            text = text.replace(placeholder, rendered);
-        });
-
-        return text;
-    }
-
     // 处理数学公式和Markdown
     function processMathAndMarkdown(text) {
-        // 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
-        const preHandledText = fixBoldParsingIssue(text);
-        // 对消息进行折叠处理，将从文本开头到首次出现 "\n# " 之前的部分折叠为可展开元素
-        const foldedText = foldMessageContent(preHandledText);
-
-        // 预处理数学表达式
-        const { text: escapedText, mathExpressions } = preMathEscape(foldedText);
-
-        // 处理未闭合的代码块
-        let processedText = escapedText;
-        const codeBlockRegex = /```/g;
-        if (((processedText || '').match(codeBlockRegex) || []).length % 2 > 0) {
-            processedText += '\n```';
-        }
-        
-        // 配置marked
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            sanitize: false,
-            highlight: function (code, lang) {
-                if (lang && hljs.getLanguage(lang)) {
-                    try {
-                        return hljs.highlight(code, { language: lang }).value;
-                    } catch (err) {
-                        return code;
-                    }
-                }
-                return code;
-            }
-        });
-
-        // 设置表格渲染器
-        const renderer = new marked.Renderer();
-        renderer.table = function (header, body) {
-            return `<table class="markdown-table">\n<thead>\n${header}</thead>\n<tbody>\n${body}</tbody>\n</table>\n`;
-        };
-        marked.use({ renderer });
-
-        // 渲染Markdown
-        const renderedMarkdown = marked.parse(processedText);
-
-        // 替换数学表达式
-        return postMathReplace(renderedMarkdown, mathExpressions);
+        return messageProcessor.processMathAndMarkdown(text);
     }
 
     // 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
     function fixBoldParsingIssue(text) {
-        // 在所有**前后添加零宽空格，以修复粗体解析问题
-        return text.replace(/\*\*/g, '\u200B**\u200B');
+        // 使用模块中的实现
+        const processed = messageProcessor.processMathAndMarkdown(text);
+        return processed;
     }
 
-    /**
-     * 根据正则折叠消息文本，将从文本开头到首次出现 "\n# " 之间的部分折叠为可展开元素。
-     * @param {string} text - 原始消息文本
-     * @returns {string} 处理后的消息文本，其中符合条件的部分被包裹在一个折叠元素中
-     * @example
-     * // 输入 "简介内容\n# 正文开始"，返回格式化后的HTML，其中"简介内容"被折叠
-     */
+    // 对消息进行折叠处理，根据正则折叠消息文本
     function foldMessageContent(text) {
-        const regex = /^([\s\S]*?)(?=\n# )/;
-        const match = text.match(regex);
-        if (!match || match[1].trim() === '') {
-            return text;
-        }
-        const foldedPart = match[1];
-        const remainingPart = text.slice(match[1].length);
-        // 将折叠部分包裹在 <blockquote> 中，以实现 Markdown 引用效果
-        const quotedFoldedPart = `<blockquote>${foldedPart}</blockquote>`;
-        return `<details class="folded-message"><summary>搜索过程</summary><div>\n${quotedFoldedPart}</div></details>\n${remainingPart}`;
+        // 使用模块中的实现
+        const processed = messageProcessor.processMathAndMarkdown(text);
+        return processed;
     }
 
     // 监听来自 content script 的消息
@@ -1017,88 +592,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @returns {HTMLElement} 新生成的消息元素
      */
     function appendMessage(text, sender, skipHistory = false, fragment = null, imagesHTML = null) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('message', `${sender}-message`);
-
-        // 如果是批量加载，添加特殊类名
-        if (fragment) {
-            messageDiv.classList.add('batch-load');
-        }
-
-        // 存储原始文本用于复制
-        messageDiv.setAttribute('data-original-text', text);
-        
-        // 如果存在图片内容，则创建图片区域容器
-        if (imagesHTML && imagesHTML.trim()) {
-            const imageContentDiv = document.createElement('div');
-            imageContentDiv.classList.add('image-content');
-            imageContentDiv.innerHTML = imagesHTML;
-            // 为图片添加点击预览事件
-            imageContentDiv.querySelectorAll('img').forEach(img => {
-                img.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    showImagePreview(img.src);
-                });
-            });
-            messageDiv.appendChild(imageContentDiv);
-        }
-
-        // 创建文本内容容器，并处理 Markdown 与数学公式
-        const textContentDiv = document.createElement('div');
-        textContentDiv.classList.add('text-content');
-        try {
-            textContentDiv.innerHTML = processMathAndMarkdown(text);
-        } catch (error) {
-            console.error('处理数学公式和Markdown失败:', error);
-            textContentDiv.innerText = text;
-        }
-        messageDiv.appendChild(textContentDiv);
-        
-        // 处理消息中的其他元素
-        messageDiv.querySelectorAll('a').forEach(link => {
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-        });
-
-        // 处理代码块的语法高亮
-        messageDiv.querySelectorAll('pre code').forEach(block => {
-            hljs.highlightElement(block);
-        });
-
-        // 渲染 LaTeX 公式
-        try {
-            renderMathInElement(messageDiv, MATH_DELIMITERS.renderConfig);
-        } catch (error) {
-            console.error('渲染LaTeX公式失败:', error);
-            // 渲染失败时保持原样
-        }
-
-        // 如果提供了文档片段，添加到片段中；否则直接添加到聊天容器
-        if (fragment) {
-            fragment.appendChild(messageDiv);
-        } else {
-            chatContainer.appendChild(messageDiv);
-        }
-        
-        // 更新聊天历史，将文本和图片信息封装到一个对象中
-        if (!skipHistory) {
-            const processedContent = processImageTags(text, imagesHTML);
-            const node = addMessageToTree(
-                sender === 'user' ? 'user' : 'assistant',
-                processedContent,
-                chatHistory.currentNode  // 添加 parentId 参数
-            );
-
-            // 为消息div添加节点ID
-            messageDiv.setAttribute('data-message-id', node.id);
-
-            if (sender === 'ai') {
-                messageDiv.classList.add('updating');
-            }
-        }
-
-        return messageDiv;
+        return messageProcessor.appendMessage(text, sender, skipHistory, fragment, imagesHTML);
     }
 
     // 自动调整文本框高度
@@ -2030,26 +1524,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 图片预览功能
-    const previewModal = document.querySelector('.image-preview-modal');
-    const previewImage = previewModal.querySelector('img');
-    const closeButton = previewModal.querySelector('.image-preview-close');
+    // 删除以下三行，它们在前面已经定义过了
+    // const previewModal = document.querySelector('.image-preview-modal');
+    // const previewImage = previewModal.querySelector('img');
+    // const closeButton = previewModal.querySelector('.image-preview-close');
 
-    function showImagePreview(base64Data) {
-        previewImage.src = base64Data;
-        previewModal.classList.add('visible');
-    }
+    // 删除这里的showImagePreview函数定义，已经在前面定义了
 
-    function hideImagePreview() {
-        previewModal.classList.remove('visible');
-        previewImage.src = '';
-    }
+    // 这个函数已经在前面定义过了，删除
+    // function hideImagePreview() {
+    //     previewModal.classList.remove('visible');
+    //     previewImage.src = '';
+    // }
 
-    closeButton.addEventListener('click', hideImagePreview);
-    previewModal.addEventListener('click', (e) => {
-        if (previewModal.contains(e.target)) {
-            hideImagePreview();
-        }
-    });
+    // 删除下面的事件监听器绑定，已经在前面绑定了
+    // closeButton.addEventListener('click', hideImagePreview);
+    // previewModal.addEventListener('click', (e) => {
+    //     if (previewModal.contains(e.target)) {
+    //         hideImagePreview();
+    //     }
+    // });
 
     function handleImageDrop(e, target) {
         e.preventDefault();
