@@ -9,6 +9,8 @@ import { createChatHistoryUI } from './chat_history_ui.js'; // 导入聊天历�
 import { createApiManager } from './api_settings.js'; // 导入 API 设置模块
 import { createMessageSender } from './message_sender.js'; // 导入消息发送模块
 import { createSettingsManager } from './settings_manager.js'; // 导入设置管理模块
+import { createContextMenuManager } from './context_menu_manager.js'; // 导入上下文菜单管理模块
+import { createUIManager } from './ui_manager.js'; // 导入UI管理模块
 
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
@@ -41,6 +43,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const clearOnSearchSwitch = document.getElementById('clear-on-search-switch');
     const scaleFactor = document.getElementById('scale-factor');
     const scaleValue = document.getElementById('scale-value');
+    const chatHistoryMenuItem = document.getElementById('chat-history-menu');
+    const deleteMessageButton = document.getElementById('delete-message');
+    const quickSummary = document.getElementById('quick-summary');
+    const clearChat = document.getElementById('clear-chat');
+    const debugTreeButton = document.getElementById('debug-chat-tree-btn');
+    const screenshotButton = document.getElementById('screenshot-button');
 
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
@@ -154,6 +162,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         closeExclusivePanels: closeExclusivePanels
     });
     
+    // 创建UI管理器实例
+    const uiManager = createUIManager({
+        messageInput,
+        settingsButton,
+        settingsMenu,
+        chatContainer,
+        sendButton,
+        inputContainer,
+        promptSettings,
+        promptSettingsToggle,
+        collapseButton,
+        chatHistoryUI,
+        imageHandler,
+        setShouldAutoScroll: (value) => shouldAutoScroll = value,
+        renderFavoriteApis: () => apiManager.renderFavoriteApis()
+    });
+
     // 设置 API 设置 UI 事件处理
     apiManager.setupUIEventHandlers(apiSettingsToggle, backButton);
     
@@ -174,6 +199,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         getPrompts: () => promptSettingsManager.getPrompts()
     });
 
+    // 创建上下文菜单管理器实例
+    const contextMenuManager = createContextMenuManager({
+        contextMenu,
+        copyMessageButton,
+        copyCodeButton,
+        stopUpdateButton,
+        regenerateButton,
+        deleteMessageButton,
+        clearChatContextButton,
+        chatContainer,
+        abortCurrentRequest: messageSender.abortCurrentRequest,
+        deleteMessageContent,
+        clearChatHistory: chatHistoryUI.clearChatHistory,
+        sendMessage: messageSender.sendMessage
+    });
+    
     // 创建设置管理器实例
     const settingsManager = createSettingsManager({
         themeSwitch,
@@ -190,8 +231,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         setMessageSenderChatHistory: messageSender.setSendChatHistory
     });
     
-    // 初始化设置管理器
+    // 初始化各模块
+    contextMenuManager.init();
+    uiManager.init();
     await settingsManager.init();
+
+    // 关闭互斥面板函数
+    function closeExclusivePanels() {
+        return uiManager.closeExclusivePanels();
+    }
 
     // 监听引用标记开关变化
     showReferenceSwitch.addEventListener('change', (e) => {
@@ -655,7 +703,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 点击聊天记录菜单项
-    const chatHistoryMenuItem = document.getElementById('chat-history-menu');
     if (chatHistoryMenuItem) {
         chatHistoryMenuItem.addEventListener('click', () => {
             const isOpen = chatHistoryUI.isChatHistoryPanelOpen();
@@ -716,19 +763,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 触发输入事件以保证界面刷新
         messageInput.dispatchEvent(new Event('input'));
         console.log("图片插入到图片容器");
-    }
-
-    // 新增互斥面板切换函数
-    function closeExclusivePanels() {
-        // 定义需要互斥的面板ID列表
-        const panels = ['api-settings', 'prompt-settings'];
-        chatHistoryUI.closeChatHistoryPanel();
-        panels.forEach(pid => {
-            const panel = document.getElementById(pid);
-            if (panel && panel.classList.contains('visible')) {
-                panel.classList.remove('visible');
-            }
-        });
     }
 
     // 显示/隐藏提示词设置面板
