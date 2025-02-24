@@ -4,6 +4,7 @@ import { getAllConversations, putConversation, deleteConversation, getConversati
 import { initTreeDebugger } from './tree_debugger.js';
 import { GoogleGenerativeAI } from './lib/generative-ai.js'; // 导入生成式 AI 模块
 import { createMessageProcessor } from './message_processor.js'; // 导入消息处理模块
+import { createImageHandler } from './image_handler.js'; // 导入图片处理模块
 
 document.addEventListener('DOMContentLoaded', async () => {
     const chatContainer = document.getElementById('chat-container');
@@ -99,24 +100,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const previewImage = previewModal.querySelector('img');
     const closeButton = previewModal.querySelector('.image-preview-close');
 
-    // 图片预览功能函数定义
-    function showImagePreview(base64Data) {
-        previewImage.src = base64Data;
-        previewModal.classList.add('visible');
-    }
-
-    // 隐藏图片预览功能
-    function hideImagePreview() {
-        previewModal.classList.remove('visible');
-        previewImage.src = '';
-    }
-
-    // 绑定图片预览相关事件
-    closeButton.addEventListener('click', hideImagePreview);
-    previewModal.addEventListener('click', (e) => {
-        if (previewModal === e.target) {
-            hideImagePreview();
-        }
+    // 创建图片处理器实例
+    const imageHandler = createImageHandler({
+        previewModal,
+        previewImage,
+        closeButton,
+        imageContainer,
+        messageInput
     });
 
     // 创建消息处理器实例
@@ -125,8 +115,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatHistory: chatHistory,
         addMessageToTree: addMessageToTree,
         scrollToBottom: scrollToBottom,
-        showImagePreview: showImagePreview,
-        processImageTags: processImageTags,
+        showImagePreview: imageHandler.showImagePreview,
+        processImageTags: imageHandler.processImageTags,
         showReference: showReferenceSwitch.checked
     });
 
@@ -1464,7 +1454,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const file = imageItem.getAsFile();
             const reader = new FileReader();
             reader.onload = async () => {
-                addImageToContainer(reader.result, file.name);
+                imageHandler.addImageToContainer(reader.result, file.name);
             };
             reader.readAsDataURL(file);
         } else {
@@ -1485,104 +1475,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-
-    // 创建图片标签
-    function createImageTag(base64Data, fileName) {
-        const container = document.createElement('span');
-        container.className = 'image-tag';
-        container.contentEditable = false;
-        container.setAttribute('data-image', base64Data);
-        container.title = fileName || ''; // 添加悬停提示
-
-        const thumbnail = document.createElement('img');
-        thumbnail.src = base64Data;
-        thumbnail.alt = fileName || '';
-
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'delete-btn';
-        deleteBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-linecap="round"/></svg>';
-        deleteBtn.title = '删除图片';
-
-        // 点击删除按钮时除整个标签
-        deleteBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            container.remove();
-        });
-
-        container.appendChild(thumbnail);
-        container.appendChild(deleteBtn);
-
-        // 点击图片区域预览图片
-        thumbnail.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            showImagePreview(base64Data);
-        });
-
-        return container;
-    }
-
-    // 图片预览功能
-    // 删除以下三行，它们在前面已经定义过了
-    // const previewModal = document.querySelector('.image-preview-modal');
-    // const previewImage = previewModal.querySelector('img');
-    // const closeButton = previewModal.querySelector('.image-preview-close');
-
-    // 删除这里的showImagePreview函数定义，已经在前面定义了
-
-    // 这个函数已经在前面定义过了，删除
-    // function hideImagePreview() {
-    //     previewModal.classList.remove('visible');
-    //     previewImage.src = '';
-    // }
-
-    // 删除下面的事件监听器绑定，已经在前面绑定了
-    // closeButton.addEventListener('click', hideImagePreview);
-    // previewModal.addEventListener('click', (e) => {
-    //     if (previewModal.contains(e.target)) {
-    //         hideImagePreview();
-    //     }
-    // });
-
-    function handleImageDrop(e, target) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        try {
-            // 处理文件拖放
-            if (e.dataTransfer.files.length > 0) {
-                const file = e.dataTransfer.files[0];
-                if (file.type.startsWith('image/')) {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        addImageToContainer(reader.result, file.name);
-                    };
-                    reader.readAsDataURL(file);
-                    return;
-                }
-            }
-
-            // 处理网页图片拖放
-            const data = e.dataTransfer.getData('text/plain');
-            if (data) {
-                try {
-                    const imageData = JSON.parse(data);
-                    if (imageData.type === 'image') {
-                        addImageToContainer(imageData.data, imageData.name);
-                    }
-                } catch (error) {
-                    console.error('处理拖放数据失败:', error);
-                }
-            }
-        } catch (error) {
-            console.error('处理拖放事件失败:', error);
-        }
-    }
-
-    messageInput.addEventListener('drop', (e) => handleImageDrop(e, messageInput));
-
-    chatContainer.addEventListener('drop', (e) => handleImageDrop(e, chatContainer));
+    // 修改拖放处理
+    messageInput.addEventListener('drop', (e) => imageHandler.handleImageDrop(e, messageInput));
+    chatContainer.addEventListener('drop', (e) => imageHandler.handleImageDrop(e, chatContainer));
 
     // 阻止聊天区域的图片默认行为
     chatContainer.addEventListener('click', (e) => {
