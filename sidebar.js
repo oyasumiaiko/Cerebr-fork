@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const promptSettingsToggle = document.getElementById('prompt-settings-toggle');
     const promptSettings = document.getElementById('prompt-settings');
     const inputContainer = document.getElementById('input-container');
+    const regenerateButton = document.getElementById('regenerate-message');
+
     let currentMessageElement = null;
     let isTemporaryMode = false; // 添加临时模式状态变量
     let isProcessingMessage = false; // 添加消息处理状态标志
@@ -1848,23 +1850,32 @@ document.addEventListener('DOMContentLoaded', async () => {
             currentCodeBlock = null;
         }
 
+        // 调整菜单位置，确保菜单不超出视口
         const menuWidth = contextMenu.offsetWidth;
         const menuHeight = contextMenu.offsetHeight;
-
-        // 确保菜单不超出视口
         let x = e.clientX;
         let y = e.clientY;
-
         if (x + menuWidth > window.innerWidth) {
             x = window.innerWidth - menuWidth;
         }
-
         if (y + menuHeight > window.innerHeight) {
             y = window.innerHeight - menuHeight;
         }
-
         contextMenu.style.left = x + 'px';
         contextMenu.style.top = y + 'px';
+
+        // 新增：只在右键点击最后一条用户消息时显示"重新生成"按钮
+        if (messageElement.classList.contains('user-message')) {
+            // 获取所有用户消息
+            const userMessages = chatContainer.querySelectorAll('.user-message');
+            if (userMessages.length > 0 && messageElement === userMessages[userMessages.length - 1]) {
+                regenerateButton.style.display = 'flex';
+            } else {
+                regenerateButton.style.display = 'none';
+            }
+        } else {
+            regenerateButton.style.display = 'none';
+        }
     }
 
     // 添加复制代码块功能
@@ -2791,23 +2802,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     copyCodeButton.addEventListener('click', copyCodeContent);
     const deleteMessageButton = document.getElementById('delete-message');
     if (deleteMessageButton) {
-        deleteMessageButton.addEventListener('click', deleteMessageContent);
+        deleteMessageButton.addEventListener('click', (e) => {
+            deleteMessageContent(currentMessageElement);
+        });
     }
 
     /**
      * 删除指定消息的函数，更新 UI 和聊天历史树（维护继承关系）
      */
-    function deleteMessageContent() {
-        if (!currentMessageElement) return;
-        const messageId = currentMessageElement.getAttribute('data-message-id');
+    async function deleteMessageContent(messageElement) {
+        if (!messageElement) return;
+        const messageId = messageElement.getAttribute('data-message-id');
+        // 从 DOM 中删除该消息元素
+        messageElement.remove();
+
         if (!messageId) {
-            console.error("未找到消息ID, 无法删除消息");
+            console.error("未找到消息ID");
             hideContextMenu();
             return;
         }
-
-        // 从 DOM 中删除该消息元素
-        currentMessageElement.remove();
 
         // 删除聊天历史中的消息，并更新继承关系
         const success = deleteMessage(messageId);
@@ -2815,7 +2828,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error("删除消息失败: 未找到对应的消息节点");
         } else {
             // 更新并持久化聊天记录
-            saveCurrentConversation(true);
+            await saveCurrentConversation(true);
         }
         hideContextMenu();
     }
@@ -2972,6 +2985,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (!wasVisible) {
             promptSettings.classList.toggle('visible');
+        }
+    });
+
+    // 新增：添加重新生成消息的按钮事件处理
+    regenerateButton.addEventListener('click', async () => {
+        // 获取当前聊天区域中的所有消息
+        const messages = chatContainer.querySelectorAll('.message');
+        if (messages.length > 0) {
+            const lastMessage = messages[messages.length - 1];
+            // 如果最后一条消息是助手消息，则删除
+            if (lastMessage.classList.contains('ai-message')) {
+                await deleteMessageContent(lastMessage);
+            }
+            // 调用发送消息接口，重新生成助手回复
+            sendMessage();
+            hideContextMenu();
         }
     });
 });
