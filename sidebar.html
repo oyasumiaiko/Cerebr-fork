@@ -13,57 +13,39 @@
     <script src="lib/cytoscape-dagre.js"></script>
     <script src="lib/html2canvas.min.js"></script>
 
+    <link rel="stylesheet" href="lib/font-awesome-6-pro-main/css/all.css">
     <link rel="stylesheet" href="lib/github-dark.css">
     <link rel="stylesheet" href="lib/katex.min.css">
     <link rel="stylesheet" href="sidebar.css">
 </head>
 <body>
     <div id="collapse-button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 4L7 12L15 20"/>
-        </svg>
+        <i class="fas fa-chevron-left"></i>
     </div>
     <div id="chat-container"></div>
     <div id="context-menu">
         <div class="context-menu-item" id="copy-message">
-            <svg viewBox="0 0 24 24">
-                <rect x="8" y="8" width="12" height="12" rx="1"/>
-                <path d="M4 16V4a1 1 0 0 1 1-1h11"/>
-            </svg>
+            <i class="fas fa-copy"></i>
             复制消息
         </div>
         <div class="context-menu-item" id="copy-code" style="display: none;">
-            <svg viewBox="0 0 24 24">
-                <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2v-3M16 3h5v5M21 3L9 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+            <i class="fas fa-code"></i>
             复制代码
         </div>
         <div class="context-menu-item" id="stop-update">
-            <svg viewBox="0 0 24 24">
-                <path d="M6 6h12v12H6z"/>
-            </svg>
+            <i class="fas fa-stop"></i>
             停止更新
         </div>
         <div class="context-menu-item" id="delete-message">
-            <svg viewBox="0 0 24 24" fill="none">
-                <path d="M3 6h18" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M8 6V4h8v2" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M10 10v6" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M14 10v6" stroke="currentColor" stroke-width="1.5"/>
-            </svg>
+            <i class="fas fa-trash-alt"></i>
             删除消息
         </div>
         <div class="context-menu-item" id="regenerate-message" style="display: none;">
-            <svg viewBox="0 0 24 24">
-                <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 .34-.03.67-.08 1h2.02a8.996 8.996 0 0 0 0-8c-4.42 0-8 3.58-8 8 0 .34.03.67.08 1H12"/>
-            </svg>
+            <i class="fas fa-redo"></i>
             重新生成
         </div>
         <div class="context-menu-item" id="clear-chat-context">
-            <svg viewBox="0 0 24 24" fill="none">
-                <path d="M3 4H13" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M5 4V12H11V4" stroke="currentColor" stroke-width="1.5"/>
-            </svg>
+            <i class="fas fa-trash"></i>
             清空聊天
         </div>
     </div>
@@ -130,21 +112,18 @@
                         </svg>
                     </div>
                     <div class="menu-item" id="prompt-settings-toggle">
+                        <i class="fas fa-cogs"></i>
                         <span>提示词设置</span>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M6 12L10 8L6 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
                     </div>
                     <div class="menu-item" id="api-settings-toggle">
+                        <i class="fas fa-plug"></i>
                         <span>API 设置</span>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M6 12L10 8L6 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
                     </div>
                     <div class="menu-item" id="debug-chat-tree-btn">
                         <span>调试聊天记录树</span>
                     </div>
                     <div class="menu-item" id="favorite-apis" style="display: none;">
+                        <i class="fas fa-star"></i>
                         <span>收藏的API</span>
                         <div class="favorite-apis-list"></div>
                     </div>
@@ -164,16 +143,12 @@
                         <span id="scale-value">1.0x</span>
                     </div>
                     <div class="menu-item" id="fullscreen-toggle">
+                        <i class="fas fa-expand"></i>
                         <span>全屏模式</span>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M2 6V2H6M10 2H14V6M14 10V14H10M6 14H2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
                     </div>
                     <div class="menu-item" id="chat-history-menu">
+                        <i class="fas fa-history"></i>
                         <span>聊天记录</span>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M6 12L10 8L6 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
                     </div>
                 </div>
             </div>
@@ -195,25 +170,23 @@
                     <div class="api-card-title"></div>
                     <div class="api-card-actions">
                         <button class="card-button select-btn" title="选择">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M13 5L6 12L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
+                            <i class="fas fa-check"></i>
                         </button>
                         <button class="card-button favorite-btn" title="收藏">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M8 2L9.8 5.6L14 6.2L11 9.1L11.8 13.2L8 11.3L4.2 13.2L5 9.1L2 6.2L6.2 5.6L8 2Z" stroke="currentColor" stroke-width="1.5"/>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M8 2L9.8 5.6L14 6.2L11 9.1L11.8 13.2L8 11.3L4.2 13.2L5 9.1L2 6.2L6.2 5.6L8 2Z" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
                         <button class="card-button duplicate-btn" title="复制">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M13 5H7V11H13V5Z" stroke="currentColor" stroke-width="1.5"/>
-                                <path d="M10 3H4V9" stroke="currentColor" stroke-width="1.5"/>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M13 5H7V11H13V5Z" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M10 3H4V9" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
                         <button class="card-button delete-btn" title="删除">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M3 4H13" stroke="currentColor" stroke-width="1.5"/>
-                                <path d="M5 4V12H11V4" stroke="currentColor" stroke-width="1.5"/>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 4H13" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M5 4V12H11V4" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
                     </div>
