@@ -351,17 +351,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return match ? match[1].trim() : '';
     }
 
-
-    //这段逻辑太扯淡了，需要重构
-    //为什么扯淡：
-    //1. 本来应该用参数传递的消息，居然绕了一大圈，先append到界面，再清空，再获取消息内容
-
-    // 怎么重构：
-    //1. 用参数传递消息，不要绕一大圈
-
-
-
-
     async function sendMessage() {
         
         function clearMessageInput() {
