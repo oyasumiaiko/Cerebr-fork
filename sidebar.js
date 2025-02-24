@@ -2454,13 +2454,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             listContainer.id = 'chat-history-list';
             panel.appendChild(listContainer);
             document.body.appendChild(panel);
-
-            // --- Modified: Close panel only when clicking on chat-container ---
-            chatContainer.addEventListener('click', function onChatContainerClick(event) {
-                closeChatHistoryPanel();
-                chatContainer.removeEventListener('click', onChatContainerClick);
-            });
-            // --- End Modified ---
         }
         // 加载默认（不过滤）的对话记录列表
         loadConversationHistories(panel, '');
@@ -2471,6 +2464,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         panel.classList.add('visible');
     }
 
+    // 点击聊天记录面板外关闭面板
+    chatContainer.addEventListener('click', (e) => {
+        closeChatHistoryPanel();
+    });
+    
     /**
      * 格式化相对时间字符串
      * @param {Date} date - 日期对象
@@ -2727,12 +2725,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentConversationId = conversation.id;
     }
 
-    // 添加聊天记录菜单项监听
+    // 点击聊天记录菜单项
     const chatHistoryMenuItem = document.getElementById('chat-history-menu');
     if (chatHistoryMenuItem) {
         chatHistoryMenuItem.addEventListener('click', () => {
+            const isOpen = IsChatHistoryPanelOpen();
             closeExclusivePanels();
-            showChatHistoryPanel();
+            if (!isOpen) {
+                showChatHistoryPanel();
+            }
         });
     }
 
@@ -2828,8 +2829,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // 在DOM加载后（例如在 document.addEventListener('DOMContentLoaded', async () => { 内部合适位置新增如下代码）
-
     /**
      * 备份当前 IndexedDB 中的所有对话记录为 JSON 文件
      * @returns {Promise<void>}
@@ -2914,9 +2913,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log("图片插入到图片容器");
     }
 
-    // 新增：dummy 方法，用于显示已发送的图片消息（先删除旧的显示方式，后续再改）
-    function dummyDisplayImageMessage() {
-        return "[图片消息已删除]";
+    function IsChatHistoryPanelOpen() {
+        const panel = document.getElementById('chat-history-panel');
+        if (panel && panel.classList.contains('visible')) {
+            return true;
+        }
+        return false;
     }
 
     // 新增：统一关闭聊天记录面板的函数
@@ -2935,8 +2937,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ----- 修改 5：新增切换函数 -----
     function toggleChatHistoryPanel() {
-        const panel = document.getElementById('chat-history-panel');
-        if (panel && panel.classList.contains('visible')) {
+        if (IsChatHistoryPanelOpen()) {
             closeChatHistoryPanel();
         } else {
             showChatHistoryPanel();
