@@ -1,0 +1,3 @@
+[submodule "lib/fontawesome"]
+	path = lib/fontawesome
+	url = https://github.com/vanphonggiang/font-awesome-6-pro

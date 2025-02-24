@@ -1,0 +1,24 @@
+# Node 相关（如果你使用 npm/yarn 管理依赖）
+node_modules/
+
+# 构建输出目录（根据实际情况调整）
+dist/
+build/
+
+# 日志和临时文件
+*.log
+*.tmp
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# IDE/编辑器相关
+.vscode/
+.idea/
+
+# 其他工具生成的缓存文件
+.cache/
+*.sublime-workspace
+
+# 注意：不要忽略 fontawesome 子模块目录，因为它在 .gitmodules 中记录
