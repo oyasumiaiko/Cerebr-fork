@@ -1,0 +1,26 @@
+// 此次重构已将聊天历史相关功能移动到chat_history_ui.js模块中，但sidebar.js中仍保留了一些冗余函数
+// 在后续清理工作中，应删除sidebar.js中的以下函数，因为它们已经有对应的chatHistoryUI模块方法:
+
+// 1. saveCurrentConversation (第1720-1803行):
+//    已替换为 chatHistoryUI.saveCurrentConversation
+
+// 2. showChatHistoryPanel (第1804-1888行):
+//    已替换为 chatHistoryUI.showChatHistoryPanel
+
+// 3. formatRelativeTime (第1889-1909行):
+//    已在chatHistoryUI模块内实现
+
+// 4. getGroupLabel (第1910-1937行):
+//    已在chatHistoryUI模块内实现
+
+// 5. loadConversationHistories (第1938-2099行):
+//    已在chatHistoryUI模块内实现
+
+// 6. loadConversationIntoChat (第2100-2143行):
+//    已替换为 chatHistoryUI.loadConversationIntoChat
+
+// 7. showChatHistoryItemContextMenu (第2160-2198行):
+//    已在chatHistoryUI模块内实现
+
+// 以上函数已完全通过chatHistoryUI实例方法进行替换，所有对这些函数的调用都已更新。
+// 删除这些函数不会影响程序功能，只会删除冗余代码。
