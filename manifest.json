@@ -49,17 +49,13 @@
     }
   },
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "src/extension/background.js",
     "type": "module"
   },
   "web_accessible_resources": [{
     "resources": [
-      "sidebar.html",
-      "lib/*",
-      "sidebar-message-handler.js",
-      "prompt_settings.js",
-      "chat_history_manager.js",
-      "indexeddb_helper.js"
+      "src/ui/sidebar/sidebar.html",
+      "lib/*"
     ],
     "matches": ["<all_urls>"]
   }],
@@ -68,8 +64,8 @@
       "matches": ["<all_urls>"],
       "js": [
         "lib/pdf.js",
-        "element-picker.js",
-        "content.js"
+        "src/utils/element-picker.js",
+        "src/extension/content.js"
       ],
       "run_at": "document_start"
     }

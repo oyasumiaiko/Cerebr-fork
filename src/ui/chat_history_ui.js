@@ -3,7 +3,7 @@
  * @module ChatHistoryUI
  */
 
-import { getAllConversations, putConversation, deleteConversation, getConversationById } from './indexeddb_helper.js';
+import { getAllConversations, putConversation, deleteConversation, getConversationById } from '../storage/indexeddb_helper.js';
 
 /**
  * 创建聊天历史UI管理器

@@ -1,16 +1,14 @@
-import { PromptSettings } from './prompt_settings.js';
-import { createChatHistoryManager } from './chat_history_manager.js';
-import { getAllConversations, putConversation, deleteConversation, getConversationById } from './indexeddb_helper.js';
-import { initTreeDebugger } from './tree_debugger.js';
-import { GoogleGenerativeAI } from './lib/generative-ai.js'; // 导入生成式 AI 模块
-import { createMessageProcessor } from './message_processor.js'; // 导入消息处理模块
-import { createImageHandler } from './image_handler.js'; // 导入图片处理模块
-import { createChatHistoryUI } from './chat_history_ui.js'; // 导入聊天历史UI模块
-import { createApiManager } from './api_settings.js'; // 导入 API 设置模块
-import { createMessageSender } from './message_sender.js'; // 导入消息发送模块
-import { createSettingsManager } from './settings_manager.js'; // 导入设置管理模块
-import { createContextMenuManager } from './context_menu_manager.js'; // 导入上下文菜单管理模块
-import { createUIManager } from './ui_manager.js'; // 导入UI管理模块
+import { PromptSettings } from '../../core/prompt_settings.js';
+import { createChatHistoryManager } from '../../core/chat_history_manager.js';
+import { initTreeDebugger } from '../../debug/tree_debugger.js';
+import { createMessageProcessor } from '../../core/message_processor.js'; // 导入消息处理模块
+import { createImageHandler } from '../../utils/image_handler.js'; // 导入图片处理模块
+import { createChatHistoryUI } from '../chat_history_ui.js'; // 导入聊天历史UI模块
+import { createApiManager } from '../../api/api_settings.js'; // 导入 API 设置模块
+import { createMessageSender } from '../../core/message_sender.js'; // 导入消息发送模块
+import { createSettingsManager } from '../settings_manager.js'; // 导入设置管理模块
+import { createContextMenuManager } from '../context_menu_manager.js'; // 导入上下文菜单管理模块
+import { createUIManager } from '../ui_manager.js'; // 导入UI管理模块
 
 document.addEventListener('DOMContentLoaded', async () => {
     // DOM 元素获取
@@ -62,38 +60,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             requestScreenshot();
         });
     }
-
-    /**
-     * 迁移旧有的 chrome.storage.local 对话记录到 IndexedDB
-     * @returns {Promise<void>}
-     */
-    async function migrateLocalHistoriesToIndexedDB() {
-        return new Promise((resolve) => {
-            chrome.storage.local.get({ conversationHistories: [] }, async (result) => {
-                const localHistories = result.conversationHistories;
-                if (localHistories && localHistories.length > 0) {
-                    console.log("检测到 local storage 中已有对话记录，开始迁移到 IndexedDB...");
-                    for (const conv of localHistories) {
-                        try {
-                            await putConversation(conv);
-                        } catch (error) {
-                            console.error("迁移对话记录失败:", conv.id, error);
-                        }
-                    }
-                    chrome.storage.local.remove("conversationHistories", () => {
-                        console.log("迁移完成：已从 chrome.storage.local 移除 conversationHistories");
-                        resolve();
-                    });
-                } else {
-                    console.log("没有检测到需要迁移的 local storage 对话记录");
-                    resolve();
-                }
-            });
-        });
-    }
-
-    // 执行对话记录的迁移
-    await migrateLocalHistoriesToIndexedDB();
 
     // 创建聊天历史管理器实例
     const {

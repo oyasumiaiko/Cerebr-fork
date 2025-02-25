@@ -135,7 +135,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return null;
           }
 
-          if (!sender.url || !sender.url.includes('sidebar.html')) {
+          if (!sender.url || !sender.url.includes('src/ui/sidebar/sidebar.html')) {
             return null;
           }
 
