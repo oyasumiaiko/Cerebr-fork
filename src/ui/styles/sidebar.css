@@ -2300,3 +2300,314 @@ body.hide-references .reference-number.superscript {
 #chat-history-panel .switch-container {
     margin-right: 12px;
 }
+
+/* 聊天历史标签切换样式 */
+.history-tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--cerebr-border-color);
+    margin-bottom: 16px;
+}
+
+.history-tab {
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s ease;
+    opacity: 0.7;
+}
+
+.history-tab:hover {
+    opacity: 1;
+    background-color: var(--cerebr-hover-color);
+}
+
+.history-tab.active {
+    border-bottom-color: var(--cerebr-blue);
+    opacity: 1;
+    font-weight: 500;
+}
+
+.history-tab-contents {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.history-tab-content {
+    display: none;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--cerebr-border-color) transparent;
+}
+
+.history-tab-content.active {
+    display: flex;
+    flex-direction: column;
+}
+
+.history-tab-content::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.history-tab-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.history-tab-content::-webkit-scrollbar-thumb {
+    background-color: var(--cerebr-border-color);
+    border-radius: 3px;
+}
+
+/* 数据库统计面板样式 */
+.db-stats-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 4px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.db-stats-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--cerebr-border-color);
+}
+
+.db-stats-title {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.db-stats-refresh {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    transition: all 0.2s ease;
+}
+
+.db-stats-refresh:hover {
+    background-color: var(--cerebr-hover-color);
+    transform: rotate(30deg);
+}
+
+.db-stats-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: 16px;
+}
+
+.db-stats-card {
+    background-color: var(--cerebr-message-ai-bg);
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    transition: all 0.2s ease;
+}
+
+.db-stats-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.db-stats-card-header {
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 12px;
+    color: var(--cerebr-text-color);
+    opacity: 0.8;
+}
+
+.db-stats-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.db-stats-metric {
+    flex: 1;
+    min-width: 80px;
+    text-align: center;
+}
+
+.db-stats-metric-value {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.db-stats-metric-value.highlight {
+    font-size: 18px;
+    color: var(--cerebr-blue);
+}
+
+.db-stats-metric-label {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* 时间线样式 */
+.db-stats-metrics.timeline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.db-stats-metric.time-span {
+    position: relative;
+}
+
+.db-stats-metric.time-span::before,
+.db-stats-metric.time-span::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 30px;
+    height: 1px;
+    background-color: var(--cerebr-border-color);
+}
+
+.db-stats-metric.time-span::before {
+    right: 100%;
+    margin-right: 8px;
+}
+
+.db-stats-metric.time-span::after {
+    left: 100%;
+    margin-left: 8px;
+}
+
+/* 空内容状态 */
+.db-stats-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 60px;
+    opacity: 0.5;
+}
+
+/* 图表样式 */
+.db-stats-chart-container {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+.db-stats-chart {
+    display: flex;
+    align-items: center;
+    max-width: 300px;
+}
+
+.circular-chart {
+    width: 150px;
+    height: 150px;
+}
+
+.circle-bg {
+    fill: none;
+    stroke: var(--cerebr-border-color);
+    stroke-width: 2;
+}
+
+.circle {
+    fill: none;
+    stroke-width: 3;
+    stroke-linecap: round;
+    transform: rotate(-90deg);
+    transform-origin: center;
+    transition: stroke-dasharray 0.8s ease;
+}
+
+.circle.text-data {
+    stroke: var(--cerebr-blue);
+}
+
+.circle.image-data {
+    stroke: #ff9500;
+}
+
+.percentage {
+    font-size: 8px;
+    text-anchor: middle;
+    fill: var(--cerebr-text-color);
+    font-weight: bold;
+}
+
+.chart-legend {
+    margin-left: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+.legend-color.text-color {
+    background-color: var(--cerebr-blue);
+}
+
+.legend-color.image-color {
+    background-color: #ff9500;
+}
+
+/* 统计面板页脚 */
+.db-stats-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 12px;
+    border-top: 1px solid var(--cerebr-border-color);
+    margin-top: 16px;
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* 深色模式适配 */
+:root.dark-theme .db-stats-card {
+    background-color: var(--cerebr-message-ai-bg);
+}
+
+:root.dark-theme .db-stats-metric-value.highlight {
+    color: rgb(50, 145, 255);
+}
+
+:root.dark-theme .circle.text-data {
+    stroke: rgb(50, 145, 255);
+}
+
+:root.dark-theme .circle.image-data {
+    stroke: #ff9f0a;
+}
+
+:root.dark-theme .legend-color.text-color {
+    background-color: rgb(50, 145, 255);
+}
+
+:root.dark-theme .legend-color.image-color {
+    background-color: #ff9f0a;
+}

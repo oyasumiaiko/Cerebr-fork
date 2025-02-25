@@ -279,4 +279,129 @@ export function releaseConversationMemory(conversation) {
   });
   
   return lightConversation;
+}
+
+/**
+ * 获取数据库存储统计信息
+ * @returns {Promise<Object>} 包含数据库统计信息的对象
+ */
+export async function getDatabaseStats() {
+  try {
+    const db = await openChatHistoryDB();
+    
+    // 获取所有会话
+    const conversations = await getAllConversations();
+    
+    // 获取所有分离的消息内容
+    const contentRefs = await new Promise((resolve, reject) => {
+      const transaction = db.transaction('messageContents', 'readonly');
+      const store = transaction.objectStore('messageContents');
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    
+    // 计算统计信息
+    let totalMessages = 0;
+    let totalImageMessages = 0;
+    let totalTextSize = 0;
+    let totalImageSize = 0;
+    let largestMessage = 0;
+    let oldestMessageDate = Date.now();
+    let newestMessageDate = 0;
+    
+    // 分析会话数据
+    conversations.forEach(conv => {
+      if (conv.messages) {
+        totalMessages += conv.messages.length;
+        
+        conv.messages.forEach(msg => {
+          // 计算时间范围
+          if (msg.timestamp) {
+            oldestMessageDate = Math.min(oldestMessageDate, msg.timestamp);
+            newestMessageDate = Math.max(newestMessageDate, msg.timestamp);
+          }
+          
+          // 检查内容类型和大小
+          if (msg.content) {
+            if (typeof msg.content === 'string') {
+              totalTextSize += msg.content.length * 2; // 估算UTF-16字符串大小
+              largestMessage = Math.max(largestMessage, msg.content.length * 2);
+            } else if (Array.isArray(msg.content)) {
+              // 处理图片和文本混合内容
+              let msgSize = 0;
+              msg.content.forEach(part => {
+                if (part.type === 'text' && part.text) {
+                  msgSize += part.text.length * 2;
+                  totalTextSize += part.text.length * 2;
+                } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+                  // 估算base64图片大小（大约是base64字符串长度的3/4）
+                  const imageSize = Math.round((part.image_url.url.length * 3) / 4);
+                  msgSize += imageSize;
+                  totalImageSize += imageSize;
+                  totalImageMessages++;
+                }
+              });
+              largestMessage = Math.max(largestMessage, msgSize);
+            }
+          }
+        });
+      }
+    });
+    
+    // 分析分离存储的内容
+    contentRefs.forEach(ref => {
+      if (ref.content) {
+        if (typeof ref.content === 'string') {
+          totalTextSize += ref.content.length * 2;
+        } else if (Array.isArray(ref.content)) {
+          ref.content.forEach(part => {
+            if (part.type === 'text' && part.text) {
+              totalTextSize += part.text.length * 2;
+            } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+              // 估算base64图片大小
+              totalImageSize += Math.round((part.image_url.url.length * 3) / 4);
+            }
+          });
+        }
+      }
+    });
+    
+    // 格式化大小为人类可读格式
+    const formatSize = (bytes) => {
+      if (bytes === 0) return '0 B';
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+    };
+    
+    // 计算时间跨度
+    const timeSpanDays = (newestMessageDate - oldestMessageDate) / (1000 * 60 * 60 * 24);
+    
+    return {
+      conversationsCount: conversations.length,
+      messagesCount: totalMessages,
+      imageMessagesCount: totalImageMessages,
+      messageContentRefsCount: contentRefs.length,
+      totalTextSize: totalTextSize,
+      totalTextSizeFormatted: formatSize(totalTextSize),
+      totalImageSize: totalImageSize,
+      totalImageSizeFormatted: formatSize(totalImageSize),
+      totalSize: totalTextSize + totalImageSize,
+      totalSizeFormatted: formatSize(totalTextSize + totalImageSize),
+      largestMessageSize: largestMessage,
+      largestMessageSizeFormatted: formatSize(largestMessage),
+      oldestMessageDate: oldestMessageDate !== Date.now() ? new Date(oldestMessageDate) : null,
+      newestMessageDate: newestMessageDate !== 0 ? new Date(newestMessageDate) : null,
+      timeSpanDays: timeSpanDays > 0 ? Math.round(timeSpanDays) : 0
+    };
+  } catch (error) {
+    console.error('获取数据库统计信息失败:', error);
+    return {
+      error: error.message,
+      conversationsCount: 0,
+      messagesCount: 0,
+      totalSizeFormatted: '0 B'
+    };
+  }
 } 

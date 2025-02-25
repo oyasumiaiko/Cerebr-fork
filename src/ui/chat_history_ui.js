@@ -9,7 +9,8 @@ import {
   putConversation, 
   deleteConversation, 
   getConversationById,
-  releaseConversationMemory
+  releaseConversationMemory,
+  getDatabaseStats
 } from '../storage/indexeddb_helper.js';
 
 /**
@@ -41,6 +42,11 @@ export function createChatHistoryUI(options) {
   let maxLoadedConversations = 5;      // 最大加载到内存的会话数
   let loadedConversations = new Map(); // 已加载到内存的会话缓存
   let conversationUsageTimestamp = new Map(); // 记录会话最后使用时间
+  
+  // 缓存数据库统计信息
+  let cachedDbStats = null;
+  let lastStatsUpdateTime = 0;
+  const STATS_CACHE_DURATION = 5 * 60 * 1000; // 5分钟更新一次统计数据
 
   /**
    * 提取消息的纯文本内容
@@ -670,15 +676,236 @@ export function createChatHistoryUI(options) {
   }
 
   /**
+   * 获取数据库统计信息，优先使用缓存
+   * @param {boolean} [forceUpdate=false] - 是否强制更新
+   * @returns {Promise<Object>} 数据库统计信息
+   */
+  async function getDbStatsWithCache(forceUpdate = false) {
+    const now = Date.now();
+    if (forceUpdate || !cachedDbStats || (now - lastStatsUpdateTime > STATS_CACHE_DURATION)) {
+      cachedDbStats = await getDatabaseStats();
+      lastStatsUpdateTime = now;
+    }
+    return cachedDbStats;
+  }
+  
+  /**
+   * 渲染数据库统计信息面板
+   * @param {Object} stats - 数据库统计数据
+   * @returns {HTMLElement} 统计信息面板元素
+   */
+  function renderStatsPanel(stats) {
+    const statsPanel = document.createElement('div');
+    statsPanel.className = 'db-stats-panel';
+    
+    // 添加标题
+    const header = document.createElement('div');
+    header.className = 'db-stats-header';
+    header.innerHTML = `
+      <span class="db-stats-title">数据统计</span>
+      <span class="db-stats-refresh" title="刷新统计数据">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 4v6h-6"></path>
+          <path d="M1 20v-6h6"></path>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+          <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+      </span>
+    `;
+    
+    // 点击刷新按钮刷新统计数据
+    const refreshBtn = header.querySelector('.db-stats-refresh');
+    refreshBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const updatedStats = await getDbStatsWithCache(true);
+      
+      // 查找父级面板并更新
+      const parentPanel = document.getElementById('chat-history-panel');
+      if (parentPanel) {
+        const oldStatsPanel = parentPanel.querySelector('.db-stats-panel');
+        if (oldStatsPanel) {
+          const newStatsPanel = renderStatsPanel(updatedStats);
+          oldStatsPanel.replaceWith(newStatsPanel);
+        }
+      }
+    });
+    
+    statsPanel.appendChild(header);
+    
+    // 创建内容区域 - 使用卡片布局
+    const statsContent = document.createElement('div');
+    statsContent.className = 'db-stats-content';
+    
+    // 第一行卡片：存储概览
+    const overviewCard = document.createElement('div');
+    overviewCard.className = 'db-stats-card overview-card';
+    overviewCard.innerHTML = `
+      <div class="db-stats-card-header">存储概览</div>
+      <div class="db-stats-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value highlight">${stats.totalSizeFormatted}</div>
+          <div class="db-stats-metric-label">总存储大小</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.totalTextSizeFormatted}</div>
+          <div class="db-stats-metric-label">文本数据</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.totalImageSizeFormatted}</div>
+          <div class="db-stats-metric-label">图片数据</div>
+        </div>
+      </div>
+    `;
+    
+    // 第二行卡片：聊天统计
+    const chatStatsCard = document.createElement('div');
+    chatStatsCard.className = 'db-stats-card chat-stats-card';
+    chatStatsCard.innerHTML = `
+      <div class="db-stats-card-header">聊天统计</div>
+      <div class="db-stats-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.conversationsCount}</div>
+          <div class="db-stats-metric-label">会话总数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.messagesCount}</div>
+          <div class="db-stats-metric-label">消息总数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.imageMessagesCount}</div>
+          <div class="db-stats-metric-label">图片消息</div>
+        </div>
+      </div>
+    `;
+    
+    // 第三行卡片：时间跨度
+    const timeCard = document.createElement('div');
+    timeCard.className = 'db-stats-card time-card';
+    
+    let timeContent = '<div class="db-stats-card-header">时间跨度</div>';
+    
+    if (stats.oldestMessageDate && stats.newestMessageDate) {
+      const formatDate = (date) => {
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      };
+      
+      timeContent += `
+        <div class="db-stats-metrics timeline">
+          <div class="db-stats-metric">
+            <div class="db-stats-metric-value">${formatDate(stats.oldestMessageDate)}</div>
+            <div class="db-stats-metric-label">最早消息</div>
+          </div>
+          <div class="db-stats-metric time-span">
+            <div class="db-stats-metric-value">${stats.timeSpanDays} 天</div>
+            <div class="db-stats-metric-label">总时长</div>
+          </div>
+          <div class="db-stats-metric">
+            <div class="db-stats-metric-value">${formatDate(stats.newestMessageDate)}</div>
+            <div class="db-stats-metric-label">最新消息</div>
+          </div>
+        </div>
+      `;
+    } else {
+      timeContent += `
+        <div class="db-stats-empty">
+          <div class="db-stats-empty-text">暂无消息数据</div>
+        </div>
+      `;
+    }
+    
+    timeCard.innerHTML = timeContent;
+    
+    // 第四行卡片：技术信息
+    const techCard = document.createElement('div');
+    techCard.className = 'db-stats-card tech-card';
+    techCard.innerHTML = `
+      <div class="db-stats-card-header">技术指标</div>
+      <div class="db-stats-metrics tech-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.largestMessageSizeFormatted}</div>
+          <div class="db-stats-metric-label">最大消息</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.messageContentRefsCount}</div>
+          <div class="db-stats-metric-label">分离存储数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${loadedConversations.size}</div>
+          <div class="db-stats-metric-label">内存缓存数</div>
+        </div>
+      </div>
+    `;
+    
+    // 添加所有卡片到内容区域
+    statsContent.appendChild(overviewCard);
+    statsContent.appendChild(chatStatsCard);
+    statsContent.appendChild(timeCard);
+    statsContent.appendChild(techCard);
+    
+    // 添加饼图显示数据比例
+    if (stats.totalTextSize > 0 || stats.totalImageSize > 0) {
+      const chartContainer = document.createElement('div');
+      chartContainer.className = 'db-stats-chart-container';
+      
+      const totalSize = stats.totalTextSize + stats.totalImageSize;
+      const textPercentage = Math.round((stats.totalTextSize / totalSize) * 100);
+      const imagePercentage = 100 - textPercentage;
+      
+      chartContainer.innerHTML = `
+        <div class="db-stats-chart">
+          <svg viewBox="0 0 36 36" class="circular-chart">
+            <path class="circle-bg" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <path class="circle image-data" stroke-dasharray="${imagePercentage}, 100" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <path class="circle text-data" stroke-dasharray="${textPercentage}, 100" stroke-dashoffset="-${imagePercentage}" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <text x="18" y="20.35" class="percentage">${textPercentage}%</text>
+          </svg>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <span class="legend-color text-color"></span>
+              <span class="legend-label">文本 (${textPercentage}%)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color image-color"></span>
+              <span class="legend-label">图片 (${imagePercentage}%)</span>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      statsContent.appendChild(chartContainer);
+    }
+    
+    statsPanel.appendChild(statsContent);
+    
+    // 添加更新时间戳
+    const footer = document.createElement('div');
+    footer.className = 'db-stats-footer';
+    footer.innerHTML = `
+      <div class="db-stats-update-time">
+        最后更新: ${new Date(lastStatsUpdateTime).toLocaleTimeString()}
+      </div>
+    `;
+    statsPanel.appendChild(footer);
+    
+    return statsPanel;
+  }
+
+  /**
    * 显示聊天记录面板
    */
-  function showChatHistoryPanel() {
+  async function showChatHistoryPanel() {
     let panel = document.getElementById('chat-history-panel');
     if (!panel) {
       panel = document.createElement('div');
       panel.id = 'chat-history-panel';
 
-      // 添加标题栏（包含标题、备份、还原和关闭按钮在同一行）
+      // 添加标题栏
       const header = document.createElement('div');
       header.className = 'panel-header';
 
@@ -686,7 +913,7 @@ export function createChatHistoryUI(options) {
       title.textContent = '聊天记录';
       title.className = 'panel-title';
 
-      // 创建按钮容器，将备份、还原和关闭按钮放在同一行，样式与关闭按钮一致
+      // 创建按钮容器
       const headerActions = document.createElement('div');
       headerActions.className = 'header-actions';
 
@@ -715,6 +942,33 @@ export function createChatHistoryUI(options) {
       header.appendChild(headerActions);
       panel.appendChild(header);
 
+      // 创建标签切换栏
+      const tabBar = document.createElement('div');
+      tabBar.className = 'history-tab-bar';
+      
+      const historyTab = document.createElement('div');
+      historyTab.className = 'history-tab active';
+      historyTab.textContent = '聊天记录';
+      historyTab.dataset.tab = 'history';
+      
+      const statsTab = document.createElement('div');
+      statsTab.className = 'history-tab';
+      statsTab.textContent = '数据统计';
+      statsTab.dataset.tab = 'stats';
+      
+      tabBar.appendChild(historyTab);
+      tabBar.appendChild(statsTab);
+      panel.appendChild(tabBar);
+      
+      // 创建标签内容区域
+      const tabContents = document.createElement('div');
+      tabContents.className = 'history-tab-contents';
+      
+      // 聊天记录标签内容
+      const historyContent = document.createElement('div');
+      historyContent.className = 'history-tab-content active';
+      historyContent.dataset.tab = 'history';
+      
       // 域名筛选输入框
       const filterContainer = document.createElement('div');
       filterContainer.className = 'filter-container';
@@ -729,14 +983,59 @@ export function createChatHistoryUI(options) {
         }, 300);
       });
       filterContainer.appendChild(filterInput);
-      panel.appendChild(filterContainer);
+      historyContent.appendChild(filterContainer);
 
       // 列表容器
       const listContainer = document.createElement('div');
       listContainer.id = 'chat-history-list';
-      panel.appendChild(listContainer);
+      historyContent.appendChild(listContainer);
+      
+      // 统计数据标签内容
+      const statsContent = document.createElement('div');
+      statsContent.className = 'history-tab-content';
+      statsContent.dataset.tab = 'stats';
+      
+      // 加载统计信息
+      const statsData = await getDbStatsWithCache();
+      const statsPanel = renderStatsPanel(statsData);
+      statsContent.appendChild(statsPanel);
+      
+      // 添加标签内容到容器
+      tabContents.appendChild(historyContent);
+      tabContents.appendChild(statsContent);
+      panel.appendChild(tabContents);
+      
+      // 设置标签切换事件
+      tabBar.addEventListener('click', (e) => {
+        if (e.target.classList.contains('history-tab')) {
+          // 移除所有标签和内容的active类
+          tabBar.querySelectorAll('.history-tab').forEach(tab => tab.classList.remove('active'));
+          tabContents.querySelectorAll('.history-tab-content').forEach(content => content.classList.remove('active'));
+          
+          // 给点击的标签和对应内容添加active类
+          e.target.classList.add('active');
+          const tabName = e.target.dataset.tab;
+          tabContents.querySelector(`.history-tab-content[data-tab="${tabName}"]`).classList.add('active');
+        }
+      });
+      
       document.body.appendChild(panel);
+    } else {
+      // 如果面板已存在，更新统计数据
+      const statsContent = panel.querySelector('.history-tab-content[data-tab="stats"]');
+      if (statsContent) {
+        const statsData = await getDbStatsWithCache();
+        const statsPanel = renderStatsPanel(statsData);
+        
+        const oldStatsPanel = statsContent.querySelector('.db-stats-panel');
+        if (oldStatsPanel) {
+          oldStatsPanel.replaceWith(statsPanel);
+        } else {
+          statsContent.appendChild(statsPanel);
+        }
+      }
     }
+    
     // 加载默认（不过滤）的对话记录列表
     loadConversationHistories(panel, '');
 
