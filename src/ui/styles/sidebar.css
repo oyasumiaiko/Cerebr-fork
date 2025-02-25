@@ -2663,30 +2663,81 @@ body.hide-references .reference-number.superscript {
 /* 主题预览卡片 - 用于将来扩展 */
 .theme-preview-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
     gap: 10px;
-    margin-top: 10px;
+    margin-top: 12px;
     max-height: 200px;
     overflow-y: auto;
+    scrollbar-width: thin;
+    padding: 4px;
+}
+
+.theme-preview-grid::-webkit-scrollbar {
+    width: 4px;
+}
+
+.theme-preview-grid::-webkit-scrollbar-thumb {
+    background-color: var(--cerebr-border-color);
+    border-radius: 4px;
 }
 
 .theme-preview-card {
     position: relative;
     border-radius: 6px;
-    height: 80px;
+    height: 60px;
     cursor: pointer;
     overflow: hidden;
-    transition: transform 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     border: 2px solid transparent;
+    display: flex;
+    flex-direction: column;
 }
 
 .theme-preview-card:hover {
-    transform: translateY(-2px);
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    z-index: 1;
 }
 
 .theme-preview-card.active {
     border-color: var(--cerebr-blue);
+}
+
+.theme-preview-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.theme-preview-header {
+    height: 20px;
+    background: var(--preview-bg);
+}
+
+.theme-preview-messages {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 3px;
+    background: var(--preview-body-bg);
+}
+
+.theme-preview-message {
+    width: 70%;
+    height: 5px;
+    border-radius: 3px;
+    margin: 2px 0;
+}
+
+.theme-preview-message.user {
+    background: var(--preview-user-msg);
+    align-self: flex-end;
+}
+
+.theme-preview-message.ai {
+    background: var(--preview-ai-msg);
+    align-self: flex-start;
 }
 
 .theme-preview-card-name {
@@ -2694,12 +2745,18 @@ body.hide-references .reference-number.superscript {
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.7);
     color: white;
-    padding: 4px;
-    font-size: 12px;
+    padding: 3px;
+    font-size: 10px;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: opacity 0.2s;
+    opacity: 0;
+}
+
+.theme-preview-card:hover .theme-preview-card-name {
+    opacity: 1;
 }

@@ -452,6 +452,17 @@ export function createSettingsManager(options) {
     
     // 设置当前选中的主题
     themeSelect.value = currentSettings.theme;
+    
+    // 渲染主题预览卡片
+    const previewContainer = document.querySelector('.theme-preview-grid');
+    if (previewContainer) {
+      themeManager.renderThemePreview(previewContainer, (themeId) => {
+        setTheme(themeId);
+        if (themeSelect) {
+          themeSelect.value = themeId;
+        }
+      });
+    }
   }
   
   // ===== 设置操作方法 =====

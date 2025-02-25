@@ -53,7 +53,8 @@ export function createThemeManager() {
         '--cerebr-icon-color': '#abb2bf',
         '--cerebr-border-color': '#30363d',
         '--cerebr-hover-color': 'rgba(255, 255, 255, 0.05)',
-        '--cerebr-background-color': '#21252b'
+        '--cerebr-background-color': '#21252b',
+        '--cerebr-blue': '#61afef'
       }
     },
     {
@@ -199,6 +200,330 @@ export function createThemeManager() {
         '--cerebr-background-color': '#2e3440',
         '--cerebr-blue': '#88c0d0'
       }
+    },
+    {
+      id: 'dracula',
+      name: 'Dracula',
+      description: '经典吸血鬼深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(40, 42, 54, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#f8f8f2',
+        '--cerebr-message-user-bg': 'rgba(68, 71, 90, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(56, 58, 75, var(--cerebr-opacity))', 
+        '--cerebr-input-bg': 'rgba(34, 35, 48, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#bd93f9',
+        '--cerebr-border-color': '#44475a',
+        '--cerebr-hover-color': 'rgba(189, 147, 249, 0.1)',
+        '--cerebr-background-color': '#282a36',
+        '--cerebr-blue': '#8be9fd'
+      }
+    },
+    {
+      id: 'tokyo-night',
+      name: 'Tokyo Night',
+      description: '东京之夜深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(26, 27, 38, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#a9b1d6',
+        '--cerebr-message-user-bg': 'rgba(36, 40, 59, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(32, 34, 48, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(24, 25, 36, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#bb9af7',
+        '--cerebr-border-color': '#292e42',
+        '--cerebr-hover-color': 'rgba(103, 110, 149, 0.1)',
+        '--cerebr-background-color': '#1a1b26',
+        '--cerebr-blue': '#7aa2f7'
+      }
+    },
+    {
+      id: 'tokyo-night-light',
+      name: 'Tokyo Night Day',
+      description: '东京白日浅色主题',
+      variables: {
+        '--cerebr-opacity': '0.75',
+        '--cerebr-bg-color': 'rgba(224, 222, 244, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#343b58',
+        '--cerebr-message-user-bg': 'rgba(196, 204, 229, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(210, 212, 228, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(229, 233, 240, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#5a4a78',
+        '--cerebr-border-color': '#cbcadf',
+        '--cerebr-hover-color': 'rgba(90, 74, 120, 0.05)',
+        '--cerebr-background-color': '#e1e2e7',
+        '--cerebr-blue': '#34548a'
+      }
+    },
+    {
+      id: 'material-ocean',
+      name: 'Material Ocean',
+      description: '深海蓝材质主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(15, 17, 26, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#8f93a2',
+        '--cerebr-message-user-bg': 'rgba(35, 40, 52, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(28, 32, 43, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(20, 23, 31, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#84ffff',
+        '--cerebr-border-color': '#1f2233',
+        '--cerebr-hover-color': 'rgba(84, 207, 216, 0.1)',
+        '--cerebr-background-color': '#0f111a',
+        '--cerebr-blue': '#82aaff'
+      }
+    },
+    {
+      id: 'material-lighter',
+      name: 'Material Lighter',
+      description: '浅色材质主题',
+      variables: {
+        '--cerebr-opacity': '0.7',
+        '--cerebr-bg-color': 'rgba(250, 250, 250, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#546e7a',
+        '--cerebr-message-user-bg': 'rgba(227, 242, 253, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(240, 240, 240, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(245, 245, 245, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#00bcd4',
+        '--cerebr-border-color': '#e7eaec',
+        '--cerebr-hover-color': 'rgba(0, 188, 212, 0.05)',
+        '--cerebr-background-color': '#fafafa',
+        '--cerebr-blue': '#2196f3'
+      }
+    },
+    {
+      id: 'synthwave',
+      name: 'Synthwave',
+      description: '复古赛博朋克主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(39, 16, 62, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#ff7edb',
+        '--cerebr-message-user-bg': 'rgba(54, 22, 87, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(45, 19, 72, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(34, 14, 54, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#36f9f6',
+        '--cerebr-border-color': '#482a74',
+        '--cerebr-hover-color': 'rgba(255, 126, 219, 0.15)',
+        '--cerebr-background-color': '#2a1b3d',
+        '--cerebr-blue': '#36f9f6'
+      }
+    },
+    {
+      id: 'apple-light',
+      name: 'Apple Light',
+      description: 'macOS浅色主题',
+      variables: {
+        '--cerebr-opacity': '0.65',
+        '--cerebr-bg-color': 'rgba(255, 255, 255, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#333333',
+        '--cerebr-message-user-bg': 'rgba(209, 232, 255, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(240, 240, 247, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(248, 248, 255, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#007aff',
+        '--cerebr-border-color': '#e4e4e4',
+        '--cerebr-hover-color': 'rgba(0, 122, 255, 0.05)',
+        '--cerebr-background-color': '#ffffff',
+        '--cerebr-blue': '#007aff'
+      }
+    },
+    {
+      id: 'apple-dark',
+      name: 'Apple Dark',
+      description: 'macOS深色主题',
+      variables: {
+        '--cerebr-opacity': '0.8',
+        '--cerebr-bg-color': 'rgba(28, 28, 30, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e4e4e4',
+        '--cerebr-message-user-bg': 'rgba(50, 50, 56, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(40, 40, 45, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(36, 36, 38, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#0a84ff',
+        '--cerebr-border-color': '#3d3d41',
+        '--cerebr-hover-color': 'rgba(10, 132, 255, 0.1)',
+        '--cerebr-background-color': '#1c1c1e',
+        '--cerebr-blue': '#0a84ff'
+      }
+    },
+    {
+      id: 'gruvbox-dark',
+      name: 'Gruvbox Dark',
+      description: '复古暖色调深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(40, 40, 40, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#ebdbb2',
+        '--cerebr-message-user-bg': 'rgba(60, 56, 54, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(50, 48, 47, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(45, 43, 42, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#b8bb26',
+        '--cerebr-border-color': '#504945',
+        '--cerebr-hover-color': 'rgba(251, 73, 52, 0.1)',
+        '--cerebr-background-color': '#282828',
+        '--cerebr-blue': '#83a598'
+      }
+    },
+    {
+      id: 'gruvbox-light',
+      name: 'Gruvbox Light',
+      description: '复古暖色调浅色主题',
+      variables: {
+        '--cerebr-opacity': '0.75',
+        '--cerebr-bg-color': 'rgba(251, 241, 199, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#3c3836',
+        '--cerebr-message-user-bg': 'rgba(235, 219, 178, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(242, 229, 188, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(249, 245, 215, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#9d0006',
+        '--cerebr-border-color': '#d5c4a1',
+        '--cerebr-hover-color': 'rgba(157, 0, 6, 0.05)',
+        '--cerebr-background-color': '#fbf1c7',
+        '--cerebr-blue': '#076678'
+      }
+    },
+    {
+      id: 'ayu-mirage',
+      name: 'Ayu Mirage',
+      description: '柔和中性色调主题',
+      variables: {
+        '--cerebr-opacity': '0.8',
+        '--cerebr-bg-color': 'rgba(31, 33, 42, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#c7c8c2',
+        '--cerebr-message-user-bg': 'rgba(44, 48, 58, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(38, 41, 50, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(26, 28, 35, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#ffcc66',
+        '--cerebr-border-color': '#373e4c',
+        '--cerebr-hover-color': 'rgba(255, 204, 102, 0.1)',
+        '--cerebr-background-color': '#1f212a',
+        '--cerebr-blue': '#5ccfe6'
+      }
+    },
+    {
+      id: 'ayu-light',
+      name: 'Ayu Light',
+      description: '柔和浅色调主题',
+      variables: {
+        '--cerebr-opacity': '0.7',
+        '--cerebr-bg-color': 'rgba(250, 250, 250, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#5c6166',
+        '--cerebr-message-user-bg': 'rgba(235, 239, 242, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(245, 245, 245, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(255, 255, 255, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#ff9940',
+        '--cerebr-border-color': '#eee',
+        '--cerebr-hover-color': 'rgba(255, 153, 64, 0.05)',
+        '--cerebr-background-color': '#fafafa',
+        '--cerebr-blue': '#55b4d4'
+      }
+    },
+    {
+      id: 'catppuccin-mocha',
+      name: 'Catppuccin Mocha',
+      description: '柔和深色咖啡主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(30, 30, 46, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#cdd6f4',
+        '--cerebr-message-user-bg': 'rgba(49, 50, 68, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(40, 40, 58, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(24, 24, 38, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#cba6f7',
+        '--cerebr-border-color': '#45475a',
+        '--cerebr-hover-color': 'rgba(203, 166, 247, 0.1)',
+        '--cerebr-background-color': '#1e1e2e',
+        '--cerebr-blue': '#89b4fa'
+      }
+    },
+    {
+      id: 'catppuccin-latte',
+      name: 'Catppuccin Latte',
+      description: '柔和浅色奶茶主题',
+      variables: {
+        '--cerebr-opacity': '0.75',
+        '--cerebr-bg-color': 'rgba(239, 241, 245, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#4c4f69',
+        '--cerebr-message-user-bg': 'rgba(220, 224, 232, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(230, 233, 239, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(249, 250, 251, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#8839ef',
+        '--cerebr-border-color': '#bcc0cc',
+        '--cerebr-hover-color': 'rgba(136, 57, 239, 0.05)',
+        '--cerebr-background-color': '#eff1f5',
+        '--cerebr-blue': '#1e66f5'
+      }
+    },
+    {
+      id: 'onedark-pro',
+      name: 'One Dark Pro',
+      description: '专业深色开发主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(40, 44, 52, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#abb2bf',
+        '--cerebr-message-user-bg': 'rgba(55, 61, 72, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(47, 52, 61, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(33, 37, 43, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#c678dd',
+        '--cerebr-border-color': '#3e4451',
+        '--cerebr-hover-color': 'rgba(198, 120, 221, 0.1)',
+        '--cerebr-background-color': '#282c34',
+        '--cerebr-blue': '#61afef'
+      }
+    },
+    {
+      id: 'palenight',
+      name: 'Palenight',
+      description: '紫色调深夜主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(41, 45, 62, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#bfc7d5',
+        '--cerebr-message-user-bg': 'rgba(59, 66, 86, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(50, 55, 73, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(34, 38, 53, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#c792ea',
+        '--cerebr-border-color': '#4e5579',
+        '--cerebr-hover-color': 'rgba(199, 146, 234, 0.1)',
+        '--cerebr-background-color': '#292d3e',
+        '--cerebr-blue': '#82aaff'
+      }
+    },
+    {
+      id: 'rosepine',
+      name: 'Rosé Pine',
+      description: '舒适柔和深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(25, 23, 36, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e0def4',
+        '--cerebr-message-user-bg': 'rgba(42, 39, 57, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(33, 30, 46, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(19, 17, 29, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#c4a7e7',
+        '--cerebr-border-color': '#42384d',
+        '--cerebr-hover-color': 'rgba(196, 167, 231, 0.1)',
+        '--cerebr-background-color': '#191724',
+        '--cerebr-blue': '#9ccfd8'
+      }
+    },
+    {
+      id: 'rosepine-dawn',
+      name: 'Rosé Pine Dawn',
+      description: '舒适柔和浅色主题',
+      variables: {
+        '--cerebr-opacity': '0.75',
+        '--cerebr-bg-color': 'rgba(250, 244, 237, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#575279',
+        '--cerebr-message-user-bg': 'rgba(236, 226, 216, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(242, 236, 229, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(255, 250, 243, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#907aa9',
+        '--cerebr-border-color': '#e5e0d9',
+        '--cerebr-hover-color': 'rgba(144, 122, 169, 0.05)',
+        '--cerebr-background-color': '#faf4ed',
+        '--cerebr-blue': '#56949f'
+      }
     }
   ];
 
@@ -295,6 +620,106 @@ export function createThemeManager() {
     }
   }
 
+  /**
+   * 渲染主题预览卡片
+   * @param {HTMLElement} container - 预览卡片容器元素
+   * @param {Function} onThemeSelect - 主题选择回调函数
+   */
+  function renderThemePreview(container, onThemeSelect) {
+    if (!container) return;
+    
+    // 清空容器
+    container.innerHTML = '';
+    
+    // 获取常用/推荐主题进行预览
+    const previewThemes = [
+      'light', 'dark', 'github-light', 'github-dark', 'dracula', 
+      'tokyo-night', 'catppuccin-mocha', 'catppuccin-latte', 'synthwave',
+      'apple-light', 'apple-dark', 'rosepine', 'rosepine-dawn'
+    ];
+    
+    // 获取当前主题ID
+    const currentThemeId = document.documentElement.getAttribute('data-theme') || 'auto';
+    
+    // 为每个主题创建预览卡片
+    previewThemes.forEach(themeId => {
+      const theme = getThemeById(themeId);
+      if (!theme) return;
+      
+      // 创建预览卡片
+      const previewCard = document.createElement('div');
+      previewCard.className = 'theme-preview-card';
+      previewCard.setAttribute('data-theme-id', themeId);
+      
+      if (themeId === currentThemeId) {
+        previewCard.classList.add('active');
+      }
+      
+      // 设置预览卡片的CSS变量
+      const themeVars = theme.variables;
+      previewCard.style.setProperty('--preview-bg', themeVars['--cerebr-bg-color'] || '#ffffff');
+      previewCard.style.setProperty('--preview-body-bg', themeVars['--cerebr-background-color'] || '#ffffff');
+      previewCard.style.setProperty('--preview-user-msg', themeVars['--cerebr-message-user-bg'] || '#e1f5fe');
+      previewCard.style.setProperty('--preview-ai-msg', themeVars['--cerebr-message-ai-bg'] || '#f5f5f5');
+      
+      // 创建预览内容
+      const previewContent = document.createElement('div');
+      previewContent.className = 'theme-preview-content';
+      
+      // 创建顶部栏
+      const header = document.createElement('div');
+      header.className = 'theme-preview-header';
+      
+      // 创建消息区域
+      const messagesContainer = document.createElement('div');
+      messagesContainer.className = 'theme-preview-messages';
+      
+      // 添加模拟消息
+      const aiMessage1 = document.createElement('div');
+      aiMessage1.className = 'theme-preview-message ai';
+      
+      const userMessage = document.createElement('div');
+      userMessage.className = 'theme-preview-message user';
+      
+      const aiMessage2 = document.createElement('div');
+      aiMessage2.className = 'theme-preview-message ai';
+      
+      messagesContainer.appendChild(aiMessage1);
+      messagesContainer.appendChild(userMessage);
+      messagesContainer.appendChild(aiMessage2);
+      
+      // 创建主题名称
+      const themeName = document.createElement('div');
+      themeName.className = 'theme-preview-card-name';
+      themeName.textContent = theme.name;
+      
+      // 组装预览卡片
+      previewContent.appendChild(header);
+      previewContent.appendChild(messagesContainer);
+      previewCard.appendChild(previewContent);
+      previewCard.appendChild(themeName);
+      
+      // 添加点击事件
+      previewCard.addEventListener('click', () => {
+        // 移除其他卡片的active类
+        document.querySelectorAll('.theme-preview-card.active').forEach(card => {
+          card.classList.remove('active');
+        });
+        
+        // 为当前卡片添加active类
+        previewCard.classList.add('active');
+        
+        // 调用回调函数
+        if (typeof onThemeSelect === 'function') {
+          onThemeSelect(themeId);
+        }
+      });
+      
+      // 添加到容器
+      container.appendChild(previewCard);
+    });
+  }
+
   // 初始化函数
   function init() {
     setupSystemThemeListener();
@@ -306,6 +731,7 @@ export function createThemeManager() {
     getThemeById,
     applyTheme,
     notifyThemeChange,
+    renderThemePreview,
     init
   };
 } 
