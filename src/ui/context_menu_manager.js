@@ -141,15 +141,76 @@ export function createContextMenuManager(options) {
    * 重新生成消息
    */
   async function regenerateMessage() {
+    // 获取所有消息
     const messages = chatContainer.querySelectorAll('.message');
     if (messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      // 如果最后一条消息是助手消息，则删除
-      if (lastMessage.classList.contains('ai-message')) {
-        await deleteMessageContent(lastMessage);
+      // 先找到最后一条用户消息和可能存在的AI回复
+      let lastUserMessage = null;
+      let lastAiMessage = null;
+      
+      // 从后向前遍历找到最后一对消息
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].classList.contains('ai-message') && !lastAiMessage) {
+          lastAiMessage = messages[i];
+        } else if (messages[i].classList.contains('user-message') && !lastUserMessage) {
+          lastUserMessage = messages[i];
+          break; // 找到最后一条用户消息后停止
+        }
       }
-      // 调用发送消息接口，重新生成助手回复
-      sendMessage();
+      
+      // 如果有AI消息，先删除它
+      if (lastAiMessage) {
+        await deleteMessageContent(lastAiMessage);
+      }
+      
+      // 如果找到了用户消息，从中提取元数据
+      if (lastUserMessage) {
+        try {
+          // 获取原始消息文本
+          const originalMessageText = lastUserMessage.getAttribute('data-original-text');
+          
+          // 获取注入的系统消息 (如果有)
+          let injectedSystemMessages = [];
+          const injectedSystemMessagesStr = lastUserMessage.getAttribute('data-injected-system-messages');
+          if (injectedSystemMessagesStr) {
+            try {
+              injectedSystemMessages = JSON.parse(injectedSystemMessagesStr);
+            } catch (err) {
+              console.error('解析注入系统消息失败:', err);
+            }
+          }
+          
+          // 获取提示词类型 (如果有)
+          const promptType = lastUserMessage.getAttribute('data-prompt-type');
+          
+          // 获取API配置 (如果有)
+          let apiConfig = null;
+          const apiConfigStr = lastUserMessage.getAttribute('data-api-config');
+          if (apiConfigStr) {
+            try {
+              apiConfig = JSON.parse(apiConfigStr);
+            } catch (err) {
+              console.error('解析API配置失败:', err);
+            }
+          }
+          
+          // 调用重新发送消息接口，传递所有收集的元数据
+          sendMessage({
+            originalMessageText,
+            injectedSystemMessages,
+            specificPromptType: promptType,
+            specificApiConfig: apiConfig
+          });
+        } catch (err) {
+          console.error('准备重新生成消息时出错:', err);
+          // 出错时仍尝试普通发送
+          sendMessage();
+        }
+      } else {
+        // 找不到用户消息时，直接调用发送接口
+        sendMessage();
+      }
+      
       hideContextMenu();
     }
   }

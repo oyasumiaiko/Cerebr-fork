@@ -489,6 +489,44 @@ export function createApiManager(options) {
   }
 
   /**
+   * 从部分配置信息中获取完整的 API 配置
+   * @param {Object} partialConfig - 部分 API 配置信息
+   * @param {string} partialConfig.baseUrl - API 基础 URL
+   * @param {string} partialConfig.modelName - 模型名称
+   * @param {number} [partialConfig.temperature] - 温度值
+   * @param {string} [partialConfig.customParams] - 自定义参数字符串
+   * @returns {Object|null} 完整的 API 配置对象或 null
+   */
+  function getApiConfigFromPartial(partialConfig) {
+    if (!partialConfig || !partialConfig.baseUrl || !partialConfig.modelName) {
+      return null;
+    }
+    
+    // 首先尝试按完全匹配查找配置
+    let matchedConfig = apiConfigs.find(config => 
+      config.baseUrl === partialConfig.baseUrl && 
+      config.modelName === partialConfig.modelName
+    );
+    
+    // 如果找到完全匹配，返回该配置
+    if (matchedConfig) {
+      return matchedConfig;
+    }
+    
+    // 如果没有找到完全匹配，则尝试按 URL 匹配并创建新配置
+    const urlMatchedConfig = apiConfigs.find(config => config.baseUrl === partialConfig.baseUrl);
+    
+    // 创建新的配置对象（优先使用匹配到的配置的 API 密钥，如果有的话）
+    return {
+      baseUrl: partialConfig.baseUrl,
+      apiKey: urlMatchedConfig?.apiKey || apiConfigs[selectedConfigIndex]?.apiKey || '',
+      modelName: partialConfig.modelName,
+      temperature: partialConfig.temperature ?? 1.0,
+      customParams: partialConfig.customParams || ''
+    };
+  }
+
+  /**
    * 公共API接口
    */
   return {
@@ -501,6 +539,7 @@ export function createApiManager(options) {
     sendRequest,
     setupUIEventHandlers,
     getModelConfig,
+    getApiConfigFromPartial,
     
     // 获取和设置配置
     getSelectedConfig: () => apiConfigs[selectedConfigIndex],

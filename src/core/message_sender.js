@@ -110,14 +110,28 @@ export function createMessageSender(options) {
   /**
    * 准备和发送消息
    * @public
+   * @param {Object} [options] - 可选参数对象，用于重新生成消息时传递上下文
+   * @param {Array<string>} [options.injectedSystemMessages] - 重新生成时保留的系统消息
+   * @param {string} [options.specificPromptType] - 指定使用的提示词类型
+   * @param {Object} [options.specificApiConfig] - 指定使用的API配置
+   * @param {string} [options.originalMessageText] - 原始消息文本，用于恢复输入框内容
    * @returns {Promise<void>}
    */
-  async function sendMessage() {
+  async function sendMessage(options = {}) {
     // 验证API配置
     if (!validateApiConfig()) return;
 
+    // 从options中提取重新生成所需的变量
+    const {
+      injectedSystemMessages: existingInjectedSystemMessages = [],
+      specificPromptType = null,
+      specificApiConfig = null,
+      originalMessageText = null
+    } = options;
+
     const imageTags = imageContainer.querySelectorAll('.image-tag');
-    let messageText = messageInput.textContent;
+    // 如果是重新生成，使用原始消息文本；否则从输入框获取
+    let messageText = originalMessageText || messageInput.textContent;
     const imageContainsScreenshot = imageContainer.querySelector('img[alt="page-screenshot.png"]');
 
     // 如果消息为空且没有图片标签，则不发送消息
@@ -133,8 +147,9 @@ export function createMessageSender(options) {
       messageText = prompts.image.prompt;
     }
     
-    // 获取提示词类型
-    const currentPromptType = messageProcessor.getPromptTypeFromContent(messageText, prompts);
+    // 获取提示词类型 - 如果指定了类型则使用指定的类型
+    const currentPromptType = specificPromptType || 
+                             messageProcessor.getPromptTypeFromContent(messageText, prompts);
 
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
@@ -157,14 +172,19 @@ export function createMessageSender(options) {
       // 当开始生成时，给聊天容器添加 glow 效果
       chatContainer.classList.add('auto-scroll-glow');
 
-      // 提取提示词中注入的系统消息
-      const systemMessageRegex = /{{system}}([\s\S]*?){{end_system}}/g;
-      const injectedSystemMessages = [];
-      messageText = messageText.replace(systemMessageRegex, (match, capture) => {
-        injectedSystemMessages.push(capture);
-        console.log('捕获注入的系统消息：', injectedSystemMessages);
-        return '';
-      });
+      // 如果已有注入的系统消息，则使用它；否则从消息文本中提取
+      const injectedSystemMessages = existingInjectedSystemMessages.length > 0 ? 
+                                 existingInjectedSystemMessages : [];
+                                   
+      if (injectedSystemMessages.length === 0) {
+        // 提取提示词中注入的系统消息
+        const systemMessageRegex = /{{system}}([\s\S]*?){{end_system}}/g;
+        messageText = messageText.replace(systemMessageRegex, (match, capture) => {
+          injectedSystemMessages.push(capture);
+          console.log('捕获注入的系统消息：', injectedSystemMessages);
+          return '';
+        });
+      }
 
       // 添加用户消息，同时包含文本和图片区域
       let userMessageDiv;
@@ -176,6 +196,14 @@ export function createMessageSender(options) {
           null, 
           imageContainer.innerHTML
         );
+        
+        // 保存元数据到用户消息，用于后续重新生成
+        if (injectedSystemMessages.length > 0) {
+          userMessageDiv.setAttribute('data-injected-system-messages', JSON.stringify(injectedSystemMessages));
+        }
+        if (currentPromptType) {
+          userMessageDiv.setAttribute('data-prompt-type', currentPromptType);
+        }
       }
 
       // 清空输入区域
@@ -215,8 +243,31 @@ export function createMessageSender(options) {
         currentPromptType
       );
 
-      // 获取API配置
-      const config = apiManager.getModelConfig(currentPromptType, prompts);
+      // 获取API配置 - 如果指定了配置则使用指定的配置
+      let config;
+      if (specificApiConfig) {
+        // 尝试通过部分配置获取完整配置
+        config = apiManager.getApiConfigFromPartial(specificApiConfig);
+        if (!config) {
+          // 如果获取失败，回退到默认方式获取配置
+          console.warn('无法从部分配置获取完整API配置，使用默认配置');
+          config = apiManager.getModelConfig(currentPromptType, prompts);
+        }
+      } else {
+        config = apiManager.getModelConfig(currentPromptType, prompts);
+      }
+      
+      // 如果用户消息存在，保存API配置信息到用户消息
+      if (userMessageDiv && config) {
+        // 只存储必要的配置信息，避免保存API密钥
+        const configToSave = {
+          baseUrl: config.baseUrl,
+          modelName: config.modelName,
+          temperature: config.temperature,
+          customParams: config.customParams
+        };
+        userMessageDiv.setAttribute('data-api-config', JSON.stringify(configToSave));
+      }
 
       // 更新加载状态消息
       loadingMessage.textContent = '正在等待 AI 回复...';
