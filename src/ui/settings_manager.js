@@ -17,6 +17,7 @@
  * @param {HTMLElement} options.clearOnSearchSwitch - 划词搜索清空聊天开关元素
  * @param {HTMLElement} options.sendChatHistorySwitch - 发送聊天历史开关元素
  * @param {HTMLElement} options.showReferenceSwitch - 显示引用标记开关元素
+ * @param {HTMLElement} options.sidebarPositionSwitch - 侧边栏位置开关元素
  * @param {Function} options.setMessageSenderChatHistory - 设置消息发送器的聊天历史开关状态
  * @returns {Object} 设置管理器实例
  */
@@ -34,6 +35,7 @@ export function createSettingsManager(options) {
     clearOnSearchSwitch,
     sendChatHistorySwitch,
     showReferenceSwitch,
+    sidebarPositionSwitch,
     setMessageSenderChatHistory
   } = options;
 
@@ -46,7 +48,8 @@ export function createSettingsManager(options) {
     autoScroll: true,
     clearOnSearch: true,
     shouldSendChatHistory: true,
-    showReference: true
+    showReference: true,
+    sidebarPosition: 'right' // 'left' 或 'right'
   };
 
   // 当前设置
@@ -105,6 +108,9 @@ export function createSettingsManager(options) {
     
     // 应用显示引用标记设置
     applyShowReference(currentSettings.showReference);
+    
+    // 应用侧边栏位置设置
+    applySidebarPosition(currentSettings.sidebarPosition);
   }
   
   // 应用主题
@@ -214,6 +220,17 @@ export function createSettingsManager(options) {
     }
   }
   
+  // 应用侧边栏位置设置
+  function applySidebarPosition(position) {
+    // 更新UI元素
+    if (sidebarPositionSwitch) {
+      sidebarPositionSwitch.checked = position === 'right';
+    }
+    
+    // 通知父窗口侧边栏位置变化
+    notifySidebarPositionChange(position);
+  }
+  
   // 更新引用标记可见性
   function updateReferenceVisibility(shouldShow) {
     if (shouldShow) {
@@ -236,6 +253,15 @@ export function createSettingsManager(options) {
     window.parent.postMessage({
       type: 'SCALE_FACTOR_CHANGE',
       value: value
+    }, '*');
+  }
+  
+  // 通知侧边栏位置变化
+  function notifySidebarPositionChange(position) {
+    console.log(`发送侧边栏位置变化通知: ${position}`);
+    window.parent.postMessage({
+      type: 'SIDEBAR_POSITION_CHANGE',
+      position: position
     }, '*');
   }
   
@@ -323,6 +349,13 @@ export function createSettingsManager(options) {
         setShowReference(e.target.checked);
       });
     }
+    
+    // 侧边栏位置开关
+    if (sidebarPositionSwitch) {
+      sidebarPositionSwitch.addEventListener('change', (e) => {
+        setSidebarPosition(e.target.checked ? 'right' : 'left');
+      });
+    }
   }
   
   // ===== 设置操作方法 =====
@@ -384,6 +417,14 @@ export function createSettingsManager(options) {
     saveSetting('showReference', enabled);
   }
   
+  // 设置侧边栏位置
+  function setSidebarPosition(position) {
+    console.log(`设置侧边栏位置: ${position}`);
+    currentSettings.sidebarPosition = position;
+    applySidebarPosition(position);
+    saveSetting('sidebarPosition', position);
+  }
+  
   // 获取当前设置
   function getSettings() {
     return {...currentSettings};
@@ -414,6 +455,7 @@ export function createSettingsManager(options) {
     setClearOnSearch,
     setSendChatHistory,
     setShowReference,
+    setSidebarPosition,
     updateReferenceVisibility,
     applyTheme
   };

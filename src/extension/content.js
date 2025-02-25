@@ -10,6 +10,7 @@ class CerebrSidebar {
     this.initialized = false;
     this.lastUrl = window.location.href;
     this.isFullscreen = false;
+    this.sidebarPosition = 'right'; // 默认侧边栏位置为右侧
     console.log('CerebrSidebar 实例创建');
     this.initializeSidebar();
     this.setupUrlChangeListener();
@@ -21,6 +22,40 @@ class CerebrSidebar {
     this.sidebarWidth = width;
     this.sidebar.style.width = `calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor})`;
     chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+  }
+
+  // 添加更新侧边栏位置的方法
+  updatePosition(position) {
+    this.sidebarPosition = position;
+    if (!this.sidebar) return; // 确保sidebar已经创建
+    if (this.isFullscreen) return; // 全屏模式不改变位置
+
+    const style = this.sidebar.style;
+    // 移除两侧的定位
+    style.left = '';
+    style.right = '';
+    
+    // 设置新的定位和变换
+    if (position === 'left') {
+      style.left = `calc(20px * var(--scale-ratio, 1))`;
+      // 更新进入和退出动画的变换
+      this.sidebar.style.setProperty('--transform-hidden', `translateX(calc(-100% - calc(20px * var(--scale-ratio, 1))))`);
+      this.sidebar.style.setProperty('--box-shadow-visible', `2px 0 15px rgba(0,0,0,0.1)`);
+    } else {
+      style.right = `calc(20px * var(--scale-ratio, 1))`;
+      // 更新进入和退出动画的变换
+      this.sidebar.style.setProperty('--transform-hidden', `translateX(calc(100% + calc(20px * var(--scale-ratio, 1))))`);
+      this.sidebar.style.setProperty('--box-shadow-visible', `-2px 0 15px rgba(0,0,0,0.1)`);
+    }
+    
+    // 如果侧边栏没有显示，立即应用隐藏的变换
+    if (!this.isVisible) {
+      this.sidebar.style.transform = `var(--transform-hidden)`;
+    }
+
+    chrome.storage.sync.set({ sidebarPosition: this.sidebarPosition });
+    
+    console.log(`侧边栏位置已更新为: ${position}, 可见状态: ${this.isVisible}`);
   }
 
   setupUrlChangeListener() {
@@ -90,10 +125,13 @@ class CerebrSidebar {
     try {
       console.log('开始初始化侧边栏');
 
-      // 从存储中加载宽度和缩放因子
-      const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor']);
-      this.sidebarWidth = result.sidebarWidth || 430;
+      // 从存储中加载宽度、缩放因子和位置
+      const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor', 'sidebarPosition']);
+      this.sidebarWidth = result.sidebarWidth || 800; // 确保默认值一致
       this.scaleFactor = result.scaleFactor || 1.0;
+      this.sidebarPosition = result.sidebarPosition || 'right';
+      
+      console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
       const container = document.createElement('cerebr-root');
 
@@ -118,9 +156,11 @@ class CerebrSidebar {
         }
           
         .cerebr-sidebar {
+          --transform-hidden: translateX(calc(100% + calc(20px * var(--scale-ratio, 1))));
+          --box-shadow-visible: -2px 0 15px rgba(0,0,0,0.1);
+          
           position: fixed;
           top: calc(20px * var(--scale-ratio, 1));
-          right: calc(20px * var(--scale-ratio, 1));
           width: calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor});
           height: calc(100vh - calc(40px * var(--scale-ratio, 1)));
           color: var(--cerebr-text-color, #000000);
@@ -128,7 +168,7 @@ class CerebrSidebar {
           border-radius: calc(12px * var(--scale-ratio, 1));
           overflow: hidden;
           visibility: hidden;
-          transform: translateX(calc(100% + calc(20px * var(--scale-ratio, 1))));
+          transform: var(--transform-hidden);
           pointer-events: none;
           isolation: isolate;
           /* border: 1px solid rgba(255, 255, 255, 0.1); */
@@ -139,8 +179,8 @@ class CerebrSidebar {
         .cerebr-sidebar.visible {
           pointer-events: auto;
           visibility: visible;
-          transform: translateX(0);
-          box-shadow: -2px 0 15px rgba(0,0,0,0.1);
+          transform: translateX(0) !important;
+          box-shadow: var(--box-shadow-visible);
         }
 
         .cerebr-sidebar__content {
@@ -164,15 +204,18 @@ class CerebrSidebar {
           transition: all 0s !important;
 
           top: 0px;
-          right: 0px;
+          left: 0px !important;
+          right: 0px !important;
           width: 100vw !important;
           height: 100vh;
           margin-right: 0;
+          margin-left: 0;
           border-radius: 0;
           transform: translateX(0) !important;
         }
         .cerebr-sidebar.fullscreen.visible {
           transform: translateX(0) !important;
+          box-shadow: none !important;
         }
         .cerebr-sidebar.fullscreen .cerebr-sidebar__content {
           border-radius: 0;
@@ -222,19 +265,23 @@ class CerebrSidebar {
       this.sidebar.appendChild(resizer);
       this.sidebar.appendChild(content);
 
-      // 添加 ResizeObserver 监听大小变化
-      const scaleObserver = new ResizeObserver(entries => {
-        this.updateScale();
-      });
-
-      scaleObserver.observe(content);
-
+      // 添加侧边栏到DOM
       shadow.appendChild(style);
       shadow.appendChild(this.sidebar);
 
       // 添加到文档并保护它
       const root = document.documentElement;
       root.appendChild(container);
+
+      // 设置侧边栏位置 - 在添加到DOM之后设置
+      this.updatePosition(this.sidebarPosition);
+
+      // 添加 ResizeObserver 监听大小变化
+      const scaleObserver = new ResizeObserver(entries => {
+        this.updateScale();
+      });
+
+      scaleObserver.observe(content);
 
       // 使用MutationObserver确保我们的元素不会被移除
       const observer = new MutationObserver((mutations) => {
@@ -295,7 +342,10 @@ class CerebrSidebar {
         // 如果是全屏模式，不允许调整大小
         if (this.isFullscreen) return;
 
-        const diff = startX - e.clientX;
+        const diff = this.sidebarPosition === 'left' ? 
+          e.clientX - startX : // 左侧模式：拖动距离为正时增加宽度
+          startX - e.clientX;  // 右侧模式：拖动距离为负时增加宽度
+        
         const scale = this.scaleFactor / window.devicePixelRatio;
         const newWidth = Math.min(Math.max(500, startWidth - diff / scale), 1500);
         this.updateWidth(newWidth);
@@ -322,6 +372,10 @@ class CerebrSidebar {
           this.scaleFactor = event.data.value;
           this.updateScale();
           chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
+          break;
+
+        case 'SIDEBAR_POSITION_CHANGE':
+          this.updatePosition(event.data.position);
           break;
 
         case 'CLOSE_SIDEBAR':
@@ -368,6 +422,8 @@ class CerebrSidebar {
       // 如果之前和现在都是显示状态，无需操作
       if (wasVisible && this.isVisible) return;
 
+      console.log(`切换侧边栏: ${wasVisible} -> ${this.isVisible}, 位置: ${this.sidebarPosition}`);
+
       // 根据当前显示状态更新侧边栏
       if (this.isVisible) {
         // 显示侧边栏前，先将 display 设为 'block'
@@ -388,6 +444,13 @@ class CerebrSidebar {
       } else {
         // 隐藏侧边栏：先移除 visible 类
         this.sidebar.classList.remove('visible');
+        
+        // 恢复隐藏时的变换
+        setTimeout(() => {
+          if (!this.isVisible) {
+            this.sidebar.style.transform = `var(--transform-hidden)`;
+          }
+        }, 50);
 
         // 如果当前为全屏模式，关闭侧边栏时需要还原滚动条状态
         if (this.isFullscreen) {
@@ -532,6 +595,13 @@ class CerebrSidebar {
     if (this.isFullscreen) {
       // 将侧边栏切换为全屏
       this.sidebar.classList.add('fullscreen');
+      
+      // 清除位置相关的样式
+      this.sidebar.style.left = '';
+      this.sidebar.style.right = '';
+      
+      // 清除变换，确保侧边栏可见
+      this.sidebar.style.transform = 'translateX(0)';
 
       // 隐藏父文档滚动条
       document.documentElement.style.overflow = 'hidden';
@@ -543,6 +613,9 @@ class CerebrSidebar {
     } else {
       // 退出全屏模式
       this.sidebar.classList.remove('fullscreen');
+      
+      // 恢复侧边栏位置
+      this.updatePosition(this.sidebarPosition);
 
       // 恢复父文档滚动条
       document.documentElement.style.overflow = '';

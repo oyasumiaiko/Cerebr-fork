@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const clearChat = document.getElementById('clear-chat');
     const debugTreeButton = document.getElementById('debug-chat-tree-btn');
     const screenshotButton = document.getElementById('screenshot-button');
+    const sidebarPositionSwitch = document.getElementById('sidebar-position-switch');
 
     // 应用程序状态
     let shouldAutoScroll = true; // 控制是否自动滚动
@@ -251,6 +252,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearOnSearchSwitch,
         sendChatHistorySwitch,
         showReferenceSwitch,
+        sidebarPositionSwitch,
         setMessageSenderChatHistory: messageSender.setSendChatHistory
     });
     
