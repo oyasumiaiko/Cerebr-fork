@@ -152,6 +152,9 @@ export function createSettingsManager(options) {
     
     // 通知主题管理器主题变更
     themeManager.notifyThemeChange(themeValue);
+    
+    // 更新主题预览卡片活动状态（不会重新渲染导致菜单关闭）
+    updateThemePreviewActiveState(themeValue);
   }
   
   // 应用侧边栏宽度
@@ -464,6 +467,23 @@ export function createSettingsManager(options) {
           themeSelect.value = themeId;
         }
       });
+    }
+  }
+  
+  // 只更新主题预览卡片的active状态，不重新渲染预览网格
+  function updateThemePreviewActiveState(themeId) {
+    const previewCards = document.querySelectorAll('.theme-preview-card');
+    if (previewCards.length === 0) return; // 如果没有预览卡片，不做任何操作
+    
+    // 移除所有卡片的active类
+    previewCards.forEach(card => {
+      card.classList.remove('active');
+    });
+    
+    // 为当前主题的卡片添加active类
+    const activeCard = document.querySelector(`.theme-preview-card[data-theme-id="${themeId}"]`);
+    if (activeCard) {
+      activeCard.classList.add('active');
     }
   }
   

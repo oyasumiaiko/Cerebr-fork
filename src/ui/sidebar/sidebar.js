@@ -298,6 +298,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         settingsManager.setSendChatHistory(e.target.checked);
     });
 
+    // 添加全局键盘事件监听器，处理ESC键打开/关闭聊天记录窗口
+    document.addEventListener('keydown', (e) => {
+        // 检测ESC键
+        if (e.key === 'Escape') {
+            // 如果有输入法正在输入，不处理ESC
+            if (isComposing) return;
+            
+            // 切换聊天记录窗口状态
+            const isOpen = chatHistoryUI.isChatHistoryPanelOpen();
+            if (isOpen) {
+                closeExclusivePanels();
+            } else {
+                closeExclusivePanels();
+                chatHistoryUI.showChatHistoryPanel();
+            }
+            
+            // 阻止默认行为
+            e.preventDefault();
+        }
+    });
+
+    // 添加点击事件监听器，用于点击聊天记录窗口外区域关闭窗口
+    document.addEventListener('click', (e) => {
+        // 如果聊天记录窗口打开
+        if (chatHistoryUI.isChatHistoryPanelOpen()) {
+            if (chatContainer.contains(e.target)) {
+                // 使用延时确保其他事件处理程序已执行完毕
+                setTimeout(() => {
+                    closeExclusivePanels();
+                }, 0);
+            }
+        }
+    });
+
     // 添加全屏切换功能
     fullscreenToggle.addEventListener('click', async () => {
         isFullscreen = !isFullscreen;

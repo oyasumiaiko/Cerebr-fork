@@ -28,15 +28,15 @@ export function createThemeManager() {
       variables: {
         '--cerebr-opacity': '0.6',
         '--cerebr-bg-color': 'rgba(255, 255, 255, var(--cerebr-opacity))',
-        '--cerebr-text-color': '#222',
+        '--cerebr-text-color': '#24292e',
         '--cerebr-message-user-bg': 'rgba(227, 242, 253, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(245, 245, 245, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(248, 248, 248, var(--cerebr-opacity))',
-        '--cerebr-icon-color': '#666',
+        '--cerebr-icon-color': '#586069',
         '--cerebr-border-color': '#e1e4e8',
-        '--cerebr-hover-color': 'rgba(0, 0, 0, 0.02)',
+        '--cerebr-hover-color': 'rgba(0, 0, 0, 0.03)',
         '--cerebr-background-color': '#ffffff',
-        '--cerebr-highlight': 'rgb(0, 105, 255)'
+        '--cerebr-highlight': '#0366d6'
       }
     },
     {
@@ -65,7 +65,7 @@ export function createThemeManager() {
         '--cerebr-opacity': '0.7',
         '--cerebr-bg-color': 'rgba(246, 248, 250, var(--cerebr-opacity))',
         '--cerebr-text-color': '#24292e',
-        '--cerebr-message-user-bg': 'rgba(221, 244, 255, var(--cerebr-opacity))',
+        '--cerebr-message-user-bg': 'rgba(241, 248, 255, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(255, 255, 255, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(255, 255, 255, var(--cerebr-opacity))',
         '--cerebr-icon-color': '#6a737d',
@@ -100,15 +100,15 @@ export function createThemeManager() {
       variables: {
         '--cerebr-opacity': '0.8',
         '--cerebr-bg-color': 'rgba(30, 30, 30, var(--cerebr-opacity))',
-        '--cerebr-text-color': '#d4d4d4',
+        '--cerebr-text-color': '#cccccc',
         '--cerebr-message-user-bg': 'rgba(37, 37, 38, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(45, 45, 45, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(51, 51, 51, var(--cerebr-opacity))',
         '--cerebr-icon-color': '#cccccc',
-        '--cerebr-border-color': '#404040',
-        '--cerebr-hover-color': 'rgba(255, 255, 255, 0.05)',
+        '--cerebr-border-color': '#454545',
+        '--cerebr-hover-color': 'rgba(255, 255, 255, 0.1)',
         '--cerebr-background-color': '#1e1e1e',
-        '--cerebr-highlight': '#569cd6'
+        '--cerebr-highlight': '#007acc'
       }
     },
     {
@@ -118,14 +118,14 @@ export function createThemeManager() {
       variables: {
         '--cerebr-opacity': '0.8',
         '--cerebr-bg-color': 'rgba(25, 30, 42, var(--cerebr-opacity))',
-        '--cerebr-text-color': '#e0e0e0',
+        '--cerebr-text-color': '#e3e9f0',
         '--cerebr-message-user-bg': 'rgba(44, 52, 73, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(32, 39, 55, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(21, 25, 36, var(--cerebr-opacity))',
-        '--cerebr-icon-color': '#a0a0a0',
+        '--cerebr-icon-color': '#8badc1',
         '--cerebr-border-color': '#2d384a',
-        '--cerebr-hover-color': 'rgba(100, 149, 237, 0.1)',
-        '--cerebr-background-color': '#191e2a',
+        '--cerebr-hover-color': 'rgba(100, 149, 237, 0.15)',
+        '--cerebr-background-color': '#192132',
         '--cerebr-highlight': '#61afef'
       }
     },
@@ -144,7 +144,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#49483e',
         '--cerebr-hover-color': 'rgba(166, 226, 46, 0.1)',
         '--cerebr-background-color': '#272822',
-        '--cerebr-highlight': '#66d9ef'
+        '--cerebr-highlight': '#f92672'
       }
     },
     {
@@ -162,7 +162,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#eee8d5',
         '--cerebr-hover-color': 'rgba(38, 139, 210, 0.1)',
         '--cerebr-background-color': '#fdf6e3',
-        '--cerebr-highlight': '#268bd2'
+        '--cerebr-highlight': '#2aa198'
       }
     },
     {
@@ -180,7 +180,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#073642',
         '--cerebr-hover-color': 'rgba(38, 139, 210, 0.1)',
         '--cerebr-background-color': '#002b36',
-        '--cerebr-highlight': '#268bd2'
+        '--cerebr-highlight': '#2aa198'
       }
     },
     {
@@ -194,11 +194,11 @@ export function createThemeManager() {
         '--cerebr-message-user-bg': 'rgba(59, 66, 82, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(67, 76, 94, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(46, 52, 64, var(--cerebr-opacity))',
-        '--cerebr-icon-color': '#81a1c1',
+        '--cerebr-icon-color': '#88c0d0',
         '--cerebr-border-color': '#3b4252',
         '--cerebr-hover-color': 'rgba(136, 192, 208, 0.1)',
         '--cerebr-background-color': '#2e3440',
-        '--cerebr-highlight': '#88c0d0'
+        '--cerebr-highlight': '#81a1c1'
       }
     },
     {
@@ -216,7 +216,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#44475a',
         '--cerebr-hover-color': 'rgba(189, 147, 249, 0.1)',
         '--cerebr-background-color': '#282a36',
-        '--cerebr-highlight': '#8be9fd'
+        '--cerebr-highlight': '#ff79c6'
       }
     },
     {
@@ -243,15 +243,15 @@ export function createThemeManager() {
       description: '东京白日浅色主题',
       variables: {
         '--cerebr-opacity': '0.75',
-        '--cerebr-bg-color': 'rgba(224, 222, 244, var(--cerebr-opacity))',
+        '--cerebr-bg-color': 'rgba(213, 214, 219, var(--cerebr-opacity))',
         '--cerebr-text-color': '#343b58',
         '--cerebr-message-user-bg': 'rgba(196, 204, 229, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(210, 212, 228, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(229, 233, 240, var(--cerebr-opacity))',
         '--cerebr-icon-color': '#5a4a78',
-        '--cerebr-border-color': '#cbcadf',
+        '--cerebr-border-color': '#9699a3',
         '--cerebr-hover-color': 'rgba(90, 74, 120, 0.05)',
-        '--cerebr-background-color': '#e1e2e7',
+        '--cerebr-background-color': '#d5d6db',
         '--cerebr-highlight': '#34548a'
       }
     },
@@ -266,7 +266,7 @@ export function createThemeManager() {
         '--cerebr-message-user-bg': 'rgba(35, 40, 52, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(28, 32, 43, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(20, 23, 31, var(--cerebr-opacity))',
-        '--cerebr-icon-color': '#84ffff',
+        '--cerebr-icon-color': '#80cbc4',
         '--cerebr-border-color': '#1f2233',
         '--cerebr-hover-color': 'rgba(84, 207, 216, 0.1)',
         '--cerebr-background-color': '#0f111a',
@@ -306,7 +306,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#482a74',
         '--cerebr-hover-color': 'rgba(255, 126, 219, 0.15)',
         '--cerebr-background-color': '#2a1b3d',
-        '--cerebr-highlight': '#36f9f6'
+        '--cerebr-highlight': '#fe4450'
       }
     },
     {
@@ -360,7 +360,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#504945',
         '--cerebr-hover-color': 'rgba(251, 73, 52, 0.1)',
         '--cerebr-background-color': '#282828',
-        '--cerebr-highlight': '#83a598'
+        '--cerebr-highlight': '#fb4934'
       }
     },
     {
@@ -378,7 +378,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#d5c4a1',
         '--cerebr-hover-color': 'rgba(157, 0, 6, 0.05)',
         '--cerebr-background-color': '#fbf1c7',
-        '--cerebr-highlight': '#076678'
+        '--cerebr-highlight': '#9d0006'
       }
     },
     {
@@ -388,7 +388,7 @@ export function createThemeManager() {
       variables: {
         '--cerebr-opacity': '0.8',
         '--cerebr-bg-color': 'rgba(31, 33, 42, var(--cerebr-opacity))',
-        '--cerebr-text-color': '#c7c8c2',
+        '--cerebr-text-color': '#cccac2',
         '--cerebr-message-user-bg': 'rgba(44, 48, 58, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(38, 41, 50, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(26, 28, 35, var(--cerebr-opacity))',
@@ -396,7 +396,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#373e4c',
         '--cerebr-hover-color': 'rgba(255, 204, 102, 0.1)',
         '--cerebr-background-color': '#1f212a',
-        '--cerebr-highlight': '#5ccfe6'
+        '--cerebr-highlight': '#f29e74'
       }
     },
     {
@@ -411,10 +411,10 @@ export function createThemeManager() {
         '--cerebr-message-ai-bg': 'rgba(245, 245, 245, var(--cerebr-opacity))',
         '--cerebr-input-bg': 'rgba(255, 255, 255, var(--cerebr-opacity))',
         '--cerebr-icon-color': '#ff9940',
-        '--cerebr-border-color': '#eee',
+        '--cerebr-border-color': '#e8e8e8',
         '--cerebr-hover-color': 'rgba(255, 153, 64, 0.05)',
         '--cerebr-background-color': '#fafafa',
-        '--cerebr-highlight': '#55b4d4'
+        '--cerebr-highlight': '#ff9940'
       }
     },
     {
@@ -432,7 +432,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#45475a',
         '--cerebr-hover-color': 'rgba(203, 166, 247, 0.1)',
         '--cerebr-background-color': '#1e1e2e',
-        '--cerebr-highlight': '#89b4fa'
+        '--cerebr-highlight': '#f5c2e7'
       }
     },
     {
@@ -450,7 +450,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#bcc0cc',
         '--cerebr-hover-color': 'rgba(136, 57, 239, 0.05)',
         '--cerebr-background-color': '#eff1f5',
-        '--cerebr-highlight': '#1e66f5'
+        '--cerebr-highlight': '#8839ef'
       }
     },
     {
@@ -468,7 +468,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#3e4451',
         '--cerebr-hover-color': 'rgba(198, 120, 221, 0.1)',
         '--cerebr-background-color': '#282c34',
-        '--cerebr-highlight': '#61afef'
+        '--cerebr-highlight': '#e06c75'
       }
     },
     {
@@ -486,7 +486,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#4e5579',
         '--cerebr-hover-color': 'rgba(199, 146, 234, 0.1)',
         '--cerebr-background-color': '#292d3e',
-        '--cerebr-highlight': '#82aaff'
+        '--cerebr-highlight': '#ff5370'
       }
     },
     {
@@ -504,7 +504,7 @@ export function createThemeManager() {
         '--cerebr-border-color': '#42384d',
         '--cerebr-hover-color': 'rgba(196, 167, 231, 0.1)',
         '--cerebr-background-color': '#191724',
-        '--cerebr-highlight': '#9ccfd8'
+        '--cerebr-highlight': '#eb6f92'
       }
     },
     {
@@ -522,7 +522,277 @@ export function createThemeManager() {
         '--cerebr-border-color': '#e5e0d9',
         '--cerebr-hover-color': 'rgba(144, 122, 169, 0.05)',
         '--cerebr-background-color': '#faf4ed',
-        '--cerebr-highlight': '#56949f'
+        '--cerebr-highlight': '#d7827e'
+      }
+    },
+    {
+      id: 'github-dimmed',
+      name: 'GitHub Dimmed',
+      description: 'GitHub 柔和灰暗主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(34, 39, 46, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#adbac7',
+        '--cerebr-message-user-bg': 'rgba(47, 54, 61, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(40, 46, 53, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(31, 36, 43, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#768390',
+        '--cerebr-border-color': '#444c56',
+        '--cerebr-hover-color': 'rgba(83, 155, 245, 0.1)',
+        '--cerebr-background-color': '#22272e',
+        '--cerebr-highlight': '#539bf5'
+      }
+    },
+    {
+      id: 'night-owl',
+      name: 'Night Owl',
+      description: '夜猫子编程主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(1, 22, 39, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#d6deeb',
+        '--cerebr-message-user-bg': 'rgba(21, 42, 59, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(11, 32, 49, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(1, 18, 32, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#82aaff',
+        '--cerebr-border-color': '#5f7e97',
+        '--cerebr-hover-color': 'rgba(130, 170, 255, 0.1)',
+        '--cerebr-background-color': '#011627',
+        '--cerebr-highlight': '#c792ea'
+      }
+    },
+    {
+      id: 'cobalt2',
+      name: 'Cobalt2',
+      description: '深蓝高对比度主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(0, 35, 53, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e0edff',
+        '--cerebr-message-user-bg': 'rgba(16, 51, 69, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(8, 43, 61, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(0, 29, 47, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#ffc600',
+        '--cerebr-border-color': '#0d3a58',
+        '--cerebr-hover-color': 'rgba(255, 198, 0, 0.1)',
+        '--cerebr-background-color': '#002535',
+        '--cerebr-highlight': '#ffc600'
+      }
+    },
+    {
+      id: 'winter-is-coming',
+      name: 'Winter is Coming',
+      description: '蓝色冷调主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(20, 30, 51, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#b7ceff',
+        '--cerebr-message-user-bg': 'rgba(30, 40, 61, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(25, 35, 56, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(17, 27, 45, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#95d0f9',
+        '--cerebr-border-color': '#264172',
+        '--cerebr-hover-color': 'rgba(149, 208, 249, 0.1)',
+        '--cerebr-background-color': '#0e1729',
+        '--cerebr-highlight': '#219fd5'
+      }
+    },
+    {
+      id: 'horizon',
+      name: 'Horizon',
+      description: '温暖橙粉色调主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(28, 30, 39, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e0e0e0',
+        '--cerebr-message-user-bg': 'rgba(38, 40, 49, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(33, 35, 44, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(25, 27, 36, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#e95678',
+        '--cerebr-border-color': '#32374d',
+        '--cerebr-hover-color': 'rgba(233, 86, 120, 0.1)',
+        '--cerebr-background-color': '#1c1e27',
+        '--cerebr-highlight': '#fab795'
+      }
+    },
+    {
+      id: 'noctis',
+      name: 'Noctis',
+      description: '低对比舒适夜间主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(32, 32, 32, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#c5cddb',
+        '--cerebr-message-user-bg': 'rgba(42, 42, 42, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(37, 37, 37, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(29, 29, 29, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#72b7c0',
+        '--cerebr-border-color': '#3c3c3c',
+        '--cerebr-hover-color': 'rgba(114, 183, 192, 0.1)',
+        '--cerebr-background-color': '#202020',
+        '--cerebr-highlight': '#cec5a9'
+      }
+    },
+    {
+      id: 'radical',
+      name: 'Radical',
+      description: '紫粉色高对比主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(20, 19, 34, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e0e0e0',
+        '--cerebr-message-user-bg': 'rgba(30, 29, 44, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(25, 24, 39, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(17, 16, 31, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#fe428e',
+        '--cerebr-border-color': '#38364d',
+        '--cerebr-hover-color': 'rgba(254, 66, 142, 0.1)',
+        '--cerebr-background-color': '#141322',
+        '--cerebr-highlight': '#a9ff68'
+      }
+    },
+    {
+      id: 'slack-dark',
+      name: 'Slack Dark',
+      description: 'Slack风格深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(31, 41, 55, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e2e8f0',
+        '--cerebr-message-user-bg': 'rgba(41, 51, 65, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(36, 46, 60, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(26, 36, 50, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#36c5f0',
+        '--cerebr-border-color': '#4b5563',
+        '--cerebr-hover-color': 'rgba(54, 197, 240, 0.1)',
+        '--cerebr-background-color': '#1e293b',
+        '--cerebr-highlight': '#ecb22e'
+      }
+    },
+    {
+      id: 'eva-dark',
+      name: 'Eva Dark',
+      description: '多彩现代深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(41, 45, 60, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#f8f8f2',
+        '--cerebr-message-user-bg': 'rgba(51, 55, 70, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(46, 50, 65, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(36, 40, 55, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#56b6c2',
+        '--cerebr-border-color': '#3b3f54',
+        '--cerebr-hover-color': 'rgba(86, 182, 194, 0.1)',
+        '--cerebr-background-color': '#292d3c',
+        '--cerebr-highlight': '#7cd850'
+      }
+    },
+    {
+      id: 'embark',
+      name: 'Embark',
+      description: '深紫色系主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(30, 30, 46, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#cbe3e7',
+        '--cerebr-message-user-bg': 'rgba(42, 42, 58, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(36, 36, 52, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(24, 24, 40, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#a1efd3',
+        '--cerebr-border-color': '#3e3859',
+        '--cerebr-hover-color': 'rgba(161, 239, 211, 0.1)',
+        '--cerebr-background-color': '#1e1c31',
+        '--cerebr-highlight': '#f48fb1'
+      }
+    },
+    {
+      id: 'andromeda',
+      name: 'Andromeda',
+      description: '星际科幻深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(35, 37, 46, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#d5ced9',
+        '--cerebr-message-user-bg': 'rgba(45, 47, 56, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(40, 42, 51, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(32, 34, 43, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#c78feb',
+        '--cerebr-border-color': '#4a4c57',
+        '--cerebr-hover-color': 'rgba(199, 143, 235, 0.1)',
+        '--cerebr-background-color': '#23252e',
+        '--cerebr-highlight': '#26c7d0'
+      }
+    },
+    {
+      id: 'shades-of-purple',
+      name: 'Shades of Purple',
+      description: '紫色系高彩度主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(42, 35, 81, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#fff9f9',
+        '--cerebr-message-user-bg': 'rgba(52, 45, 91, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(47, 40, 86, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(36, 30, 76, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#fad000',
+        '--cerebr-border-color': '#5d4d96',
+        '--cerebr-hover-color': 'rgba(250, 208, 0, 0.1)',
+        '--cerebr-background-color': '#2d2b55',
+        '--cerebr-highlight': '#ff9d00'
+      }
+    },
+    {
+      id: 'deepdark-material',
+      name: 'Deep Dark Material',
+      description: '黑暗物质深色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(21, 21, 21, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#cccccc',
+        '--cerebr-message-user-bg': 'rgba(31, 31, 31, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(26, 26, 26, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(18, 18, 18, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#4db6ac',
+        '--cerebr-border-color': '#303030',
+        '--cerebr-hover-color': 'rgba(77, 182, 172, 0.1)',
+        '--cerebr-background-color': '#151515',
+        '--cerebr-highlight': '#ff5370'
+      }
+    },
+    {
+      id: 'hubble',
+      name: 'Hubble',
+      description: '星空深蓝主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(14, 24, 44, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#d8e5ff',
+        '--cerebr-message-user-bg': 'rgba(24, 34, 54, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(19, 29, 49, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(11, 21, 41, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#6ca4f4',
+        '--cerebr-border-color': '#28375c',
+        '--cerebr-hover-color': 'rgba(108, 164, 244, 0.1)',
+        '--cerebr-background-color': '#0e182c',
+        '--cerebr-highlight': '#ee8e66'
+      }
+    },
+    {
+      id: 'green-forest',
+      name: 'Green Forest',
+      description: '森林绿色主题',
+      variables: {
+        '--cerebr-opacity': '0.85',
+        '--cerebr-bg-color': 'rgba(21, 32, 22, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#d9e6dd',
+        '--cerebr-message-user-bg': 'rgba(31, 42, 32, var(--cerebr-opacity))',
+        '--cerebr-message-ai-bg': 'rgba(26, 37, 27, var(--cerebr-opacity))',
+        '--cerebr-input-bg': 'rgba(16, 27, 17, var(--cerebr-opacity))',
+        '--cerebr-icon-color': '#87c095',
+        '--cerebr-border-color': '#324233',
+        '--cerebr-hover-color': 'rgba(135, 192, 149, 0.1)',
+        '--cerebr-background-color': '#172018',
+        '--cerebr-highlight': '#d9c87c'
       }
     }
   ];
@@ -584,6 +854,12 @@ export function createThemeManager() {
       Object.entries(theme.variables).forEach(([key, value]) => {
         root.style.setProperty(key, value);
       });
+    }
+    
+    // 更新主题选择器标题，显示当前主题名称
+    const themeTitleSpan = document.querySelector("#theme-selector > div.theme-title > span");
+    if (themeTitleSpan) {
+      themeTitleSpan.textContent = theme.name;
     }
     
     return true;
@@ -666,12 +942,18 @@ export function createThemeManager() {
       } else {
         themeVars = theme.variables;
       }
+
+      // 移除透明度，确保预览卡片中的颜色是不透明的
+      const removeOpacity = (colorValue) => {
+        console.log(colorValue);
+        colorValue = colorValue.replace('rgba', 'rgb').replace('var(--cerebr-opacity)', '1');
+        return colorValue;
+      };
       
-      previewCard.style.setProperty('--preview-bg', themeVars['--cerebr-bg-color'] || '#ffffff');
-      previewCard.style.setProperty('--preview-body-bg', themeVars['--cerebr-background-color'] || '#ffffff');
+      previewCard.style.setProperty('--preview-header', themeVars['--cerebr-border-color'] || '#ffffff');
+      previewCard.style.setProperty('--preview-body-bg', removeOpacity(themeVars['--cerebr-bg-color']) || '#ffffff');
       previewCard.style.setProperty('--preview-user-msg', themeVars['--cerebr-message-user-bg'] || '#e1f5fe');
       previewCard.style.setProperty('--preview-ai-msg', themeVars['--cerebr-message-ai-bg'] || '#f5f5f5');
-      
       // 创建预览内容
       const previewContent = document.createElement('div');
       previewContent.className = 'theme-preview-content';

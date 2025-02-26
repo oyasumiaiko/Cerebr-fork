@@ -342,7 +342,6 @@ body {
 
 /* 收藏按钮样式 */
 .favorite-btn i {
-    color: var(--cerebr-icon-color);
     transition: color 0.2s ease, transform 0.2s ease;
 }
 
@@ -395,7 +394,7 @@ body {
 }
 
 input:checked + .slider {
-    background-color: var(--cerebr-highlight);
+    background-color: var(--cerebr-icon-color);
 }
 
 input:checked + .slider:before {
@@ -947,7 +946,7 @@ input:checked + .slider:before {
     }
 
     input:checked + .slider {
-        background-color: var(--cerebr-highlight);
+        background-color: var(--cerebr-icon-color);
     }
 
     .card-button:hover {
@@ -1103,7 +1102,7 @@ input:checked + .slider:before {
     -webkit-appearance: none;
     width: 12px;
     height: 12px;
-    background: var(--cerebr-highlight);
+    background: var(--cerebr-icon-color);
     border-radius: 50%;
     cursor: pointer;
     transition: transform 0.2s;
@@ -2006,7 +2005,7 @@ body.hide-references .reference-number.superscript {
     padding: 16px;
     /* z-index: 9999; */
     backdrop-filter: blur(var(--cerebr-blur-radius));
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 0px 20px 4px rgba(0, 0, 0, 0.2);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -2236,68 +2235,6 @@ body.hide-references .reference-number.superscript {
     0% { opacity: 0.5; }
     50% { opacity: 1; }
     100% { opacity: 0.5; }
-}
-
-/* 内存管理开关容器 */
-.switch-container {
-    display: flex;
-    align-items: center;
-    margin-right: 10px;
-}
-
-.switch-label {
-    margin-right: 8px;
-    font-size: 14px;
-}
-
-/* 小开关样式 */
-.small-switch {
-    position: relative;
-    display: inline-block;
-    width: 36px;
-    height: 18px;
-}
-
-.small-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.small-switch .slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: var(--cerebr-border-color);
-    transition: .4s;
-    border-radius: 34px;
-}
-
-.small-switch .slider:before {
-    position: absolute;
-    content: "";
-    height: 14px;
-    width: 14px;
-    left: 2px;
-    bottom: 2px;
-    background-color: var(--cerebr-bg-color);
-    transition: .4s;
-    border-radius: 50%;
-}
-
-.small-switch input:checked + .slider {
-    background-color: var(--cerebr-highlight);
-}
-
-.small-switch input:focus + .slider {
-    box-shadow: 0 0 1px var(--cerebr-highlight);
-}
-
-.small-switch input:checked + .slider:before {
-    transform: translateX(18px);
 }
 
 /* 添加更多间距 */
@@ -2734,7 +2671,7 @@ body.hide-references .reference-number.superscript {
 
 .theme-preview-header {
     height: 20px;
-    background: var(--preview-bg);
+    background: var(--preview-header);
 }
 
 .theme-preview-messages {
