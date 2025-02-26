@@ -448,12 +448,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             // 发送消息
             messageSender.sendMessage();
-        } else if (e.key === '-') {
-            // 检查输入框是否为空
-            if (!this.textContent.trim() && !this.querySelector('.image-tag')) {
-                e.preventDefault();
-                messageSender.toggleTemporaryMode();
-            }
         }
     });
 

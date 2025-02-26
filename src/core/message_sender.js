@@ -490,7 +490,7 @@ export function createMessageSender(options) {
         messageInput.textContent = prompt;
 
         // 发送消息
-        await sendMessage();
+        await sendMessage({ specificPromptType: promptType });
       } else {
         if (wasTemporaryMode) {
           exitTemporaryMode();
@@ -498,13 +498,10 @@ export function createMessageSender(options) {
         await chatHistoryUI.clearChatHistory();
 
         // 为PDF文件使用自定义的PDF提示词
-        if (isPDF) {
-          messageInput.textContent = prompts.pdf.prompt;
-        } else {
-          messageInput.textContent = prompts.summary.prompt;
-        }
-        // 发送消息
-        await sendMessage();
+        const promptType = isPDF ? 'pdf' : 'summary';
+        messageInput.textContent = prompts[promptType].prompt;
+        // 发送消息时指定提示词类型
+        await sendMessage({ specificPromptType: promptType });
       }
     } catch (error) {
       console.error('获取选中文本失败:', error);

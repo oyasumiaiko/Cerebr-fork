@@ -985,7 +985,6 @@ export function createThemeManager() {
 
       // 移除透明度，确保预览卡片中的颜色是不透明的
       const removeOpacity = (colorValue) => {
-        console.log(colorValue);
         colorValue = colorValue.replace('rgba', 'rgb').replace('var(--cerebr-opacity)', '1');
         return colorValue;
       };
