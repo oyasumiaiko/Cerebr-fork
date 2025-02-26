@@ -70,6 +70,8 @@ chrome.commands.onCommand.addListener(async (command) => {
     await handleTabCommand('TOGGLE_TEMP_MODE');
   } else if (command === 'capture_screenshot') {
     await handleTabCommand('CAPTURE_SCREENSHOT');
+  } else if (command === 'toggle_fullscreen') {
+    await handleTabCommand('TOGGLE_FULLSCREEN');
   }
 });
 

@@ -46,6 +46,9 @@
     },
     "capture_screenshot": {
       "description": "截取当前页面截图添加到消息中"
+    },
+    "toggle_fullscreen": {
+      "description": "切换全屏模式"
     }
   },
   "background": {

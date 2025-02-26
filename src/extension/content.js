@@ -436,7 +436,7 @@ class CerebrSidebar {
       }
 
       // 如果之前和现在都是显示状态，无需操作
-      if (wasVisible && this.isVisible) return;
+      if (wasVisible && this.isVisible && !this.isFullscreen) return;
 
       console.log(`切换侧边栏: ${wasVisible} -> ${this.isVisible}, 位置: ${this.sidebarPosition}`);
 
@@ -716,6 +716,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       case 'CLOSE_SIDEBAR':
         sidebar.toggle(false);  // 明确传入 false 表示关闭
+        break;
+      case 'TOGGLE_FULLSCREEN':
+        sidebar.toggle(true);  // 确保侧边栏打开
+        sidebar.toggleFullscreen(!sidebar.isFullscreen);  // 切换全屏状态
         break;
       case 'QUICK_SUMMARY':
         sidebar.toggle(true);  // 明确传入 true 表示打开
