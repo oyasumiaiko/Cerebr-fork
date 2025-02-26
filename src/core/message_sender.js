@@ -240,26 +240,17 @@ export function createMessageSender(options) {
 
       // 构建消息数组
       const messages = await buildMessages(
-        prompts, 
-        injectedSystemMessages, 
-        pageContent, 
-        imageContainsScreenshot, 
+        prompts,
+        injectedSystemMessages,
+        pageContent,
+        imageContainsScreenshot,
         currentPromptType
       );
 
-      // 获取API配置 - 如果指定了配置则使用指定的配置
-      let config;
-      if (specificApiConfig) {
-        // 尝试通过部分配置获取完整配置
-        config = apiManager.getApiConfigFromPartial(specificApiConfig);
-        if (!config) {
-          // 如果获取失败，回退到默认方式获取配置
-          console.warn('无法从部分配置获取完整API配置，使用默认配置');
-          config = apiManager.getModelConfig(currentPromptType, prompts);
-        }
-      } else {
-        config = apiManager.getModelConfig(currentPromptType, prompts);
-      }
+      // 获取API配置
+      // 优先使用指定的配置，其次使用提示词类型对应的模型配置，最后使用当前选中的配置
+      const config = specificApiConfig || 
+                    apiManager.getModelConfig(currentPromptType, prompts);
       
       // 如果用户消息存在，保存API配置信息到用户消息
       if (userMessageDiv && config) {
