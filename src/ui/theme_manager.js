@@ -631,20 +631,15 @@ export function createThemeManager() {
     // 清空容器
     container.innerHTML = '';
     
-    // 获取常用/推荐主题进行预览
-    const previewThemes = [
-      'light', 'dark', 'github-light', 'github-dark', 'dracula', 
-      'tokyo-night', 'catppuccin-mocha', 'catppuccin-latte', 'synthwave',
-      'apple-light', 'apple-dark', 'rosepine', 'rosepine-dawn'
-    ];
-    
     // 获取当前主题ID
     const currentThemeId = document.documentElement.getAttribute('data-theme') || 'auto';
     
-    // 为每个主题创建预览卡片
-    previewThemes.forEach(themeId => {
-      const theme = getThemeById(themeId);
-      if (!theme) return;
+    // 检测系统深浅色模式，用于auto主题的预览
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    // 为所有预设主题创建预览卡片
+    PREDEFINED_THEMES.forEach(theme => {
+      const themeId = theme.id;
       
       // 创建预览卡片
       const previewCard = document.createElement('div');
@@ -656,7 +651,19 @@ export function createThemeManager() {
       }
       
       // 设置预览卡片的CSS变量
-      const themeVars = theme.variables;
+      let themeVars;
+      
+      // 为auto主题特殊处理，使用系统当前深浅模式对应的主题变量
+      if (themeId === 'auto') {
+        const systemTheme = getThemeById(prefersDark ? 'dark' : 'light');
+        themeVars = systemTheme.variables;
+        
+        // 为auto主题预览卡片添加标识
+        previewCard.classList.add(prefersDark ? 'dark-mode' : 'light-mode');
+      } else {
+        themeVars = theme.variables;
+      }
+      
       previewCard.style.setProperty('--preview-bg', themeVars['--cerebr-bg-color'] || '#ffffff');
       previewCard.style.setProperty('--preview-body-bg', themeVars['--cerebr-background-color'] || '#ffffff');
       previewCard.style.setProperty('--preview-user-msg', themeVars['--cerebr-message-user-bg'] || '#e1f5fe');
@@ -692,6 +699,14 @@ export function createThemeManager() {
       const themeName = document.createElement('div');
       themeName.className = 'theme-preview-card-name';
       themeName.textContent = theme.name;
+      
+      // 为auto主题添加系统模式指示
+      if (themeId === 'auto') {
+        const modeIndicator = document.createElement('span');
+        modeIndicator.className = 'auto-theme-indicator';
+        modeIndicator.textContent = prefersDark ? ' (当前: 深色)' : ' (当前: 浅色)';
+        themeName.appendChild(modeIndicator);
+      }
       
       // 组装预览卡片
       previewContent.appendChild(header);
