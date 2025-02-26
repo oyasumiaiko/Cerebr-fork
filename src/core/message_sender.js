@@ -295,9 +295,11 @@ export function createMessageSender(options) {
 
       // 消息处理完成后，自动保存会话
       if (currentConversationId) {
-        chatHistoryUI.saveCurrentConversation(true); // 更新现有会话记录
+        await chatHistoryUI.saveCurrentConversation(true); // 更新现有会话记录
       } else {
-        chatHistoryUI.saveCurrentConversation(false); // 新会话，生成新的 conversation id
+        await chatHistoryUI.saveCurrentConversation(false); // 新会话，生成新的 conversation id
+        // 获取新创建的会话ID并更新本地变量
+        currentConversationId = chatHistoryUI.getCurrentConversationId();
       }
 
     } catch (error) {
@@ -556,6 +558,7 @@ export function createMessageSender(options) {
    */
   function setCurrentConversationId(id) {
     currentConversationId = id;
+    console.log(`消息发送器: 设置当前会话ID为 ${id}`);
   }
 
   /**

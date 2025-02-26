@@ -245,6 +245,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         scrollToBottom,
         getPrompts: () => promptSettingsManager.getPrompts()
     });
+    
+    // 同步当前会话ID
+    messageSender.setCurrentConversationId(chatHistoryUI.getCurrentConversationId());
+    
+    // 将消息发送器添加到全局对象，便于其他模块访问
+    window.cerebr.messageSender = messageSender;
 
     // 创建上下文菜单管理器实例
     const contextMenuManager = createContextMenuManager({

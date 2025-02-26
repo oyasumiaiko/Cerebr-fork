@@ -282,6 +282,11 @@ export function createChatHistoryUI(options) {
     chatHistory.currentNode = fullConversation.messages.length > 0 ? fullConversation.messages[fullConversation.messages.length - 1].id : null;
     // 保存加载的对话记录ID，用于后续更新操作
     currentConversationId = fullConversation.id;
+    
+    // 通知消息发送器当前会话ID已更新
+    if (window.cerebr && window.cerebr.messageSender) {
+      window.cerebr.messageSender.setCurrentConversationId(currentConversationId);
+    }
   }
 
   /**
@@ -299,6 +304,11 @@ export function createChatHistoryUI(options) {
     // 重置当前会话ID，确保下次发送新消息创建新会话
     currentConversationId = null;
     activeConversation = null;
+    
+    // 通知消息发送器当前会话ID已重置
+    if (window.cerebr && window.cerebr.messageSender) {
+      window.cerebr.messageSender.setCurrentConversationId(null);
+    }
   }
 
   /**
