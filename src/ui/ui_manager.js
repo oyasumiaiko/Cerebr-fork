@@ -234,13 +234,13 @@ export function createUIManager(options) {
       if (e.deltaY < 0) { // 向上滚动
         setShouldAutoScroll(false);
       } else if (e.deltaY > 0) { // 向下滚动时检查底部距离
-        const threshold = 50; // 距离底部小于50px认为接近底部
+        const threshold = 100; // 距离底部小于100px认为接近底部
         const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
         if (distanceFromBottom < threshold) {
           setShouldAutoScroll(true);
         }
       }
-    });
+    }, { passive: true });
 
     // 添加点击事件监听
     chatContainer.addEventListener('click', () => {

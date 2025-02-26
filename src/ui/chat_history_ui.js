@@ -1169,7 +1169,6 @@ export function createChatHistoryUI(options) {
       const urlObj = new URL(url);
       return urlObj.hostname;
     } catch (error) {
-      console.error('处理URL失败:', error);
       return url || '未知';
     }
   }
