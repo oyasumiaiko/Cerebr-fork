@@ -2672,6 +2672,36 @@ body.hide-references .reference-number.superscript {
 .theme-preview-header {
     height: 20px;
     background: var(--preview-header);
+    color: var(--preview-icon-color);
+    position: relative;
+}
+
+/* 主题颜色小圆点容器 */
+.theme-preview-dots {
+    display: flex;
+    gap: 5px;
+    padding: 5px;
+}
+
+/* 小圆点基础样式 */
+.theme-preview-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+/* 各类型小圆点样式 */
+.theme-preview-dot.highlight-dot {
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.theme-preview-dot.text-dot {
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.theme-preview-dot.icon-dot {
+    border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .theme-preview-messages {
@@ -2697,6 +2727,15 @@ body.hide-references .reference-number.superscript {
 .theme-preview-message.ai {
     background: var(--preview-ai-msg);
     align-self: flex-start;
+}
+
+.theme-preview-message {
+    color: var(--preview-text-color);
+}
+
+.preview-highlight {
+    color: var(--preview-highlight-color);
+    font-weight: bold;
 }
 
 .theme-preview-card-name {

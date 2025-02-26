@@ -954,6 +954,10 @@ export function createThemeManager() {
       previewCard.style.setProperty('--preview-body-bg', removeOpacity(themeVars['--cerebr-bg-color']) || '#ffffff');
       previewCard.style.setProperty('--preview-user-msg', themeVars['--cerebr-message-user-bg'] || '#e1f5fe');
       previewCard.style.setProperty('--preview-ai-msg', themeVars['--cerebr-message-ai-bg'] || '#f5f5f5');
+      previewCard.style.setProperty('--preview-highlight', themeVars['--cerebr-highlight'] || '#007acc');
+      previewCard.style.setProperty('--preview-text-color', themeVars['--cerebr-text-color'] || '#333333');
+      previewCard.style.setProperty('--preview-icon-color', themeVars['--cerebr-icon-color'] || '#586069');
+      
       // 创建预览内容
       const previewContent = document.createElement('div');
       previewContent.className = 'theme-preview-content';
@@ -961,6 +965,37 @@ export function createThemeManager() {
       // 创建顶部栏
       const header = document.createElement('div');
       header.className = 'theme-preview-header';
+      
+      // 添加主题颜色小圆点
+      const colorDotsContainer = document.createElement('div');
+      colorDotsContainer.className = 'theme-preview-dots';
+      
+      // 添加highlight颜色小圆点
+      const highlightDot = document.createElement('span');
+      highlightDot.className = 'theme-preview-dot highlight-dot';
+      highlightDot.style.backgroundColor = themeVars['--cerebr-highlight'] || '#007acc';
+           
+      // 添加icon颜色小圆点
+      const iconDot = document.createElement('span');
+      iconDot.className = 'theme-preview-dot icon-dot';
+      iconDot.style.backgroundColor = themeVars['--cerebr-icon-color'] || '#586069';
+
+      // 添加text颜色小圆点
+      const textDot = document.createElement('span');
+      textDot.className = 'theme-preview-dot text-dot';
+      textDot.style.backgroundColor = themeVars['--cerebr-text-color'] || '#333333';
+ 
+      const dummy = document.createElement('span');
+      dummy.className = 'theme-preview-dot dummy-dot';
+
+      // 将小圆点添加到容器
+      colorDotsContainer.appendChild(highlightDot);
+      colorDotsContainer.appendChild(iconDot);
+      colorDotsContainer.appendChild(textDot);
+      colorDotsContainer.appendChild(dummy);
+      
+      // 将小圆点容器添加到头部
+      header.appendChild(colorDotsContainer);
       
       // 创建消息区域
       const messagesContainer = document.createElement('div');
