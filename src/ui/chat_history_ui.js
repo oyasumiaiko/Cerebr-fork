@@ -461,14 +461,18 @@ export function createChatHistoryUI(options) {
    * @param {string} filterText - 过滤文本
    */
   async function loadConversationHistories(panel, filterText) {
+    // 设置当前的过滤条件标识
+    panel.dataset.currentFilter = filterText;
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
 
     listContainer.innerHTML = '';
     
-    // 使用元数据加载，减少内存占用
+    // 获取所有对话元数据
     const histories = await getAllConversationMetadata();
-    
+    // 如果在获取过程中过滤条件已变化，则放弃本次结果
+    if (panel.dataset.currentFilter !== filterText) return;
+
     if (filterText) {
       const lowerFilter = filterText.toLowerCase();
       // 对于有过滤条件的情况，需要加载完整内容进行搜索
@@ -495,6 +499,8 @@ export function createChatHistoryUI(options) {
         // 如果元数据不匹配，则加载完整内容并搜索
         try {
           const fullConversation = await getConversationById(historyMeta.id);
+          // 检查过滤条件是否仍然一致，若不一致则终止
+          if (panel.dataset.currentFilter !== filterText) return;
           if (fullConversation) {
             const messagesContent = fullConversation.messages && fullConversation.messages.length
               ? fullConversation.messages.map(msg => {
@@ -523,6 +529,9 @@ export function createChatHistoryUI(options) {
       
       // 移除加载指示器
       loadingIndicator.remove();
+      
+      // 检查过滤条件是否仍然一致
+      if (panel.dataset.currentFilter !== filterText) return;
       
       // 显示过滤结果
       if (filteredHistories.length === 0) {
@@ -591,11 +600,12 @@ export function createChatHistoryUI(options) {
         summaryDiv.className = 'summary';
         let displaySummary = conv.summary || '';
         if (filterText && filterText.trim() !== "") {
-          const regex = new RegExp(`(${filterText})`, 'gi');
+          const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp(`(${escapedFilterForSummary})`, 'gi');
           displaySummary = displaySummary.replace(regex, '<mark>$1</mark>');
         }
         summaryDiv.innerHTML = displaySummary;
-        
+
         const infoDiv = document.createElement('div');
         infoDiv.className = 'info';
         const convDate = new Date(conv.startTime);
@@ -614,7 +624,7 @@ export function createChatHistoryUI(options) {
         item.appendChild(summaryDiv);
         item.appendChild(infoDiv);
 
-        // 如果有筛选关键字且对象中包含完整消息，尝试提取所有匹配关键字附近的内容作为 snippet
+        // 高亮 snippet 的部分代码保持不变，此处也会使用转义后的正则
         if (filterText && filterText.trim() !== "" && conv.messages) {
           let snippets = [];
           let totalMatches = 0;
