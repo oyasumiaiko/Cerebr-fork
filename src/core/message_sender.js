@@ -96,7 +96,8 @@ export function createMessageSender(options) {
     try {
       console.log('发送获取网页内容请求');
       const response = await chrome.runtime.sendMessage({
-        type: 'GET_PAGE_CONTENT_FROM_SIDEBAR'
+        type: 'GET_PAGE_CONTENT_FROM_SIDEBAR',
+        includeDOM: false
       });
       return response;
     } catch (error) {
@@ -166,10 +167,10 @@ export function createMessageSender(options) {
     if (shouldUseImagePrompt) {
       messageText = prompts.image.prompt;
     }
-    
+    const getPromptTypeFromContent = messageProcessor.getPromptTypeFromContent(messageText, prompts);
+
     // 获取提示词类型 - 如果指定了类型则使用指定的类型
-    const currentPromptType = specificPromptType || 
-                             messageProcessor.getPromptTypeFromContent(messageText, prompts);
+    const currentPromptType = specificPromptType || getPromptTypeFromContent;
 
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
@@ -267,6 +268,7 @@ export function createMessageSender(options) {
       // 优先使用指定的配置，其次使用提示词类型对应的模型配置，最后使用当前选中的配置
       const config = specificApiConfig || 
                     apiManager.getModelConfig(currentPromptType, prompts);
+
       
       // 如果用户消息存在，保存API配置信息到用户消息
       if (userMessageDiv && config) {

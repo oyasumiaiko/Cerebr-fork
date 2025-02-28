@@ -905,10 +905,10 @@ async function waitForContent() {
         const pendingCount = requestManager.getPendingRequestsCount();
         if (pendingCount > 0) {
           reason.push(`还有 ${pendingCount} 个网络请求未完成`);
-          }
-          const waitTime = requestManager.getWaitTimeInSeconds();
-          if (waitTime > 0) {
-            reason.push(`等待请求稳定，剩余 ${waitTime} 秒`);
+        }
+        const waitTime = requestManager.getWaitTimeInSeconds();
+        if (waitTime > 0) {
+          reason.push(`等待请求稳定，剩余 ${waitTime} 秒`);
         } else if (!requestManager.lastRequestCompletedTime) {
           reason.push('等待首个请求完成');
         }
@@ -922,7 +922,45 @@ async function waitForContent() {
   });
 }
 
-async function extractPageContent() {
+/**
+ * 提取重要的DOM结构（移除不需要的元素），仅保留对内容有意义的部分
+ * @returns {string} 清理后的DOM结构的outerHTML
+ */
+function extractImportantDOM() {
+  const clone = document.body.cloneNode(true);
+  const selectorsToRemove = [
+    'script', 'style', 'nav', 'header', 'footer',
+    'iframe', 'noscript', 'video',
+    '[role="complementary"]', '[role="navigation"]',
+    '.sidebar', '.nav', '.footer', '.header',
+    '.immersive-translate-target-inner', 'img', 'svg'
+  ];
+  selectorsToRemove.forEach(selector => {
+    clone.querySelectorAll(selector).forEach(el => el.remove());
+  });
+  
+  // 遍历所有元素，清理每个节点的属性，仅保留允许的属性（例如只保留 id、class、href、title、placeholder、alt）
+  const allowedAttributes = new Set(['id', 'class', 'href', 'title', 'placeholder', 'alt']);
+  [clone, ...clone.querySelectorAll('*')].forEach(el => {
+    for (let i = el.attributes.length - 1; i >= 0; i--) {
+      const attr = el.attributes[i];
+      if (!allowedAttributes.has(attr.name)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+
+  // 添加：删除所有注释节点（这些注释会被序列化为转义字符如 \x3C!--css-build:shady--> ）
+  const commentWalker = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT, null, false);
+  let commentNode;
+  while (commentNode = commentWalker.nextNode()) {
+    commentNode.parentNode.removeChild(commentNode);
+  }
+
+  return clone.outerHTML;
+}
+
+async function extractPageContent(includeDOM) {
   console.log('extractPageContent 开始提取页面内容');
 
   // 检查是否是PDF或者iframe中的PDF
@@ -1038,11 +1076,24 @@ async function extractPageContent() {
   // console.log('页面内容提取完成，内容:', mainContent);
   // console.log('页面内容提取完成，内容长度:', mainContent.length);
 
-  return {
+  const result = {
     title: document.title,
     url: window.location.href,
     content: mainContent
   };
+  
+  // 当includeDOM为true，则返回经过清理后的页面DOM结构（超大则截断）
+  if (includeDOM) {
+    let fullDOM = extractImportantDOM();
+    // 设置最大DOM字符数，可通过 settings 调整，默认为200,000字符
+    const maxDOMSize = window.cerebr?.settings?.maxDOMSize || 200000;
+    if (fullDOM.length > maxDOMSize) {
+      fullDOM = fullDOM.slice(0, maxDOMSize) + "\n[DOM truncated]";
+    }
+    result.dom = fullDOM;
+  }
+  
+  return result;
 }
 
 // PDF.js 库的路径
@@ -1161,7 +1212,8 @@ async function extractTextFromPDF(url) {
   }
 }
 
-// --- 修改截图功能，使用 captureVisibleTab 截取屏幕开始 ---
+// ====================== 网页截图功能 ======================
+
 /**
  * 捕获当前可见标签页的屏幕截图并发送到侧边栏。
  * 截图前会先隐藏侧边栏，并在等待两帧后再进行截图，最后恢复侧边栏显示。
@@ -1204,4 +1256,279 @@ function captureAndDropScreenshot() {
 
   waitCaptureWithAnimationFrame(5); // 初始调用，设置递归层级为 5，实现等待五帧的效果
 }
-// --- 修改截图功能，使用 captureVisibleTab 截取屏幕结束 ---
+
+// ====================== 临时调试用 ======================
+
+// 调试功能：暴露几个调试函数方便查看PDF提取和DOM提取结果
+window.cerebrDebug = {
+  /**
+   * 调试提取PDF内容
+   * @param {string} [pdfUrl] - 可选的PDF URL，默认为当前页面URL
+   * @returns {Promise<string|undefined>} 提取的PDF文本内容
+   */
+  debugExtractPDF: async function(pdfUrl) {
+    pdfUrl = pdfUrl || window.location.href;
+    console.log(`Debug: 开始提取 PDF 内容, URL: ${pdfUrl}`);
+    try {
+      const pdfText = await extractTextFromPDF(pdfUrl);
+      console.log("Debug: PDF 内容提取结果:", pdfText);
+      return pdfText;
+    } catch (error) {
+      console.error("Debug: PDF 内容提取失败:", error);
+    }
+  },
+  /**
+   * 调试提取重要DOM结构
+   * @returns {string} 清理过的重要DOM结构
+   */
+  debugExtractDOM: function() {
+    console.log("Debug: 开始提取重要的 DOM 结构");
+    const dom = extractImportantDOM();
+    console.log("Debug: 提取后的 DOM:", dom);
+    return dom;
+  },
+  /**
+   * 调试提取可见 DOM 树（JSON 格式）
+   * @returns {Object} 可见 DOM 树的 JSON 结构
+   */
+  debugExtractVisibleDOM: function() {
+    console.log("Debug: 开始提取可见 DOM 树（JSON 格式）");
+    const domTree = extractVisibleDOMTree(document.body);
+    console.log("Debug: 可见 DOM 树：", JSON.stringify(domTree, null, 2));
+    return domTree;
+  },
+  /**
+   * 将 JSON DOM 树转换为 HTML 字符串
+   * @param {Object} jsonNode - 使用 extractVisibleDOMTree() 提取出的 JSON DOM 节点
+   * @returns {string} 生成的 HTML 字符串
+   */
+  debugExtractVisibleHTMLString: function() {
+    console.log("Debug: 开始生成清洁的可见 HTML 字符串");
+    const domTree = extractVisibleDOMTree(document.body);
+    const htmlString = jsonDomToHtml(domTree);
+    console.log("Debug: 可见 HTML 字符串：", htmlString);
+    return htmlString;
+  }
+};
+
+/**
+ * 遍历 DOM 并返回简化后的 JSON 结构，仅保留对用户可见的部分
+ * @param {HTMLElement} root - 待遍历的根节点
+ * @returns {Object|null} 简化后的 DOM 结构树
+ */
+function extractVisibleDOMTree(root) {
+  const allowedAttributes = ['id', 'class', 'href', 'title', 'placeholder', 'alt'];
+  
+  function serializeNode(node) {
+    const computedStyle = window.getComputedStyle(node);
+    // 如果节点样式设置为不可见，则返回null
+    if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') {
+      return null;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      return null;
+    }
+
+    const serialized = {
+      tag: node.tagName.toLowerCase()
+    };
+
+    // 记录允许的属性
+    if (node.attributes && node.attributes.length > 0) {
+      serialized.attributes = {};
+      Array.from(node.attributes).forEach(attr => {
+        if (allowedAttributes.includes(attr.name)) {
+          serialized.attributes[attr.name] = attr.value;
+        }
+      });
+    }
+
+    // 保存文本内容（仅当没有子元素时，认为是直接文本）
+    const textContent = node.textContent.trim();
+    if (textContent && node.children.length === 0) {
+      serialized.text = textContent;
+    }
+
+    // 递归处理子元素
+    const children = [];
+    Array.from(node.children).forEach(child => {
+      const childSerialized = serializeNode(child);
+      if (childSerialized !== null) {
+        children.push(childSerialized);
+      }
+    });
+    if (children.length) {
+      serialized.children = children;
+    }
+    return serialized;
+  }
+
+  return serializeNode(root);
+}
+
+// ====================== 新增：将 JSON DOM 树转换为 HTML 字符串 ======================
+
+/**
+ * 将 JSON DOM 树转换为 HTML 字符串
+ * @param {Object} jsonNode - 使用 extractVisibleDOMTree() 提取出的 JSON DOM 节点
+ * @returns {string} 生成的 HTML 字符串
+ */
+function jsonDomToHtml(jsonNode) {
+  if (!jsonNode) return "";
+  let attrStr = "";
+  if (jsonNode.attributes) {
+    for (const key in jsonNode.attributes) {
+      attrStr += ` ${key}="${jsonNode.attributes[key]}"`;
+    }
+  }
+  let innerHtml = "";
+  // 如果节点有直接文本，则作为 inner HTML
+  if (jsonNode.text) {
+    innerHtml = jsonNode.text;
+  }
+  // 递归处理子节点
+  if (jsonNode.children && jsonNode.children.length) {
+    innerHtml += jsonNode.children.map(child => jsonDomToHtml(child)).join("");
+  }
+  return `<${jsonNode.tag}${attrStr}>${innerHtml}</${jsonNode.tag}>`;
+}
+
+// ====================== 新增：根据指定参数查询页面返回目标 DOM 片段 ======================
+
+/**
+ * 根据指定参数查询页面返回目标 DOM 片段。
+ * @param {Object} params - 包含查询参数的对象，包括 query、target、maxDistance
+ * @returns {string} 目标 DOM 片段的 outerHTML
+ */
+function extractDomByQuery(params) {
+  const query = params.query || "";
+  const targetSelector = params.target;
+  const maxDistance = params.maxDistance;
+
+  // 在页面中遍历所有可见元素，寻找首个 innerText 包含关键词 query 的锚点
+  const allElements = Array.from(document.querySelectorAll("body *"));
+  let anchorCandidate = null;
+  for (const el of allElements) {
+    // 仅考虑非空文本，并简单判断其 innerText 是否包含关键词（可扩展更复杂判定）
+    if (el.innerText && el.innerText.includes(query)) {
+      const style = window.getComputedStyle(el);
+      if (style.display !== 'none' && style.visibility !== 'hidden') {
+        anchorCandidate = el;
+        break;
+      }
+    }
+  }
+
+  if (!anchorCandidate) {
+    return `找不到包含关键词 "${query}" 的锚点元素。`;
+  }
+
+  // 获取锚点元素中心位置
+  const anchorRect = anchorCandidate.getBoundingClientRect();
+  const anchorCenter = {
+    x: anchorRect.left + anchorRect.width / 2,
+    y: anchorRect.top + anchorRect.height / 2
+  };
+
+  // 查找所有满足目标选择器的元素
+  const candidates = Array.from(document.querySelectorAll(targetSelector));
+  let bestCandidate = null;
+  let bestDistance = Infinity;
+  for (const cand of candidates) {
+    const rect = cand.getBoundingClientRect();
+    const candCenter = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+    const distance = Math.sqrt(Math.pow(anchorCenter.x - candCenter.x, 2) + Math.pow(anchorCenter.y - candCenter.y, 2));
+    if (distance < bestDistance && distance <= maxDistance) {
+      bestDistance = distance;
+      bestCandidate = cand;
+    }
+  }
+
+  if (bestCandidate) {
+    return bestCandidate.outerHTML;
+  } else {
+    return `未在锚点 "${query}" 附近找到符合选择器 "${targetSelector}" 的目标元素。`;
+  }
+}
+
+// ====================== 新增：提取当前视口内的 DOM 结构 ======================
+
+/**
+ * 判断元素是否至少部分位于视口中（只要有一部分可见就算）
+ * @param {Element} el - 待检测的 DOM 元素
+ * @returns {boolean} 如果元素至少部分可见返回 true，否则返回 false
+ */
+function isPartiallyInViewport(el) {
+  const rect = el.getBoundingClientRect();
+  // 如果元素的底部在视口上方、顶部在视口下方、右侧在视口左侧或左侧在视口右侧，则完全不可见
+  return !(rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth);
+}
+
+/**
+ * 递归提取当前视口内的 DOM 结构，只构建那些至少部分可见的节点。
+ * 如果一个节点不在视口（即完全不可见），则直接返回 null，且不处理其子节点。
+ *
+ * 注意：对于文本节点，如果文本非空，则直接返回文本；其他节点只保留部分属性（如 id、class、href、title）。
+ *
+ * @param {Node} node - 待处理的节点
+ * @returns {Object|string|null} 
+ *   - 如果节点完全不可见则返回 null，
+ *   - 如果是文本节点则返回文本内容，
+ *   - 否则返回包含 tag、allowed attributes 以及 children（仅包含可见子节点）的结构化对象。
+ */
+function extractVisibleViewportDOMTree(node) {
+  // 如果是文本节点，返回非空文本内容（否则忽略）
+  if (node.nodeType === Node.TEXT_NODE) {
+    const trimmed = node.textContent.trim();
+    return trimmed ? trimmed : null;
+  }
+  
+  // 非元素节点直接跳过
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return null;
+  }
+  
+  // 检查当前元素是否至少部分在视口中
+  if (!isPartiallyInViewport(node)) {
+    // 如果当前节点完全不在视口，则不进一步处理其子节点
+    return null;
+  }
+  
+  // 构造当前节点的结构化表示
+  const obj = {
+    tag: node.tagName.toLowerCase()
+  };
+  
+  // 只保留部分允许的属性，避免信息过多
+  const allowedAttrs = ['id', 'class', 'href', 'title'];
+  if (node.attributes && node.attributes.length > 0) {
+    obj.attributes = {};
+    Array.from(node.attributes).forEach(attr => {
+      if (allowedAttrs.includes(attr.name)) {
+        obj.attributes[attr.name] = attr.value;
+      }
+    });
+  }
+  
+  // 递归处理子节点：只包含那些至少部分可见的子元素
+  const children = [];
+  Array.from(node.childNodes).forEach(child => {
+    const childData = extractVisibleViewportDOMTree(child);
+    if (childData !== null) {
+      children.push(childData);
+    }
+  });
+  if (children.length > 0) {
+    obj.children = children;
+  }
+  
+  return obj;
+}
+
+// 示例用法：提取 document.body 中位于视口内的 DOM 结构
+const visibleDOMTree = extractVisibleViewportDOMTree(document.body);
+console.log("当前视口中存在的 DOM 结构：", visibleDOMTree);
