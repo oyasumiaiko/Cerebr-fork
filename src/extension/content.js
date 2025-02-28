@@ -890,6 +890,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // PDF 内容缓存
 const pdfContentCache = new Map();
+const pdfDataCache = new Map();
 
 async function waitForContent() {
   return new Promise((resolve) => {
@@ -1063,11 +1064,11 @@ async function extractPageContent(includeDOM) {
     .replace(/\s+/g, ' ')  // 将多个空白字符替换为单个空格
     // .trim();
 
-  // 检查提取的内容是否足够
-  if (mainContent.length < 40) {
-    console.log('提取的内容太少，返回 null');
-    return null;
-  }
+  // // 检查提取的内容是否足够
+  // if (mainContent.length < 40) {
+  //   console.log('提取的内容太少，返回 null');
+  //   return null;
+  // }
 
   console.log('=== 处理后的 mainContent ===');
   console.log(mainContent);
@@ -1096,12 +1097,98 @@ async function extractPageContent(includeDOM) {
   return result;
 }
 
+function sendPlaceholderUpdate(message, timeout = 0) {
+  console.log('发送placeholder更新:', message);
+  iframe.contentWindow.postMessage({
+    type: 'UPDATE_PLACEHOLDER',
+    placeholder: message,
+    timeout: timeout
+  }, '*');
+};
+
 // PDF.js 库的路径
 const PDFJS_PATH = chrome.runtime.getURL('lib/pdf.js');
 const PDFJS_WORKER_PATH = chrome.runtime.getURL('lib/pdf.worker.js');
 
 // 设置 PDF.js worker 路径
 pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_PATH;
+
+async function downloadPDFData(url) {
+  console.log('开始下载PDF:', url);
+  // 添加缓存检查逻辑
+  if (pdfDataCache.has(url)) {
+    console.log('从缓存中获取PDF数据:', url);
+    return pdfDataCache.get(url);
+  }
+
+  // 获取PDF文件的初始信息
+  const initResponse = await chrome.runtime.sendMessage({
+    action: 'downloadPDF',
+    url: url
+  });
+
+  if (!initResponse.success) {
+    console.error('PDF初始化失败，响应:', initResponse);
+    sendPlaceholderUpdate('PDF下载失败', 2000);
+    throw new Error('PDF初始化失败');
+  }
+
+  const { totalChunks, totalSize } = initResponse;
+  console.log(`PDF文件大小: ${totalSize} bytes, 总块数: ${totalChunks}`);
+
+  // 分块接收数据
+  const chunks = new Array(totalChunks);
+  for (let i = 0; i < totalChunks; i++) {
+    sendPlaceholderUpdate(`正在下载PDF文件 (${Math.round((i + 1) / totalChunks * 100)}%)...`);
+
+    const chunkResponse = await chrome.runtime.sendMessage({
+      action: 'getPDFChunk',
+      url: url,
+      chunkIndex: i
+    });
+
+    if (!chunkResponse.success) {
+      sendPlaceholderUpdate('PDF下载失败', 2000);
+      throw new Error(`获取PDF块 ${i} 失败`);
+    }
+
+    chunks[i] = new Uint8Array(chunkResponse.data);
+  }
+
+  // 合并所有块
+  const completeData = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    completeData.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  // 将下载的PDF数据存入缓存
+  pdfDataCache.set(url, completeData);
+
+  return completeData;
+}
+
+async function parsePDFData(completeData) {
+  console.log('开始解析PDF文件');
+  const loadingTask = pdfjsLib.getDocument({ data: completeData });
+  const pdf = await loadingTask.promise;
+  console.log('PDF加载成功，总页数:', pdf.numPages);
+
+  let fullText = '';
+  // 遍历所有页面
+  for (let i = 1; i <= pdf.numPages; i++) {
+    sendPlaceholderUpdate(`正在提取文本 (${i}/${pdf.numPages})...`);
+    console.log(`开始处理第 ${i}/${pdf.numPages} 页`);
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map(item => item.str).join(' ');
+    console.log(`第 ${i} 页提取的文本长度:`, pageText.length);
+    fullText += pageText + '\n';
+  }
+
+  return fullText;
+}
 
 async function extractTextFromPDF(url) {
   try {
@@ -1118,79 +1205,14 @@ async function extractTextFromPDF(url) {
       return null;
     }
 
-    // 发送更新placeholder消息
-    const sendPlaceholderUpdate = (message, timeout = 0) => {
-      console.log('发送placeholder更新:', message);
-      iframe.contentWindow.postMessage({
-        type: 'UPDATE_PLACEHOLDER',
-        placeholder: message,
-        timeout: timeout
-      }, '*');
-    };
-
+    // 下载PDF文件
     sendPlaceholderUpdate('正在下载PDF文件...');
+    const completeData = await downloadPDFData(url);
+    console.log('PDF下载完成');
 
-    console.log('开始下载PDF:', url);
-    // 首先获取PDF文件的初始信息
-    const initResponse = await chrome.runtime.sendMessage({
-      action: 'downloadPDF',
-      url: url
-    });
-
-    if (!initResponse.success) {
-      console.error('PDF初始化失败，响应:', initResponse);
-      sendPlaceholderUpdate('PDF下载失败', 2000);
-      throw new Error('PDF初始化失败');
-    }
-
-    const { totalChunks, totalSize } = initResponse;
-    console.log(`PDF文件大小: ${totalSize} bytes, 总块数: ${totalChunks}`);
-
-    // 分块接收数据
-    const chunks = new Array(totalChunks);
-    for (let i = 0; i < totalChunks; i++) {
-      sendPlaceholderUpdate(`正在下载PDF文件 (${Math.round((i + 1) / totalChunks * 100)}%)...`);
-
-      const chunkResponse = await chrome.runtime.sendMessage({
-        action: 'getPDFChunk',
-        url: url,
-        chunkIndex: i
-      });
-
-      if (!chunkResponse.success) {
-        sendPlaceholderUpdate('PDF下载失败', 2000);
-        throw new Error(`获取PDF块 ${i} 失败`);
-      }
-
-      chunks[i] = new Uint8Array(chunkResponse.data);
-    }
-
-    // 合并所有块
-    const completeData = new Uint8Array(totalSize);
-    let offset = 0;
-    for (const chunk of chunks) {
-      completeData.set(chunk, offset);
-      offset += chunk.length;
-    }
-
+    // 解析PDF文件
     sendPlaceholderUpdate('正在解析PDF文件...');
-
-    console.log('开始解析PDF文件');
-    const loadingTask = pdfjsLib.getDocument({ data: completeData });
-    const pdf = await loadingTask.promise;
-    console.log('PDF加载成功，总页数:', pdf.numPages);
-
-    let fullText = '';
-    // 遍历所有页面
-    for (let i = 1; i <= pdf.numPages; i++) {
-      sendPlaceholderUpdate(`正在提取文本 (${i}/${pdf.numPages})...`);
-      console.log(`开始处理第 ${i}/${pdf.numPages} 页`);
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(item => item.str).join(' ');
-      console.log(`第 ${i} 页提取的文本长度:`, pageText.length);
-      fullText += pageText + '\n';
-    }
+    const fullText = await parsePDFData(completeData);
 
     console.log('PDF文本提取完成，总文本长度:', fullText.length);
     sendPlaceholderUpdate('PDF处理完成', 2000);
@@ -1532,3 +1554,162 @@ function extractVisibleViewportDOMTree(node) {
 // 示例用法：提取 document.body 中位于视口内的 DOM 结构
 const visibleDOMTree = extractVisibleViewportDOMTree(document.body);
 console.log("当前视口中存在的 DOM 结构：", visibleDOMTree);
+
+// ====================== 新增：PDF工具函数 ======================
+
+/**
+ * 根据传入的文本内容自动判断章节划分的正则表达式。
+ * 优先检测英文的 'Chapter' 格式，再检测中文的 '第X章' 格式。
+ * 
+ * @param {string} text - 待检测的文本内容
+ * @returns {RegExp|null} 如果匹配到多个章节则返回对应的正则表达式，否则返回null
+ */
+function getChapterRegex(text) {
+  // 英文章节正则: 匹配 'Chapter' 后跟数字和任意字符，直到下一个 'Chapter' 或结尾
+  const englishRegex = /(?:^|\n)(Chapter\s+\d+.*?)(?=\nChapter\s+\d+|$)/gs;
+  const englishMatches = text.match(englishRegex);
+  if (englishMatches && englishMatches.length > 1) {
+    return englishRegex;
+  }
+  // 中文章节正则: 匹配 '第' 后跟数字及任意空白，再跟 '章' 开头的行
+  const chineseRegex = /(?:^|\n)(第\s*\d+\s*章.*?)(?=\n第\s*\d+\s*章|$)/gs;
+  const chineseMatches = text.match(chineseRegex);
+  if (chineseMatches && chineseMatches.length > 1) {
+    return chineseRegex;
+  }
+  return null;
+}
+
+/**
+ * 将完整的文本按照给定正则表达式分割为章节块，并自动提取章节标题。
+ * 
+ * @param {string} text - 完整的PDF文本内容
+ * @param {RegExp} chapterRegex - 用于匹配章节的正则表达式
+ * @returns {Array<{chapterTitle: string, content: string}>} 章节数组，每个对象包含章节标题和章节内容
+ */
+function splitTextIntoChapters(text, chapterRegex) {
+  const matches = Array.from(text.matchAll(chapterRegex));
+  const chapters = [];
+  if (matches.length === 0) return chapters;
+
+  for (let i = 0; i < matches.length; i++) {
+    const startIdx = matches[i].index;
+    const endIdx = (i < matches.length - 1) ? matches[i + 1].index : text.length;
+    const chapterBlock = text.slice(startIdx, endIdx).trim();
+    // 取第一行作为章节标题
+    const firstLineBreak = chapterBlock.indexOf('\n');
+    const chapterTitle = firstLineBreak !== -1 ? chapterBlock.slice(0, firstLineBreak).trim() : chapterBlock;
+    chapters.push({
+      chapterTitle,
+      content: chapterBlock
+    });
+  }
+  return chapters;
+}
+
+/**
+ * 异步提取PDF文件的文本，并根据章节划分规则返回分章节内容。
+ * 该函数依赖于已有的 extractTextFromPDF 函数和PDF.js库。
+ * 
+ * @param {string} pdfUrl - PDF文件的URL
+ * @param {Object} [options] - 可选配置
+ * @param {RegExp} [options.customChapterRegex] - 自定义的章节匹配正则表达式
+ * @returns {Promise<{title: string, url: string, chapters: Array<{chapterTitle: string, content: string}>, fullText: string}>} 
+ *          返回对象包含页面标题、url、完整文本及按章节分割的章节数组
+ * @example
+ * extractPdfChapters('https://example.com/sample.pdf').then(result => {
+ *   console.log(result.chapters);
+ * });
+ */
+async function extractPdfChapters(pdfUrl, options = {}) {
+  // 调用已有的PDF文本提取函数
+  const pdfResult = await extractTextFromPDF(pdfUrl);
+  if (!pdfResult || !pdfResult.content) {
+    throw new Error('无法提取PDF文本内容');
+  }
+  const fullText = pdfResult.content;
+
+  // 使用自定义正则或根据文本自动检测
+  const chapterRegex = options.customChapterRegex || getChapterRegex(fullText);
+  let chapters = [];
+  if (chapterRegex) {
+    chapters = splitTextIntoChapters(fullText, chapterRegex);
+  } else {
+    // 如果未检测到章节标识, 则整体作为单个章节返回
+    chapters.push({
+      chapterTitle: '全文',
+      content: fullText
+    });
+  }
+  return {
+    title: pdfResult.title,
+    url: pdfResult.url,
+    fullText,
+    chapters
+  };
+}
+
+// 将新函数挂载到全局对象，便于调试和在iframe中调用
+window.pdfTools = {
+  getChapterRegex,
+  splitTextIntoChapters,
+  extractPdfChapters
+};
+
+// ====================== 新增：PDF结构章节工具函数 ======================
+
+/* 新增代码：PDF结构章节工具函数 (复用downloadPDFData) */
+/**
+ * 递归处理PDF书签，提取章节信息。
+ * @param {Array} outline - PDF.js返回的书签数组
+ * @returns {Array<{chapterTitle: string, pageIndex?: number, children: Array}>} 章节数组
+ */
+function processPdfOutline(outline) {
+  if (!outline) return [];
+  return outline.map(item => ({
+    chapterTitle: item.title || '未命名章节',
+    children: processPdfOutline(item.items || [])
+  }));
+}
+
+/**
+ * 异步提取PDF文件的结构信息，从PDF书签中分出章节。
+ * 此函数复用已有的downloadPDFData函数处理PDF数据，并利用PDF.js获取PDF目录。
+ * 
+ * @param {string} pdfUrl - PDF文件的URL
+ * @param {Object} [options] - 可选配置
+ * @returns {Promise<{title: string, url: string, outline: Array}>} 包含PDF标题、URL和结构化章节信息
+ * @example
+ * extractPdfOutlineChapters('https://example.com/sample.pdf').then(result => {
+ *   console.log(result.outline);
+ * });
+ */
+async function extractPdfOutlineChapters(pdfUrl, options = {}) {
+  // 复用已有的下载函数获取完整PDF数据
+  const completeData = await downloadPDFData(pdfUrl);
+
+  // 使用PDF.js加载PDF文档
+  const loadingTask = pdfjsLib.getDocument({ data: completeData });
+  const pdf = await loadingTask.promise;
+
+  // 尝试获取PDF的目录（书签）
+  let outline = await pdf.getOutline();
+  if (!outline) {
+    // 没有书签时，构造默认单章节
+    outline = [{ title: '全文', items: [] }];
+  }
+  const processedOutline = processPdfOutline(outline);
+
+  // 返回PDF的基本信息和章节结构
+  return {
+    title: pdf?.fingerprint || '未知标题',
+    url: pdfUrl,
+    outline: processedOutline
+  };
+}
+
+// 将新的PDF结构章节函数挂载到全局对象，供外部调用
+window.pdfTools = window.pdfTools || {};
+window.pdfTools.extractPdfOutlineChapters = extractPdfOutlineChapters;
+
+// ====================== 结束：PDF结构章节工具函数 ======================
