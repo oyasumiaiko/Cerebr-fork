@@ -487,36 +487,37 @@ export function createMessageProcessor(options) {
    * @returns {string} 提示词类型 ('image'|'pdf'|'summary'|'selection'|'query'|'none')
    */
   function getPromptTypeFromContent(content, prompts) {
-    // 如果content是空字符串，就判断为图片提示词
     if (!prompts) return 'none';
+    // 归一化输入文本（去掉前后空白）
+    const normalizedContent = (typeof content === 'string') ? content.trim() : content;
 
     // 如果content是图片提示词，则返回image
-    if (prompts.image?.prompt && content === prompts.image.prompt) {
+    if (prompts.image?.prompt && normalizedContent === prompts.image.prompt.trim()) {
       return 'image';
     }
 
     // 检查是否是PDF提示词
-    if (prompts.pdf?.prompt && content === prompts.pdf.prompt) {
+    if (prompts.pdf?.prompt && normalizedContent === prompts.pdf.prompt.trim()) {
       return 'pdf';
     }
 
     // 检查是否是页面总结提示词
-    if (prompts.summary?.prompt && content === prompts.summary.prompt) {
+    if (prompts.summary?.prompt && normalizedContent === prompts.summary.prompt.trim()) {
       return 'summary';
     }
 
     // 检查是否是划词搜索提示词，将 selection prompt 中的 "<SELECTION>" 移除后进行匹配
     if (prompts.selection?.prompt) {
-      const selectionPromptKeyword = prompts.selection.prompt.split('<SELECTION>')[0];
-      if (selectionPromptKeyword && content.startsWith(selectionPromptKeyword)) {
+      const selectionPromptKeyword = prompts.selection.prompt.split('<SELECTION>')[0].trim();
+      if (selectionPromptKeyword && normalizedContent.startsWith(selectionPromptKeyword)) {
         return 'selection';
       }
     }
 
     // 检查是否是普通查询提示词
     if (prompts.query?.prompt) {
-      const queryPromptKeyword = prompts.query.prompt.split('<SELECTION>')[0];
-      if (queryPromptKeyword && content.startsWith(queryPromptKeyword)) {
+      const queryPromptKeyword = prompts.query.prompt.split('<SELECTION>')[0].trim();
+      if (queryPromptKeyword && normalizedContent.startsWith(queryPromptKeyword)) {
         return 'query';
       }
     }
