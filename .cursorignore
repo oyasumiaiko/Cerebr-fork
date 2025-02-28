@@ -1,7 +1,3 @@
-# ignore everything
-*
-# do not ignore app
-!src/
-!src/*
-# do not ignore directories inside app
-!manifest.json
+lib/
+icons/
+statics/
