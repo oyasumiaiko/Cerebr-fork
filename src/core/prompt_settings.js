@@ -90,6 +90,10 @@ const DEFAULT_PROMPTS = {
     foldSummary: {
         prompt: `搜索过程`,
         model: 'follow_current'
+    },
+    urlRules: {
+        prompt: '[]',  // 存储为JSON字符串，格式为[{pattern: string, type: 'summary'|'system', prompt: string}]
+        model: 'follow_current'
     }
 };
 
@@ -110,6 +114,7 @@ class PromptSettings {
         // 添加消息折叠相关元素
         this.foldPatternPrompt = document.getElementById('fold-pattern-prompt');
         this.foldSummaryPrompt = document.getElementById('fold-summary-prompt');
+        this.urlRulesPrompt = document.getElementById('url-rules-prompt');
 
         // 模型选择下拉框
         this.modelSelects = {};
@@ -123,11 +128,17 @@ class PromptSettings {
         
         // 初始化提示词设置
         this.loadPromptSettings();
+
+        // URL规则相关元素
+        this.urlRulesList = document.getElementById('url-rules-list');
+        
+        // 初始化URL规则列表
+        this.renderUrlRules();
     }
 
     // 初始化模型选择下拉框
     initModelSelects() {
-        const promptTypes = ['selection', 'query', 'pdf', 'summary', 'image', 'foldPattern', 'foldSummary']; 
+        const promptTypes = ['selection', 'query', 'pdf', 'summary', 'image', 'foldPattern', 'foldSummary', 'urlRules']; 
 
         // 获取所有可用的模型
         const getAvailableModels = () => {
@@ -295,7 +306,8 @@ class PromptSettings {
             'pdf': 'PDF快速总结提示词',
             'image': '图片默认提示词',
             'foldPattern': '消息折叠正则表达式',
-            'foldSummary': '折叠消息摘要文本'
+            'foldSummary': '折叠消息摘要文本',
+            'urlRules': 'URL规则'
         };
         return nameMap[promptType] || promptType;
     }
@@ -320,7 +332,9 @@ class PromptSettings {
         this.savePromptsButton.addEventListener('click', () => this.savePromptSettings(true));
     }
 
-    // 加载提示词设置
+    /**
+     * 加载提示词设置
+     */
     async loadPromptSettings() {
         try {
             const result = await chrome.storage.sync.get(['prompts']);
@@ -352,6 +366,18 @@ class PromptSettings {
                 });
             } else {
                 this.resetPrompts();
+            }
+
+            // 初始化URL规则列表
+            if (this.urlRulesPrompt) {
+                try {
+                    // 尝试解析现有的规则，如果解析失败则使用默认空数组
+                    JSON.parse(this.urlRulesPrompt.value);
+                } catch (e) {
+                    this.urlRulesPrompt.value = '[]';
+                }
+                // 渲染规则列表
+                this.renderUrlRules();
             }
         } catch (error) {
             console.error('加载提示词设置失败:', error);
@@ -450,7 +476,10 @@ class PromptSettings {
         document.dispatchEvent(new CustomEvent('promptSettingsUpdated'));
     }
 
-    // 获取当前提示词
+    /**
+     * 获取当前提示词，自动处理URL规则匹配
+     * @returns {Object} 提示词设置对象
+     */
     getPrompts() {
         const prompts = {};
         Object.keys(DEFAULT_PROMPTS).forEach(type => {
@@ -460,13 +489,272 @@ class PromptSettings {
                 return;
             }
 
+            let promptValue = textarea.value;
+            
+            // 从window.cerebr.pageInfo获取当前页面信息
+            const pageInfo = window.cerebr?.pageInfo;
+            if (pageInfo?.url) {
+                if (type === 'system') {
+                    const urlRule = this.getMatchingUrlRule(pageInfo.url, 'system');
+                    if (urlRule) {
+                        promptValue = urlRule;
+                    }
+                } else if (type === 'summary') {
+                    const urlRule = this.getMatchingUrlRule(pageInfo.url, 'summary');
+                    if (urlRule) {
+                        promptValue = urlRule;
+                    }
+                }
+            }
+
             prompts[type] = {
-                prompt: textarea.value,
-                // 如果存在模型选择下拉框就使用其值，否则使用默认值
+                prompt: promptValue,
                 model: this.modelSelects[type]?.value || DEFAULT_PROMPTS[type].model
             };
         });
         return prompts;
+    }
+
+    /**
+     * 根据URL获取匹配的规则提示词
+     * @param {string} url - 要匹配的URL
+     * @param {string} type - 提示词类型 ('summary'|'system')
+     * @returns {string|null} 匹配的提示词或null
+     */
+    getMatchingUrlRule(url, type) {
+        if (!this.urlRulesPrompt) return null;
+        
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            // 按添加顺序反向遍历，使后添加的规则优先级更高
+            for (let i = rules.length - 1; i >= 0; i--) {
+                const rule = rules[i];
+                if (rule.type !== type) continue;
+                
+                try {
+                    // 将通配符转换为正则表达式
+                    const pattern = rule.pattern
+                        .replace(/\./g, '\\.')
+                        .replace(/\*/g, '.*')
+                        .replace(/\?/g, '.');
+                    const regex = new RegExp('^' + pattern + '$');
+                    
+                    if (regex.test(url)) {
+                        return rule.prompt;
+                    }
+                } catch (e) {
+                    console.error(`规则 "${rule.pattern}" 转换为正则表达式失败:`, e);
+                    continue;
+                }
+            }
+        } catch (error) {
+            console.error('解析URL规则失败:', error);
+        }
+        return null;
+    }
+
+    /**
+     * 渲染URL规则列表
+     */
+    renderUrlRules() {
+        if (!this.urlRulesList || !this.urlRulesPrompt) return;
+
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            this.urlRulesList.innerHTML = '';
+
+            // 添加新规则的输入区域
+            const newRuleElement = document.createElement('div');
+            newRuleElement.className = 'url-rule-item new-rule';
+            newRuleElement.innerHTML = `
+                <div class="url-rule-header">
+                    <input type="text" class="url-rule-pattern-input" placeholder="输入URL匹配模式 (支持*通配符)">
+                    <div class="url-rule-actions">
+                        <button class="url-rule-action-btn confirm-rule" title="确认">
+                            <i class="far fa-check"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="url-rule-content">
+                    <div class="url-rule-type">
+                        <select>
+                            <option value="system">系统提示词</option>
+                            <option value="summary">快速总结提示词</option>
+                        </select>
+                    </div>
+                    <textarea class="url-rule-prompt" placeholder="输入提示词内容..."></textarea>
+                </div>
+            `;
+
+            // 绑定新规则的确认事件
+            const confirmBtn = newRuleElement.querySelector('.confirm-rule');
+            const patternInput = newRuleElement.querySelector('.url-rule-pattern-input');
+            const typeSelect = newRuleElement.querySelector('select');
+            const promptTextarea = newRuleElement.querySelector('.url-rule-prompt');
+
+            confirmBtn.addEventListener('click', () => {
+                const pattern = patternInput.value.trim();
+                const type = typeSelect.value;
+                const prompt = promptTextarea.value.trim();
+
+                if (pattern && prompt) {
+                    this.addUrlRule({
+                        pattern,
+                        type,
+                        prompt
+                    });
+                    // 清空输入
+                    patternInput.value = '';
+                    promptTextarea.value = '';
+                    typeSelect.value = 'system';
+                }
+            });
+
+            // 添加新规则输入区域
+            this.urlRulesList.appendChild(newRuleElement);
+
+            // 渲染现有规则
+            rules.forEach((rule, index) => {
+                const ruleElement = this.createUrlRuleElement(rule, index);
+                this.urlRulesList.appendChild(ruleElement);
+            });
+        } catch (error) {
+            console.error('渲染URL规则失败:', error);
+        }
+    }
+
+    /**
+     * 添加新的URL规则
+     * @param {Object} rule - 规则对象
+     */
+    addUrlRule(rule) {
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            rules.push(rule);
+            this.urlRulesPrompt.value = JSON.stringify(rules);
+            this.renderUrlRules();
+            this.autoSavePromptSettings();
+        } catch (error) {
+            console.error('添加URL规则失败:', error);
+        }
+    }
+
+    /**
+     * 创建URL规则元素
+     * @param {Object} rule - 规则对象
+     * @param {number} index - 规则索引
+     * @returns {HTMLElement} 规则元素
+     */
+    createUrlRuleElement(rule, index) {
+        const ruleElement = document.createElement('div');
+        ruleElement.className = 'url-rule-item';
+        ruleElement.innerHTML = `
+            <div class="url-rule-header">
+                <div class="url-rule-pattern">${rule.pattern}</div>
+                <div class="url-rule-actions">
+                    <button class="url-rule-action-btn edit-rule" title="编辑">
+                        <i class="far fa-edit"></i>
+                    </button>
+                    <button class="url-rule-action-btn delete-rule" title="删除">
+                        <i class="far fa-trash-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="url-rule-content">
+                <div class="url-rule-type">
+                    <select>
+                        <option value="system" ${rule.type === 'system' ? 'selected' : ''}>系统提示词</option>
+                        <option value="summary" ${rule.type === 'summary' ? 'selected' : ''}>快速总结提示词</option>
+                    </select>
+                </div>
+                <textarea class="url-rule-prompt">${rule.prompt}</textarea>
+            </div>
+        `;
+
+        // 绑定事件
+        const deleteBtn = ruleElement.querySelector('.delete-rule');
+        const editBtn = ruleElement.querySelector('.edit-rule');
+        const typeSelect = ruleElement.querySelector('select');
+        const promptTextarea = ruleElement.querySelector('.url-rule-prompt');
+
+        deleteBtn.addEventListener('click', () => {
+            this.deleteUrlRule(index);
+        });
+
+        editBtn.addEventListener('click', () => {
+            this.editUrlRule(index);
+        });
+
+        typeSelect.addEventListener('change', () => {
+            this.updateUrlRule(index, {
+                ...rule,
+                type: typeSelect.value
+            });
+        });
+
+        promptTextarea.addEventListener('change', () => {
+            this.updateUrlRule(index, {
+                ...rule,
+                prompt: promptTextarea.value
+            });
+        });
+
+        return ruleElement;
+    }
+
+    /**
+     * 删除URL规则
+     * @param {number} index - 规则索引
+     */
+    deleteUrlRule(index) {
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            rules.splice(index, 1);
+            this.urlRulesPrompt.value = JSON.stringify(rules);
+            this.renderUrlRules();
+            this.autoSavePromptSettings();
+        } catch (error) {
+            console.error('删除URL规则失败:', error);
+        }
+    }
+
+    /**
+     * 编辑URL规则
+     * @param {number} index - 规则索引
+     */
+    editUrlRule(index) {
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            const rule = rules[index];
+            const newPattern = prompt('请输入新的URL匹配模式:', rule.pattern);
+            if (!newPattern) return;
+
+            rules[index] = {
+                ...rule,
+                pattern: newPattern
+            };
+            this.urlRulesPrompt.value = JSON.stringify(rules);
+            this.renderUrlRules();
+            this.autoSavePromptSettings();
+        } catch (error) {
+            console.error('编辑URL规则失败:', error);
+        }
+    }
+
+    /**
+     * 更新URL规则
+     * @param {number} index - 规则索引
+     * @param {Object} newRule - 新规则对象
+     */
+    updateUrlRule(index, newRule) {
+        try {
+            const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
+            rules[index] = newRule;
+            this.urlRulesPrompt.value = JSON.stringify(rules);
+            this.autoSavePromptSettings();
+        } catch (error) {
+            console.error('更新URL规则失败:', error);
+        }
     }
 }
 

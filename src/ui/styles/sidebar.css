@@ -1758,6 +1758,7 @@ body.hide-references .reference-number.superscript {
 
 .prompt-group textarea {
     min-height: 100px;
+    max-width: -webkit-fill-available;
     padding: 12px;
     border-radius: 8px;
     background: var(--cerebr-message-ai-bg);
@@ -2793,6 +2794,134 @@ body.hide-references .reference-number.superscript {
 #collapse-button.position-left {
     left: auto;
     right: 5px;
+}
+
+/* URL规则预设样式 */
+.url-rules-container {
+    background: var(--cerebr-input-bg);
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    padding: 8px;
+    margin-top: 4px;
+}
+
+.url-rules-header {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
+
+.add-url-rule-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    background: var(--cerebr-button-bg);
+    color: var(--cerebr-text-color);
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.add-url-rule-btn:hover {
+    background: var(--cerebr-button-hover-bg);
+}
+
+.url-rules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.url-rule-item {
+    background: var(--cerebr-bg-light);
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    padding: 8px;
+}
+
+.url-rule-item.new-rule {
+    border-style: dashed;
+    background: var(--cerebr-bg);
+}
+
+.url-rule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.url-rule-pattern {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--cerebr-text-color-light);
+}
+
+.url-rule-pattern-input {
+    flex: 1;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 4px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+}
+
+.url-rule-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.url-rule-action-btn {
+    padding: 2px;
+    border: none;
+    background: none;
+    color: var(--cerebr-text-color-light);
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.url-rule-action-btn:hover {
+    opacity: 1;
+}
+
+.url-rule-action-btn.confirm-rule {
+    color: var(--cerebr-success-color);
+}
+
+.url-rule-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.url-rule-type {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.url-rule-type select {
+    padding: 4px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+}
+
+.url-rule-prompt {
+    width: 100%;
+    min-height: 60px;
+    padding: 4px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 4px;
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+    resize: vertical;
+    font-size: 12px;
 }
 
 
