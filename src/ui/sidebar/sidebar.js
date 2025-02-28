@@ -156,8 +156,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.cerebr = window.cerebr || {};
     // 将提示词设置暴露给全局对象，以便在其他模块中访问
     window.cerebr.settings = {
-        prompts: promptSettingsManager.getPrompts()
+        prompts: () => promptSettingsManager.getPrompts()
     };
+    // 初始化 pageInfo
+    window.cerebr.pageInfo = null;
     
     // 监听提示词设置变化，更新全局对象
     document.addEventListener('promptSettingsUpdated', () => {
@@ -381,6 +383,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             selection.addRange(range);
         } else if (event.data.type === 'URL_CHANGED') {
             console.log('收到URL_CHANGED消息:', event.data);
+            // 更新 window.cerebr.pageInfo
+            window.cerebr.pageInfo = event.data;
             // 更新ChatHistoryUI中的页面信息
             chatHistoryUI.updatePageInfo(event.data);
         } else if (event.data.type === 'UPDATE_PLACEHOLDER') {
