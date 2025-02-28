@@ -294,6 +294,10 @@ export function createChatHistoryUI(options) {
    * @returns {Promise<void>}
    */
   async function clearChatHistory() {
+    // 终止当前请求（若存在）
+    if (window.cerebr && window.cerebr.messageSender && typeof window.cerebr.messageSender.abortCurrentRequest === 'function') {
+      window.cerebr.messageSender.abortCurrentRequest();
+    }
     // 如果有消息，等待保存完成
     if (chatHistory.messages.length > 0) {
       await saveCurrentConversation(true);
