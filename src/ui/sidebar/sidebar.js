@@ -203,6 +203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 获取API设置相关DOM元素
     const apiSettings = document.getElementById('api-settings');
     const apiSettingsToggle = document.getElementById('api-settings-toggle');
+    const apiSettingsText = apiSettingsToggle.querySelector('span');
     const backButton = document.querySelector('.back-button');
     const apiCards = document.querySelector('.api-cards');
 
@@ -310,6 +311,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 初始化 API 配置（确保这步不会漏掉）
     await apiManager.init();
+    
+    // 更新API设置菜单项文本显示当前API名称
+    function updateApiMenuText() {
+        const currentConfig = apiManager.getSelectedConfig();
+        if (currentConfig) {
+            apiSettingsText.textContent = currentConfig.displayName || currentConfig.modelName || 'API 设置';
+        }
+    }
+    
+    // 初始化时更新一次
+    updateApiMenuText();
+    
+    // 监听API配置更新事件
+    window.addEventListener('apiConfigsUpdated', updateApiMenuText);
 
     // ====================== 第五阶段：设置事件监听器 ======================
 
