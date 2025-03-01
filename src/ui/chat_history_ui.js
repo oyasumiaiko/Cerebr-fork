@@ -119,6 +119,7 @@ export function createChatHistoryUI(options) {
 
     let urlToSave = '';
     let titleToSave = '';
+    let summaryToSave = summary;
     
     // 如果是更新操作并且已存在记录，则固定使用首次保存的 url 和 title
     if (isUpdate && currentConversationId) {
@@ -128,6 +129,11 @@ export function createChatHistoryUI(options) {
         if (existingConversation) {
           urlToSave = existingConversation.url || '';
           titleToSave = existingConversation.title || '';
+          
+          // 如果原有摘要包含"(分支)"标识，则保留原有摘要
+          if (existingConversation.summary && existingConversation.summary.includes('(分支)')) {
+            summaryToSave = existingConversation.summary;
+          }
         }
       } catch (error) {
         console.error("获取会话记录失败:", error);
@@ -148,7 +154,7 @@ export function createChatHistoryUI(options) {
       startTime,
       endTime,
       messages,
-      summary,
+      summary: summaryToSave,
       messageCount: messages.length
     };
 
