@@ -3021,5 +3021,123 @@ body.hide-references .reference-number.superscript {
   background-color: var(--cerebr-primary-color, #3a78e8);
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
 }
+/* 空状态样式 - 轻盈空灵的设计 */
+.empty-state-content {
+    position: absolute;
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: max-content;
+    text-align: center;
+    padding: 0;
+    background-color: transparent;
+    transition: opacity 0.4s ease;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
 
+/* 当聊天容器为空时显示空状态 */
+#chat-container:empty ~ .empty-state-content {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 
+.empty-state-icon {
+    /* position: absolute; */
+    zoom: 12;
+    display: block;
+    width: unset;
+    text-shadow: 0px 0px 2px var(--cerebr-bg-color);
+    color: var(--cerebr-text-color);
+    opacity: 0.1;
+}
+
+.empty-state-title {
+    margin: 1rem 0 2rem;
+    font-size: 1.75rem;
+    color: var(--cerebr-text-color);
+    font-weight: 300;
+    letter-spacing: 0.03em;
+    opacity: 0.5;
+}
+
+.empty-state-description {
+    margin: 0rem 0 2rem 0;
+    color: var(--cerebr-text-color);
+    opacity: 0.35;
+    font-size: calc(var(--cerebr-font-size)* 1.05);
+    margin-left: auto;
+    margin-right: auto;
+    font-weight: 300;
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: 4rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+/* 使用div替代button，避免默认的按钮样式 */
+.empty-state-action {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.9rem 1.5rem;
+  background-color: transparent;
+  color: var(--cerebr-text-color);
+  font-size: calc(var(--cerebr-font-size) * 1.05);
+  cursor: pointer;
+  transition: opacity 0.3s ease;
+  opacity: 0.4;
+  /* 移除所有边框和阴影效果，实现轻盈感 */
+  border: none;
+  box-shadow: none;
+  /* 确保按钮文本正确对齐 */
+  text-align: left;
+  font-family: inherit;
+  /* 重置按钮样式 */
+  background: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.empty-state-action:hover {
+  opacity: 0.7;
+}
+
+.empty-state-action i {
+  font-size: 1.2em;
+}
+
+.empty-state-action span {
+  font-weight: 300;
+  letter-spacing: 0.02em;
+}
+
+/* 深色主题适配 */
+:root.dark-theme .empty-state-icon {
+  opacity: 0.1;
+}
+
+:root.dark-theme .empty-state-title {
+  opacity: 0.6;
+}
+
+:root.dark-theme .empty-state-description {
+  opacity: 0.4;
+}
+
+:root.night-theme .empty-state-action {
+  opacity: 0.5;
+}
+
+:root.night-theme .empty-state-action:hover {
+  opacity: 0.8;
+}

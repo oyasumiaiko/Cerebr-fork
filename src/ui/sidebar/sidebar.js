@@ -61,6 +61,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const screenshotButton = document.getElementById('screenshot-button');
     const sidebarPositionSwitch = document.getElementById('sidebar-position-switch');
     const forkConversationButton = document.getElementById('fork-conversation');
+    const emptyStateHistory = document.getElementById('empty-state-history');
+    const emptyStateSummary = document.getElementById('empty-state-summary');
 
     // 应用程序状态
     let isFullscreen = false; // 全屏模式
@@ -337,6 +339,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     sendChatHistorySwitch.addEventListener('change', (e) => {
         settingsManager.setSendChatHistory(e.target.checked);
     });
+
+    // 添加空状态按钮事件监听器
+    if (emptyStateHistory) {
+        emptyStateHistory.addEventListener('click', () => {
+            // 打开聊天历史面板
+            closeExclusivePanels();
+            chatHistoryUI.showChatHistoryPanel();
+        });
+    }
+
+    if (emptyStateSummary) {
+        emptyStateSummary.addEventListener('click', () => {
+            // 执行快速总结功能
+            messageSender.performQuickSummary();
+        });
+    }
 
     // 添加全局键盘事件监听器，处理ESC键打开/关闭聊天记录窗口
     document.addEventListener('keydown', (e) => {
