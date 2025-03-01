@@ -29,8 +29,9 @@ input, textarea, select {
     --cerebr-highlight: rgb(0, 105, 255);
     --cerebr-bg-opacity: 0.8;
     --cerebr-accent: #6d7fcc;
-    --cerebr-scrollbar-thumb: rgba(120, 120, 120, 0.4);
-    --cerebr-scrollbar-thumb-hover: rgba(120, 120, 120, 0.6);
+    --cerebr-scrollbar-thumb: color-mix(in srgb, var(--cerebr-bg-color) 90%, var(--cerebr-text-color) 10%);
+    --cerebr-scrollbar-thumb-hover: var(--cerebr-scrollbar-thumb);
+    --cerebr-scrollbar-thumb-active: var(--cerebr-scrollbar-thumb);
     --cerebr-search-highlight: rgba(255, 230, 0, 0.3);
     --cerebr-green: #34c759;
     --cerebr-red: #ff3b30;
@@ -97,7 +98,6 @@ body {
     overflow: hidden;
     transform-origin: top left;
     box-sizing: border-box;
-    scrollbar-color: var(--cerebr-border-color) transparent;
 }
 
 /* 聊天容器样式 */
@@ -109,15 +109,44 @@ body {
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 15px;
-    scrollbar-width: none;
+    /* scrollbar-width: none; */
     -ms-overflow-style: none;
     min-height: 0;
     -webkit-overflow-scrolling: touch;
     /* scroll-behavior: smooth; */
 }
 
-#chat-container::-webkit-scrollbar {
+/* 移除隐藏滚动条的样式 */
+/* #chat-container::-webkit-scrollbar {
     display: none;
+} */
+
+/* 自定义滚动条样式 */
+#chat-container::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+#chat-container::-webkit-scrollbar-thumb {
+    background-color: var(--cerebr-scrollbar-thumb);
+    border: 2px solid transparent;
+    border-radius: 8px;
+}
+
+#chat-container::-webkit-scrollbar-track {
+    background-color: transparent;
+}
+
+#chat-container::-webkit-scrollbar-thumb:hover {
+    background: var(--cerebr-scrollbar-thumb-hover);
+}
+
+#chat-container::-webkit-scrollbar-thumb:active {
+    background: var(--cerebr-scrollbar-thumb-active);
+}
+
+#chat-container::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 /* 消息样式 */
