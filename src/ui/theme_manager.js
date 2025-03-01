@@ -1010,6 +1010,122 @@ export function createThemeManager() {
         '--cerebr-code-border': '#324233',
         '--cerebr-inline-code-bg': 'rgba(255, 255, 255, 0.1)'
       }
+    },
+    // 新增透明空灵主题
+    {
+      id: 'crystal-clear',
+      name: '水晶透明',
+      description: '高透明度水晶质感主题',
+      type: 'light',
+      variables: {
+        '--cerebr-opacity': '0.4',
+        '--cerebr-bg-color': 'rgba(255, 255, 255, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#333333',
+        '--cerebr-message-user-bg': 'rgba(209, 232, 255, 0.3)',
+        '--cerebr-message-ai-bg': 'rgba(245, 245, 245, 0.25)',
+        '--cerebr-input-bg': 'rgba(248, 248, 255, 0.35)',
+        '--cerebr-icon-color': '#5a9de4',
+        '--cerebr-border-color': 'rgba(228, 228, 228, 0.4)',
+        '--cerebr-hover-color': 'rgba(0, 122, 255, 0.05)',
+        '--cerebr-tooltip-bg': 'rgba(255, 255, 255, 0.7)',
+        '--cerebr-highlight': '#0084ff',
+        '--cerebr-code-bg': 'rgba(246, 248, 250, 0.6)',
+        '--cerebr-code-color': '#333333',
+        '--cerebr-code-border': 'rgba(225, 228, 232, 0.4)',
+        '--cerebr-inline-code-bg': 'rgba(0, 0, 0, 0.05)'
+      }
+    },
+    {
+      id: 'dark-glass',
+      name: '暗夜玻璃',
+      description: '深色透明玻璃质感主题',
+      type: 'dark',
+      variables: {
+        '--cerebr-opacity': '0.5',
+        '--cerebr-bg-color': 'rgba(20, 20, 28, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e0e0e0',
+        '--cerebr-message-user-bg': 'rgba(45, 50, 70, 0.35)',
+        '--cerebr-message-ai-bg': 'rgba(30, 35, 50, 0.3)',
+        '--cerebr-input-bg': 'rgba(25, 25, 35, 0.4)',
+        '--cerebr-icon-color': '#a0a8d0',
+        '--cerebr-border-color': 'rgba(60, 65, 80, 0.4)',
+        '--cerebr-hover-color': 'rgba(255, 255, 255, 0.05)',
+        '--cerebr-tooltip-bg': 'rgba(20, 20, 28, 0.85)',
+        '--cerebr-highlight': '#7d8df9',
+        '--cerebr-code-bg': 'rgba(30, 30, 40, 0.6)',
+        '--cerebr-code-color': '#e0e0e0',
+        '--cerebr-code-border': 'rgba(60, 65, 80, 0.4)',
+        '--cerebr-inline-code-bg': 'rgba(255, 255, 255, 0.1)'
+      }
+    },
+    {
+      id: 'aurora-borealis',
+      name: '极光',
+      description: '北极光渐变透明主题',
+      type: 'dark',
+      variables: {
+        '--cerebr-opacity': '0.45',
+        '--cerebr-bg-color': 'rgba(16, 24, 40, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#e2f0ff',
+        '--cerebr-message-user-bg': 'rgba(32, 87, 120, 0.3)',
+        '--cerebr-message-ai-bg': 'rgba(23, 47, 73, 0.25)',
+        '--cerebr-input-bg': 'rgba(15, 30, 55, 0.4)',
+        '--cerebr-icon-color': '#67d7e6',
+        '--cerebr-border-color': 'rgba(65, 176, 194, 0.3)',
+        '--cerebr-hover-color': 'rgba(103, 215, 230, 0.1)',
+        '--cerebr-tooltip-bg': 'rgba(16, 24, 40, 0.8)',
+        '--cerebr-highlight': '#67d7e6',
+        '--cerebr-code-bg': 'rgba(15, 30, 55, 0.6)',
+        '--cerebr-code-color': '#e2f0ff',
+        '--cerebr-code-border': 'rgba(65, 176, 194, 0.3)',
+        '--cerebr-inline-code-bg': 'rgba(255, 255, 255, 0.1)'
+      }
+    },
+    {
+      id: 'sakura-mist',
+      name: '樱花雾',
+      description: '淡粉色透明梦幻主题',
+      type: 'light',
+      variables: {
+        '--cerebr-opacity': '0.8',
+        '--cerebr-bg-color': 'rgba(255, 250, 250, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#5d4c5c',
+        '--cerebr-message-user-bg': 'rgba(255, 230, 240, 0.25)',
+        '--cerebr-message-ai-bg': 'rgba(250, 240, 245, 0.2)',
+        '--cerebr-input-bg': 'rgba(255, 245, 250, 0.3)',
+        '--cerebr-icon-color': '#e68bb3',
+        '--cerebr-border-color': 'rgba(230, 210, 220, 0.4)',
+        '--cerebr-hover-color': 'rgba(230, 139, 179, 0.05)',
+        '--cerebr-tooltip-bg': 'rgba(255, 250, 250, 0.75)',
+        '--cerebr-highlight': '#e68bb3',
+        '--cerebr-code-bg': 'rgba(250, 245, 248, 0.5)',
+        '--cerebr-code-color': '#5d4c5c',
+        '--cerebr-code-border': 'rgba(230, 210, 220, 0.4)',
+        '--cerebr-inline-code-bg': 'rgba(0, 0, 0, 0.05)'
+      }
+    },
+    {
+      id: 'ocean-depths',
+      name: '深海',
+      description: '深蓝色海洋透明主题',
+      type: 'dark',
+      variables: {
+        '--cerebr-opacity': '0.55',
+        '--cerebr-bg-color': 'rgba(5, 30, 52, var(--cerebr-opacity))',
+        '--cerebr-text-color': '#c5e2ff',
+        '--cerebr-message-user-bg': 'rgba(20, 60, 100, 0.3)',
+        '--cerebr-message-ai-bg': 'rgba(15, 45, 75, 0.25)',
+        '--cerebr-input-bg': 'rgba(10, 35, 65, 0.4)',
+        '--cerebr-icon-color': '#4fb4ff',
+        '--cerebr-border-color': 'rgba(30, 90, 150, 0.4)',
+        '--cerebr-hover-color': 'rgba(79, 180, 255, 0.1)',
+        '--cerebr-tooltip-bg': 'rgba(5, 30, 52, 0.85)',
+        '--cerebr-highlight': '#4fb4ff',
+        '--cerebr-code-bg': 'rgba(10, 35, 65, 0.6)',
+        '--cerebr-code-color': '#c5e2ff',
+        '--cerebr-code-border': 'rgba(30, 90, 150, 0.4)',
+        '--cerebr-inline-code-bg': 'rgba(255, 255, 255, 0.1)'
+      }
     }
   ];
 
