@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const forkConversationButton = document.getElementById('fork-conversation');
     const emptyStateHistory = document.getElementById('empty-state-history');
     const emptyStateSummary = document.getElementById('empty-state-summary');
+    const emptyStateTempMode = document.getElementById('empty-state-temp-mode');
 
     // 应用程序状态
     let isFullscreen = false; // 全屏模式
@@ -353,6 +354,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         emptyStateSummary.addEventListener('click', () => {
             // 执行快速总结功能
             messageSender.performQuickSummary();
+        });
+    }
+
+    if (emptyStateTempMode) {
+        emptyStateTempMode.addEventListener('click', () => {
+            messageSender.toggleTemporaryMode();
+
+            // 聚焦到输入框
+            messageInput.focus();
+            // 将光标定位到文本末尾
+            const range = document.createRange();
+            range.selectNodeContents(messageInput);
+            range.collapse(false);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
         });
     }
 
