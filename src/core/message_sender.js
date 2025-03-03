@@ -462,6 +462,20 @@ export function createMessageSender(options) {
   async function performQuickSummary(webpageSelection = null, forceQuery = false) {
     const wasTemporaryMode = isTemporaryMode;
     try {
+      // 确保提示词设置已加载完成
+      await new Promise(resolve => {
+        const checkSettings = () => {
+          const prompts = getPrompts();
+          // 检查提示词设置是否已完全加载
+          if (prompts && prompts.summary && prompts.summary.model) {
+            resolve();
+          } else {
+            setTimeout(checkSettings, 100);
+          }
+        };
+        checkSettings();
+      });
+
       // 检查焦点是否在侧栏内
       const isSidebarFocused = document.hasFocus();
       const sidebarSelection = window.getSelection().toString().trim();

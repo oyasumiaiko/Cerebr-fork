@@ -9,6 +9,7 @@ import { createMessageSender } from '../../core/message_sender.js'; // 导入消
 import { createSettingsManager } from '../settings_manager.js'; // 导入设置管理模块
 import { createContextMenuManager } from '../context_menu_manager.js'; // 导入上下文菜单管理模块
 import { createUIManager } from '../ui_manager.js'; // 导入UI管理模块
+import { getAllConversationMetadata } from '../../storage/indexeddb_helper.js';
 
 // 内存管理相关配置
 const MEMORY_MANAGEMENT = {
@@ -64,6 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const emptyStateHistory = document.getElementById('empty-state-history');
     const emptyStateSummary = document.getElementById('empty-state-summary');
     const emptyStateTempMode = document.getElementById('empty-state-temp-mode');
+    const emptyStateLoadUrl = document.getElementById('empty-state-load-url');
 
     // 应用程序状态
     let isFullscreen = false; // 全屏模式
@@ -373,6 +375,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    if (emptyStateLoadUrl) {
+        emptyStateLoadUrl.addEventListener('click', async () => {
+            // 从pageInfo获取当前页面URL
+            const currentUrl = window.cerebr.pageInfo?.url;
+            
+            if (!currentUrl) {
+                showNotification('未能获取当前页面URL');
+                return;
+            }
+            
+            // 获取所有对话元数据
+            const histories = await getAllConversationMetadata();
+            // 按时间倒序排序
+            const sortedHistories = histories.sort((a, b) => b.startTime - a.startTime);
+            // 找到最近的相同URL的对话
+            const matchingConversation = sortedHistories.find(conv => conv.url === currentUrl);
+            console.log('找到的匹配对话:', matchingConversation);
+            
+            if (matchingConversation) {
+                // 加载找到的对话
+                chatHistoryUI.loadConversationIntoChat(matchingConversation);
+            } else {
+                showNotification('未找到本页面的历史对话');
+            }
+        });
+    }
+
     // 添加全局键盘事件监听器，处理ESC键打开/关闭聊天记录窗口
     document.addEventListener('keydown', (e) => {
         // 检测ESC键
@@ -666,6 +695,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.parent.postMessage({
             type: 'CAPTURE_SCREENSHOT'
         }, '*');
+    }
+
+    /**
+     * 显示一个临时提示消息
+     * @param {string} message - 要显示的消息内容
+     * @param {number} [duration=2000] - 消息显示时长(ms)
+     */
+    function showNotification(message, duration = 2000) {
+        const notification = document.createElement('div');
+        notification.className = 'notification';
+        notification.textContent = message;
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            notification.classList.add('fade-out');
+            setTimeout(() => notification.remove(), 500);
+        }, duration);
     }
 
     // ====================== 初始化时请求页面信息 ======================
