@@ -3114,6 +3114,9 @@ body.hide-references .reference-number.superscript {
 
 .empty-state-action i {
   font-size: 1.2em;
+  width: 1em;  /* 增加宽度以确保所有图标都有足够空间 */
+  display: inline-block;  /* 使width生效 */
+  text-align: right;
 }
 
 .empty-state-action span {
