@@ -128,6 +128,7 @@ export function createUIManager(options) {
     // 片粘贴功能
     messageInput.addEventListener('paste', async (e) => {
       e.preventDefault(); // 阻止默认粘贴行为
+      adjustTextareaHeight(this);
 
       const items = Array.from(e.clipboardData.items);
       const imageItem = items.find(item => item.type.startsWith('image/'));
