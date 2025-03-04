@@ -136,6 +136,8 @@ export function createMessageSender(options) {
    * @param {string} [options.specificPromptType] - 指定使用的提示词类型
    * @param {Object} [options.specificApiConfig] - 指定使用的API配置
    * @param {string} [options.originalMessageText] - 原始消息文本，用于恢复输入框内容
+   * @param {boolean} [options.regenerateMode] - 是否为重新生成模式
+   * @param {string} [options.messageId] - 重新生成模式下的消息ID
    * @returns {Promise<void>}
    */
   async function sendMessage(options = {}) {
@@ -147,7 +149,9 @@ export function createMessageSender(options) {
       injectedSystemMessages: existingInjectedSystemMessages = [],
       specificPromptType = null,
       specificApiConfig = null,
-      originalMessageText = null
+      originalMessageText = null,
+      regenerateMode = false,
+      messageId = null
     } = options;
 
     const imageTags = imageContainer.querySelectorAll('.image-tag');
@@ -207,9 +211,9 @@ export function createMessageSender(options) {
         });
       }
 
-      // 添加用户消息，同时包含文本和图片区域
+      // 在重新生成模式下，不添加新的用户消息
       let userMessageDiv;
-      if (!isEmptyMessage) {
+      if (!isEmptyMessage && !regenerateMode) {
         userMessageDiv = messageProcessor.appendMessage(
           messageText, 
           'user', 
@@ -217,12 +221,12 @@ export function createMessageSender(options) {
           null, 
           imageContainer.innerHTML
         );
-        
-        // 不再向DOM元素添加额外元数据，系统消息等信息已保存在chatHistory中
       }
 
       // 清空输入区域
-      clearInputs();
+      if (!regenerateMode) {
+        clearInputs();
+      }
       
       // 添加加载状态消息
       loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true);
@@ -250,7 +254,9 @@ export function createMessageSender(options) {
         injectedSystemMessages,
         pageContent,
         imageContainsScreenshot,
-        currentPromptType
+        currentPromptType,
+        regenerateMode,
+        messageId
       );
 
       // 获取API配置
@@ -259,7 +265,9 @@ export function createMessageSender(options) {
                     apiManager.getModelConfig(currentPromptType, prompts);
 
       // 添加字数统计元素
-      addContentLengthFooter(userMessageDiv, pageContentLength, config);
+      if (!regenerateMode) {
+        addContentLengthFooter(userMessageDiv, pageContentLength, config);
+      }
 
       function addContentLengthFooter(userMessageDiv, pageContentLength, config) {
         if (!userMessageDiv) return;
@@ -342,9 +350,11 @@ export function createMessageSender(options) {
    * @param {Object|null} pageContent - 页面内容
    * @param {boolean} imageContainsScreenshot - 是否包含截图
    * @param {string} currentPromptType - 当前提示词类型
+   * @param {boolean} regenerateMode - 是否为重新生成模式
+   * @param {string} messageId - 重新生成模式下的消息ID
    * @returns {Array<Object>} 消息数组
    */
-  async function buildMessages(prompts, injectedSystemMessages, pageContent, imageContainsScreenshot, currentPromptType) {
+  async function buildMessages(prompts, injectedSystemMessages, pageContent, imageContainsScreenshot, currentPromptType, regenerateMode = false, messageId = null) {
     const messages = [];
 
     const pageContentPrompt = pageContent
@@ -371,6 +381,15 @@ export function createMessageSender(options) {
 
     // 获取当前会话链
     const conversationChain = getCurrentConversationChain();
+
+    // 如果是重新生成模式，我们需要找到目标消息之前的所有消息
+    if (regenerateMode && messageId) {
+      const targetIndex = conversationChain.findIndex(msg => msg.id === messageId);
+      if (targetIndex !== -1) {
+        // 只取到目标消息为止的对话历史
+        conversationChain.splice(targetIndex + 1);
+      }
+    }
 
     // 根据设置决定是否发送聊天历史
     const sendChatHistory = shouldSendChatHistory && 

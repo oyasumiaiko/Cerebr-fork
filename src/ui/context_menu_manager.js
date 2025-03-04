@@ -181,7 +181,7 @@ export function createContextMenuManager(options) {
         await deleteMessageContent(lastAiMessage);
       }
       
-      // 如果找到了用户消息，从聊天历史中获取完整信息
+      // 如果找到了用户消息，直接使用它重新生成AI回复
       if (lastUserMessage) {
         try {
           // 获取消息ID和原始文本
@@ -190,8 +190,6 @@ export function createContextMenuManager(options) {
           
           if (!messageId || !chatHistory?.messages) {
             console.error('未找到消息ID或聊天历史');
-            sendMessage({ originalMessageText });
-            hideContextMenu();
             return;
           }
           
@@ -200,23 +198,18 @@ export function createContextMenuManager(options) {
           
           if (!messageNode) {
             console.error('在聊天历史中未找到对应消息');
-            sendMessage({ originalMessageText });
-            hideContextMenu();
             return;
           }
 
+          // 使用regenerateMode标志告诉message_sender这是重新生成操作
           sendMessage({
             originalMessageText,
-            // 不再从DOM中获取API配置, 让message_sender使用当前的API配置
+            regenerateMode: true,
+            messageId
           });
         } catch (err) {
           console.error('准备重新生成消息时出错:', err);
-          // 出错时仍尝试普通发送
-          sendMessage();
         }
-      } else {
-        // 找不到用户消息时，直接调用发送接口
-        sendMessage();
       }
       
       hideContextMenu();
