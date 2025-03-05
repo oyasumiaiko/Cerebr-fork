@@ -127,8 +127,6 @@ export function createUIManager(options) {
 
     // 片粘贴功能
     messageInput.addEventListener('paste', async (e) => {
-      e.preventDefault(); // 阻止默认粘贴行为
-      adjustTextareaHeight(this);
 
       const items = Array.from(e.clipboardData.items);
       const imageItem = items.find(item => item.type.startsWith('image/'));
@@ -141,22 +139,9 @@ export function createUIManager(options) {
           imageHandler.addImageToContainer(reader.result, file.name);
         };
         reader.readAsDataURL(file);
-      } else {
-        // 修改：处理纯文本粘贴，避免插入富文本
-        const text = e.clipboardData.getData('text/plain');
-        const selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-          const range = selection.getRangeAt(0);
-          range.deleteContents();
-          const textNode = document.createTextNode(text);
-          range.insertNode(textNode);
-          // 移动光标到新插入的文本节点之后
-          range.setStartAfter(textNode);
-          range.collapse(true);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
       }
+      // 粘贴后调整输入框高度
+      adjustTextareaHeight(this);
     });
 
     // 修改拖放处理
