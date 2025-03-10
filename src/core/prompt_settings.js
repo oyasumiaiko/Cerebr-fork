@@ -242,9 +242,17 @@ class PromptSettings {
                 separator.disabled = true;
                 separator.textContent = '──────────';
                 select.appendChild(separator);
-                
+
+                // 如果可用模型为空且当前选中的值不是默认，则将其保留
+                let availableModels = models.slice();
+                if (availableModels.length === 0 && valueToKeep !== 'follow_current') {
+                    availableModels.push(valueToKeep);
+                } else {
+                    availableModels = models;
+                }
+
                 // 添加已配置的模型
-                models.forEach(model => {
+                availableModels.forEach(model => {
                     const option = document.createElement('option');
                     option.value = model;
                     option.textContent = model;
@@ -252,7 +260,7 @@ class PromptSettings {
                 });
 
                 // 尝试恢复选中的值
-                if (valueToKeep === 'follow_current' || models.includes(valueToKeep)) {
+                if (valueToKeep === 'follow_current' || availableModels.includes(valueToKeep)) {
                     select.value = valueToKeep;
                 } else {
                     select.value = 'follow_current';
@@ -452,6 +460,12 @@ class PromptSettings {
                 if (this.modelSelects[type]) {
                     if (this.modelSelects[type].querySelector(`option[value="${settings.model || 'follow_current'}"]`)) {
                         this.modelSelects[type].value = settings.model || 'follow_current';
+                    } else {
+                        const newOption = document.createElement('option');
+                        newOption.value = settings.model;
+                        newOption.textContent = settings.model;
+                        this.modelSelects[type].appendChild(newOption);
+                        this.modelSelects[type].value = settings.model;
                     }
                 }
             });
@@ -476,6 +490,7 @@ class PromptSettings {
             // 等待所有存储操作完成
             await Promise.all(savePromises);
             
+            this.savedPrompts = prompts;
             // 触发提示词设置更新事件
             document.dispatchEvent(new CustomEvent('promptSettingsUpdated'));
             
@@ -509,6 +524,7 @@ class PromptSettings {
             // 等待所有存储操作完成
             await Promise.all(savePromises);
             
+            this.savedPrompts = prompts;
             // 触发提示词设置更新事件
             document.dispatchEvent(new CustomEvent('promptSettingsUpdated'));
             
@@ -601,7 +617,7 @@ class PromptSettings {
 
             prompts[type] = {
                 prompt: promptValue,
-                model: this.savedPrompts?.[type]?.model
+                model: this.savedPrompts?.[type]?.model || DEFAULT_PROMPTS[type].model
             };
         });
         return prompts;
