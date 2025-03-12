@@ -21,6 +21,7 @@ import { createThemeManager } from './theme_manager.js';
  * @param {HTMLElement} options.sendChatHistorySwitch - 发送聊天历史开关元素
  * @param {HTMLElement} options.showReferenceSwitch - 显示引用标记开关元素
  * @param {HTMLElement} options.sidebarPositionSwitch - 侧边栏位置开关元素
+ * @param {HTMLElement} options.stopAtTopSwitch - 滚动到顶部时停止开关元素
  * @param {Function} options.setMessageSenderChatHistory - 设置消息发送器的聊天历史开关状态
  * @returns {Object} 设置管理器实例
  */
@@ -40,6 +41,7 @@ export function createSettingsManager(options) {
     sendChatHistorySwitch,
     showReferenceSwitch,
     sidebarPositionSwitch,
+    stopAtTopSwitch,
     setMessageSenderChatHistory
   } = options;
 
@@ -56,7 +58,8 @@ export function createSettingsManager(options) {
     clearOnSearch: true,
     shouldSendChatHistory: true,
     showReference: true,
-    sidebarPosition: 'right' // 'left' 或 'right'
+    sidebarPosition: 'right', // 'left' 或 'right'
+    stopAtTop: true // 滚动到顶部时停止
   };
 
   // 当前设置
@@ -106,6 +109,9 @@ export function createSettingsManager(options) {
     
     // 应用自动滚动设置
     applyAutoScroll(currentSettings.autoScroll);
+    
+    // 应用滚动到顶部时停止设置
+    applyStopAtTop(currentSettings.stopAtTop);
     
     // 应用划词搜索清空聊天设置
     applyClearOnSearch(currentSettings.clearOnSearch);
@@ -208,6 +214,14 @@ export function createSettingsManager(options) {
     // 更新UI元素
     if (autoScrollSwitch) {
       autoScrollSwitch.checked = enabled;
+    }
+  }
+  
+  // 应用滚动到顶部时停止设置
+  function applyStopAtTop(enabled) {
+    // 更新UI元素
+    if (stopAtTopSwitch) {
+      stopAtTopSwitch.checked = enabled;
     }
   }
   
@@ -409,6 +423,13 @@ export function createSettingsManager(options) {
       });
     }
     
+    // 滚动到顶部时停止开关
+    if (stopAtTopSwitch) {
+      stopAtTopSwitch.addEventListener('change', (e) => {
+        setStopAtTop(e.target.checked);
+      });
+    }
+    
     // 划词搜索清空聊天开关
     if (clearOnSearchSwitch) {
       clearOnSearchSwitch.addEventListener('change', (e) => {
@@ -534,6 +555,13 @@ export function createSettingsManager(options) {
     saveSetting('autoScroll', enabled);
   }
   
+  // 设置滚动到顶部时停止
+  function setStopAtTop(enabled) {
+    currentSettings.stopAtTop = enabled;
+    applyStopAtTop(enabled);
+    saveSetting('stopAtTop', enabled);
+  }
+  
   // 设置划词搜索清空聊天
   function setClearOnSearch(enabled) {
     currentSettings.clearOnSearch = enabled;
@@ -593,6 +621,7 @@ export function createSettingsManager(options) {
     setFontSize,
     setScaleFactor,
     setAutoScroll,
+    setStopAtTop,
     setClearOnSearch,
     setSendChatHistory,
     setShowReference,
