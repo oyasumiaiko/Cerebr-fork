@@ -591,7 +591,24 @@ class PromptSettings {
      */
     replacePlaceholders(text) {
         const now = new Date();
-        return text.replace(/{{\s*datetime\s*}}/g, now.toLocaleString())
+        
+        // 获取本地时间并格式化为 ISO 8601 风格字符串，包含时区偏移
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        
+        const offsetMinutes = now.getTimezoneOffset();
+        const offsetHours = Math.abs(Math.floor(offsetMinutes / 60));
+        const offsetMins = Math.abs(offsetMinutes % 60);
+        const offsetSign = offsetMinutes <= 0 ? '+' : '-';
+        const offsetString = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
+        
+        const isoLocalString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${offsetString}`;
+
+        return text.replace(/{{\s*datetime\s*}}/g, isoLocalString)
                    .replace(/{{\s*date\s*}}/g, now.toLocaleDateString())
                    .replace(/{{\s*time\s*}}/g, now.toLocaleTimeString());
     }
