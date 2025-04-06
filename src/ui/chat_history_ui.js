@@ -433,6 +433,65 @@ export function createChatHistoryUI(options) {
     // 添加 CSS 类，设置其他样式
     menu.classList.add('chat-history-context-menu');
 
+    // 复制聊天记录选项
+    const copyOption = document.createElement('div');
+    copyOption.textContent = '以 JSON 格式复制';
+    copyOption.classList.add('chat-history-context-menu-option');
+
+    copyOption.addEventListener('click', async () => {
+      try {
+        // 获取完整会话内容
+        const conversation = await getConversationFromCacheOrLoad(conversationId);
+        if (conversation) {
+          // 创建用于复制的格式化数据
+          const copyData = {
+            id: conversation.id,
+            title: conversation.title || '',
+            url: conversation.url || '',
+            startTime: new Date(conversation.startTime).toLocaleString(),
+            endTime: new Date(conversation.endTime).toLocaleString(),
+            messages: conversation.messages.map(msg => ({
+              role: msg.role,
+              content: msg.content,
+              timestamp: new Date(msg.timestamp).toLocaleString()
+            }))
+          };
+          
+          // 转换为格式化的 JSON 字符串
+          const jsonStr = JSON.stringify(copyData, null, 2);
+          
+          // 复制到剪贴板
+          await navigator.clipboard.writeText(jsonStr);
+          
+          // 显示成功提示
+          const notification = document.createElement('div');
+          notification.className = 'notification';
+          notification.textContent = '聊天记录已复制到剪贴板';
+          document.body.appendChild(notification);
+          
+          // 2秒后删除通知
+          setTimeout(() => {
+            notification.classList.add('fade-out');
+            setTimeout(() => notification.remove(), 500);
+          }, 2000);
+        }
+      } catch (error) {
+        console.error('复制聊天记录失败:', error);
+        // 显示错误提示
+        const notification = document.createElement('div');
+        notification.className = 'notification error';
+        notification.textContent = '复制失败，请重试';
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+          notification.classList.add('fade-out');
+          setTimeout(() => notification.remove(), 500);
+        }, 2000);
+      }
+      menu.remove();
+    });
+
+    // 删除选项
     const deleteOption = document.createElement('div');
     deleteOption.textContent = '删除聊天记录';
     deleteOption.classList.add('chat-history-context-menu-option');
@@ -455,6 +514,7 @@ export function createChatHistoryUI(options) {
       }
     });
 
+    menu.appendChild(copyOption);
     menu.appendChild(deleteOption);
     document.body.appendChild(menu);
 
