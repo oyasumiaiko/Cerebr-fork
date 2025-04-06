@@ -325,6 +325,9 @@ export function createMessageSender(options) {
         loadingMessage.textContent = '发送失败: ' + error.message;
         loadingMessage.classList.add('error-message');
       }
+
+      // 如果发送失败，则点击重新生成按钮
+      document.getElementById('regenerate-message').click();
     } finally {
       // 无论成功还是失败，都重置处理状态
       isProcessingMessage = false;
