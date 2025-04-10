@@ -963,7 +963,7 @@ function extractImportantDOM() {
   return clone.outerHTML;
 }
 
-async function extractPageContent(includeDOM) {
+async function extractPageContent() {
   console.log('extractPageContent 开始提取页面内容');
 
   // 检查是否是PDF或者iframe中的PDF
@@ -1081,17 +1081,6 @@ async function extractPageContent(includeDOM) {
     url: window.location.href,
     content: mainContent
   };
-  
-  // 当includeDOM为true，则返回经过清理后的页面DOM结构（超大则截断）
-  if (includeDOM) {
-    let fullDOM = extractImportantDOM();
-    // 设置最大DOM字符数，可通过 settings 调整，默认为200,000字符
-    const maxDOMSize = window.cerebr?.settings?.maxDOMSize || 200000;
-    if (fullDOM.length > maxDOMSize) {
-      fullDOM = fullDOM.slice(0, maxDOMSize) + "\n[DOM truncated]";
-    }
-    result.dom = fullDOM;
-  }
   
   return result;
 }

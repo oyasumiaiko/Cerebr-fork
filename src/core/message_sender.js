@@ -282,7 +282,7 @@ export function createMessageSender(options) {
       }
 
       // 更新加载状态消息
-      loadingMessage.textContent = '正在等待 AI 回复...';
+      loadingMessage.textContent = '正在等待回复...';
 
       // 构造API请求体
       const requestBody = apiManager.buildRequest({
