@@ -15,11 +15,13 @@ export function createApiManager(options) {
   // 私有状态
   let apiConfigs = [];
   let selectedConfigIndex = 0;
-  
-  const { 
-    apiSettings, 
-    apiCards, 
-    closeExclusivePanels 
+  // 用于存储每个配置下次应使用的 API Key 索引 (内存中)
+  const apiKeyUsageIndex = {};
+
+  const {
+    apiSettings,
+    apiCards,
+    closeExclusivePanels
   } = options;
 
   /**
@@ -30,17 +32,35 @@ export function createApiManager(options) {
     try {
       const result = await chrome.storage.sync.get(['apiConfigs', 'selectedConfigIndex']);
       if (result.apiConfigs && result.apiConfigs.length > 0) {
-        apiConfigs = result.apiConfigs;
+        apiConfigs = result.apiConfigs.map(config => ({
+          ...config,
+          // 确保每个配置都有 nextApiKeyIndex，即使是从旧存储加载的
+          // 这里我们不在 config 对象里存储 nextApiKeyIndex，而是使用外部的 apiKeyUsageIndex
+        }));
         selectedConfigIndex = result.selectedConfigIndex || 0;
+
+        // 兼容旧格式：如果 apiKey 是带逗号的字符串，则转换为数组
+        apiConfigs.forEach(config => {
+          if (typeof config.apiKey === 'string' && config.apiKey.includes(',')) {
+            config.apiKey = config.apiKey.split(',').map(k => k.trim()).filter(Boolean);
+          }
+          // 初始化 apiKeyUsageIndex
+          if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
+             const configId = getConfigIdentifier(config); // 使用唯一标识符
+             apiKeyUsageIndex[configId] = 0;
+          }
+        });
+
       } else {
         // 创建默认配置
         apiConfigs = [{
-          apiKey: '',
+          apiKey: '', // 初始为空字符串
           baseUrl: 'https://api.openai.com/v1/chat/completions',
           modelName: 'gpt-4o',
           displayName: '',
           temperature: 1,
-          isFavorite: false  // 添加收藏状态字段
+          isFavorite: false, // 添加收藏状态字段
+          customParams: ''
         }];
         selectedConfigIndex = 0;
         await saveAPIConfigs();
@@ -54,7 +74,8 @@ export function createApiManager(options) {
         modelName: 'gpt-4o',
         displayName: '',
         temperature: 1,
-        isFavorite: false  // 添加收藏状态字段
+        isFavorite: false,
+        customParams: ''
       }];
       selectedConfigIndex = 0;
     }
@@ -75,16 +96,31 @@ export function createApiManager(options) {
    */
   async function saveAPIConfigs() {
     try {
+      // 移除临时的 nextApiKeyIndex 状态再保存
+      const configsToSave = apiConfigs.map(({ ...config }) => {
+        // delete config.nextApiKeyIndex; // 不在 config 对象中保存索引
+        return config;
+      });
       await chrome.storage.sync.set({
-        apiConfigs,
+        apiConfigs: configsToSave,
         selectedConfigIndex
       });
       // 更新 window.apiConfigs 并触发事件 (向后兼容)
-      window.apiConfigs = apiConfigs;
+      window.apiConfigs = apiConfigs; // 保持内存中的对象包含索引
       window.dispatchEvent(new Event('apiConfigsUpdated'));
     } catch (error) {
       console.error('保存 API 配置失败:', error);
     }
+  }
+
+  /**
+   * 生成配置的唯一标识符
+   * @param {Object} config - API 配置对象
+   * @returns {string} 唯一标识符
+   */
+  function getConfigIdentifier(config) {
+    // 使用 baseUrl 和 modelName 组合作为唯一标识符
+    return `${config.baseUrl}|${config.modelName}`;
   }
 
   /**
@@ -117,11 +153,12 @@ export function createApiManager(options) {
   /**
    * 创建并渲染单个 API 配置卡片
    * @param {Object} config - API 配置对象
-   * @param {string} [config.apiKey] - API 密钥
+   * @param {string | string[]} [config.apiKey] - API 密钥 (可以是单个字符串或字符串数组)
    * @param {string} [config.baseUrl] - API 基础 URL
    * @param {string} [config.modelName] - 模型名称
    * @param {number} [config.temperature] - temperature 值（可为 0）
    * @param {boolean} [config.isFavorite] - 是否收藏
+   * @param {string} [config.customParams] - 自定义参数
    * @param {number} index - 该配置在 apiConfigs 数组中的索引
    * @param {HTMLElement} templateCard - 用于克隆的卡片模板 DOM
    * @returns {HTMLElement} 渲染后的卡片元素
@@ -150,6 +187,7 @@ export function createApiManager(options) {
     const favoriteBtn = template.querySelector('.favorite-btn');
     const togglePasswordBtn = template.querySelector('.toggle-password-btn');
     const selectBtn = template.querySelector('.select-btn');
+    const customParamsInput = template.querySelector('.custom-params');
 
     // 选择按钮点击事件
     selectBtn.addEventListener('click', (e) => {
@@ -164,6 +202,8 @@ export function createApiManager(options) {
       saveAPIConfigs();
       // 关闭设置菜单
       apiSettings.classList.remove('visible');
+       // 更新收藏列表状态
+      renderFavoriteApis();
     });
 
     // 点击卡片只展开/折叠表单
@@ -199,23 +239,26 @@ export function createApiManager(options) {
       }
     });
 
-    // 使用 ?? 替代 || 来防止 0 被错误替换
-    apiKeyInput.value = config.apiKey ?? '';
+    // --- API Key 显示逻辑 ---
+    if (Array.isArray(config.apiKey)) {
+      apiKeyInput.value = config.apiKey.join(',');
+    } else {
+      apiKeyInput.value = config.apiKey ?? '';
+    }
+    // ------------------------
+
     baseUrlInput.value = config.baseUrl ?? 'https://api.openai.com/v1/chat/completions';
     displayNameInput.value = config.displayName ?? '';
     modelNameInput.value = config.modelName ?? 'gpt-4o';
     temperatureInput.value = config.temperature ?? 1;
     temperatureValue.textContent = (config.temperature ?? 1).toFixed(1);
+    customParamsInput.value = config.customParams || '';
 
     // 监听温度变化
     temperatureInput.addEventListener('input', (e) => {
       const value = parseFloat(e.target.value);
       temperatureValue.textContent = value.toFixed(1);
-      // 保存温度值
-      apiConfigs[index] = {
-        ...apiConfigs[index],
-        temperature: value
-      };
+      apiConfigs[index].temperature = value;
       saveAPIConfigs();
     });
 
@@ -229,13 +272,7 @@ export function createApiManager(options) {
       e.stopPropagation();
       // 直接切换当前配置的收藏状态
       apiConfigs[index].isFavorite = !apiConfigs[index].isFavorite;
-
-      if (apiConfigs[index].isFavorite) {
-        favoriteBtn.classList.add('active');
-      } else {
-        favoriteBtn.classList.remove('active');
-      }
-
+      favoriteBtn.classList.toggle('active', apiConfigs[index].isFavorite);
       saveAPIConfigs();
       renderFavoriteApis();
     });
@@ -245,16 +282,14 @@ export function createApiManager(options) {
     apiForm.addEventListener('click', stopPropagation);
     template.querySelector('.api-card-actions').addEventListener('click', stopPropagation);
 
-    // 输入变化时保存
-    [apiKeyInput, baseUrlInput, displayNameInput, modelNameInput, temperatureInput].forEach(input => {
+    // --- 输入变化时保存 ---
+    [baseUrlInput, displayNameInput, modelNameInput].forEach(input => {
       input.addEventListener('change', () => {
         apiConfigs[index] = {
           ...apiConfigs[index],
-          apiKey: apiKeyInput.value,
           baseUrl: baseUrlInput.value,
           displayName: displayNameInput.value,
           modelName: modelNameInput.value,
-          temperature: parseFloat(temperatureInput.value)
         };
         // 更新标题
         titleElement.textContent = apiConfigs[index].displayName || apiConfigs[index].modelName || apiConfigs[index].baseUrl || '新配置';
@@ -262,10 +297,83 @@ export function createApiManager(options) {
       });
     });
 
+    // API Key 输入变化处理
+    apiKeyInput.addEventListener('change', () => {
+        const rawValue = apiKeyInput.value.trim();
+        let newApiKeyValue;
+        if (rawValue.includes(',')) {
+            newApiKeyValue = rawValue.split(',').map(k => k.trim()).filter(Boolean);
+            // 如果解析后只有一个key或没有key，则存为字符串
+            if (newApiKeyValue.length <= 1) {
+                newApiKeyValue = newApiKeyValue[0] || '';
+            }
+        } else {
+            newApiKeyValue = rawValue;
+        }
+
+        apiConfigs[index].apiKey = newApiKeyValue;
+
+        // 更新或初始化轮询索引状态
+        const configId = getConfigIdentifier(apiConfigs[index]);
+        if (Array.isArray(newApiKeyValue) && newApiKeyValue.length > 0) {
+            apiKeyUsageIndex[configId] = 0; // 重置索引
+        } else {
+            delete apiKeyUsageIndex[configId]; // 删除不再需要的索引
+        }
+
+        saveAPIConfigs();
+    });
+
+    // 自定义参数处理
+    customParamsInput.addEventListener('change', () => {
+      apiConfigs[index].customParams = customParamsInput.value;
+      saveAPIConfigs();
+    });
+    customParamsInput.addEventListener('blur', () => {
+      const value = customParamsInput.value.trim();
+       const errorElemId = `custom-params-error-${index}`;
+       let errorElem = customParamsInput.parentNode.querySelector(`#${errorElemId}`);
+
+      if (value === "") {
+        customParamsInput.style.borderColor = "";
+        if (errorElem) errorElem.remove();
+        apiConfigs[index].customParams = "";
+        saveAPIConfigs();
+        return;
+      }
+      try {
+        const parsed = JSON.parse(value);
+        customParamsInput.value = JSON.stringify(parsed, null, 2);
+        apiConfigs[index].customParams = customParamsInput.value;
+        if (errorElem) errorElem.remove();
+        customParamsInput.style.borderColor = "";
+        saveAPIConfigs();
+      } catch (e) {
+        customParamsInput.style.borderColor = "red";
+        if (!errorElem) {
+          errorElem = document.createElement("div");
+          errorElem.id = errorElemId; // 添加唯一ID
+          errorElem.className = "custom-params-error";
+          errorElem.style.color = "red";
+          errorElem.style.fontSize = "12px";
+          errorElem.style.marginTop = "4px";
+          customParamsInput.parentNode.appendChild(errorElem);
+        }
+        errorElem.textContent = "格式化失败：请检查 JSON 格式";
+        console.error("自定义参数格式化失败:", e);
+      }
+    });
+
     // 复制配置
     template.querySelector('.duplicate-btn').addEventListener('click', (e) => {
       e.stopPropagation();
-      apiConfigs.push({ ...config });
+      const newConfig = { ...config };
+      // 重置 apiKey 轮询状态 (如果复制的是多 key 配置)
+      const newConfigId = getConfigIdentifier(newConfig);
+      if (Array.isArray(newConfig.apiKey) && newConfig.apiKey.length > 0) {
+          apiKeyUsageIndex[newConfigId] = 0;
+      }
+      apiConfigs.push(newConfig);
       saveAPIConfigs();
       renderAPICards();
     });
@@ -274,66 +382,28 @@ export function createApiManager(options) {
     template.querySelector('.delete-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       if (apiConfigs.length > 1) {
-        apiConfigs.splice(index, 1);
+        const deletedConfig = apiConfigs.splice(index, 1)[0];
+        // 删除对应的轮询状态
+        const deletedConfigId = getConfigIdentifier(deletedConfig);
+        delete apiKeyUsageIndex[deletedConfigId];
+
         if (selectedConfigIndex >= apiConfigs.length) {
           selectedConfigIndex = apiConfigs.length - 1;
         }
+        // 如果删除的是当前选中的，需要更新选中项状态
+        if (index === selectedConfigIndex && apiConfigs.length > 0) {
+             // 默认选中第一个，或者最后一个如果索引超出
+             selectedConfigIndex = Math.max(0, Math.min(selectedConfigIndex, apiConfigs.length - 1));
+        } else if (index < selectedConfigIndex) {
+             // 如果删除的是选中项之前的，索引要减一
+             selectedConfigIndex--;
+        }
+
         saveAPIConfigs();
         renderAPICards();
+        renderFavoriteApis(); // 更新收藏列表状态
       }
     });
-
-    // 处理自定义参数输入
-    const customParamsInput = template.querySelector('.custom-params');
-    if (customParamsInput) {
-      customParamsInput.value = config.customParams || '';
-      customParamsInput.addEventListener('change', () => {
-        apiConfigs[index].customParams = customParamsInput.value;
-        saveAPIConfigs();
-      });
-      // 当输入完成后，尝试格式化为美化后的 JSON 格式，并在格式错误时在UI上提示
-      customParamsInput.addEventListener('blur', () => {
-        // 如果输入内容为空，则不作解析
-        if (customParamsInput.value.trim() === "") {
-          customParamsInput.style.borderColor = "";
-          let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
-          if (errorElem) {
-            errorElem.remove();
-          }
-          apiConfigs[index].customParams = "";
-          saveAPIConfigs();
-          return;
-        }
-        try {
-          const parsed = JSON.parse(customParamsInput.value);
-          // 格式化为两格缩进的 JSON 字符串
-          customParamsInput.value = JSON.stringify(parsed, null, 2);
-          apiConfigs[index].customParams = customParamsInput.value;
-          // 如果存在错误提示，则移除
-          let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
-          if (errorElem) {
-            errorElem.remove();
-          }
-          customParamsInput.style.borderColor = "";
-          saveAPIConfigs();
-        } catch (e) {
-          // 设置红色边框
-          customParamsInput.style.borderColor = "red";
-          // 创建或更新错误提示元素
-          let errorElem = customParamsInput.parentNode.querySelector('.custom-params-error');
-          if (!errorElem) {
-            errorElem = document.createElement("div");
-            errorElem.className = "custom-params-error";
-            errorElem.style.color = "red";
-            errorElem.style.fontSize = "12px";
-            errorElem.style.marginTop = "4px";
-            customParamsInput.parentNode.appendChild(errorElem);
-          }
-          errorElem.textContent = "格式化失败：请检查 JSON 格式";
-          console.error("自定义参数格式化失败:", e);
-        }
-      });
-    }
 
     return template;
   }
@@ -344,7 +414,7 @@ export function createApiManager(options) {
   function renderFavoriteApis() {
     const favoriteApisList = document.querySelector('.favorite-apis-list');
     if (!favoriteApisList) return;
-    
+
     favoriteApisList.innerHTML = '';
 
     // 过滤出收藏的API
@@ -367,13 +437,13 @@ export function createApiManager(options) {
       const item = document.createElement('div');
       item.className = 'favorite-api-item';
 
-      // 检查是否是当前使用的API
+      // --- 检查是否是当前使用的API (仅比较 baseUrl 和 modelName) ---
       if (currentConfig &&
-          currentConfig.apiKey === config.apiKey &&
           currentConfig.baseUrl === config.baseUrl &&
           currentConfig.modelName === config.modelName) {
         item.classList.add('current');
       }
+      // ----------------------------------------------------------
 
       const apiName = document.createElement('span');
       apiName.className = 'api-name';
@@ -383,17 +453,22 @@ export function createApiManager(options) {
 
       // 点击切换到该API配置
       item.addEventListener('click', () => {
+        // --- 按 baseUrl 和 modelName 查找索引 ---
         const configIndex = apiConfigs.findIndex(c =>
-          c.apiKey === config.apiKey &&
           c.baseUrl === config.baseUrl &&
           c.modelName === config.modelName
         );
+        // --------------------------------------
 
-        if (configIndex !== -1) {
+        if (configIndex !== -1 && configIndex !== selectedConfigIndex) {
           selectedConfigIndex = configIndex;
           saveAPIConfigs();
-          renderAPICards();
+          renderAPICards(); // 重新渲染卡片以更新选中状态
+          // 更新收藏列表状态
+          renderFavoriteApis();
         }
+         // 关闭设置菜单
+        apiSettings.classList.remove('visible');
       });
 
       favoriteApisList.appendChild(item);
@@ -414,7 +489,7 @@ export function createApiManager(options) {
       model: config.modelName,
       messages: messages,
       stream: true,
-      temperature: config.temperature,
+      temperature: config.temperature ?? 1.0, // 确保有默认值
       top_p: 0.95,
       ...overrides // 允许覆盖默认参数
     };
@@ -439,13 +514,39 @@ export function createApiManager(options) {
    * @param {Object} options.config - API 配置
    * @param {AbortSignal} [options.signal] - 中止信号
    * @returns {Promise<Response>} Fetch 响应对象
+   * @throws {Error} 如果 API Key 无效或缺失
    */
   async function sendRequest({ requestBody, config, signal }) {
+    let selectedKey = '';
+    const configId = getConfigIdentifier(config);
+
+    // --- API Key 选择逻辑 ---
+    if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
+      // 轮询获取 Key
+      const currentIndex = apiKeyUsageIndex[configId] || 0;
+      selectedKey = config.apiKey[currentIndex];
+      // 更新下次使用的索引
+      apiKeyUsageIndex[configId] = (currentIndex + 1) % config.apiKey.length;
+    } else if (typeof config.apiKey === 'string' && config.apiKey) {
+      // 单个 Key
+      selectedKey = config.apiKey;
+    } else {
+      // 没有有效的 Key
+      console.error('API Key 缺失或无效:', config);
+      throw new Error(`API Key for ${config.displayName || config.modelName} is missing or invalid.`);
+    }
+    // ------------------------
+
+    if (!selectedKey) {
+         console.error('Selected API Key is empty:', config);
+         throw new Error(`Selected API Key for ${config.displayName || config.modelName} is empty.`);
+    }
+
     return fetch(config.baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
+        'Authorization': `Bearer ${selectedKey}`, // 使用选中的 Key
       },
       body: JSON.stringify(requestBody),
       signal
@@ -465,7 +566,10 @@ export function createApiManager(options) {
 
       if (!wasVisible) {
         apiSettings.classList.toggle('visible');
-        renderAPICards();
+        loadAPIConfigs().then(() => {
+            renderAPICards(); // 确保加载最新配置后渲染
+            renderFavoriteApis();
+        });
       }
     });
 
@@ -477,27 +581,23 @@ export function createApiManager(options) {
 
   /**
    * 获取模型配置
-   * @param {string} [promptType] - 提示词类型 
+   * @param {string} [promptType] - 提示词类型
    * @param {Object} promptsConfig - 提示词设置
    * @returns {Object} 选中的API配置
    */
   function getModelConfig(promptType, promptsConfig) {
     // 检查特定提示词类型是否指定了特定模型
-    if (promptType) {
-      if (promptsConfig[promptType]) {
-        if (promptsConfig[promptType].model) {
-          const preferredModel = promptsConfig[promptType].model;
-          // 如果不是跟随当前设置，则查找对应的模型配置
-          const config = apiConfigs.find(c => c.modelName === preferredModel);
-          if (config) {
-            // 如果找到了目标配置，直接返回
-            return config;
-          }
-        }
+    if (promptType && promptsConfig && promptsConfig[promptType]?.model) {
+      const preferredModel = promptsConfig[promptType].model;
+      // 查找对应的模型配置 (优先按 modelName 和 baseUrl 匹配)
+      const config = apiConfigs.find(c => c.modelName === preferredModel && c.baseUrl); // 确保 baseUrl 存在
+      if (config) {
+          return config; // 返回找到的特定配置
       }
+      // 如果仅按 modelName 找不到，可以考虑其他逻辑或回退
     }
-    // 如果没有特定模型配置或设置为跟随当前，使用当前选中的配置
-    return apiConfigs[selectedConfigIndex];
+    // 如果没有特定模型配置或找不到，使用当前选中的配置
+    return apiConfigs[selectedConfigIndex] || apiConfigs[0]; // 保证总有返回值
   }
 
   /**
@@ -513,30 +613,50 @@ export function createApiManager(options) {
     if (!partialConfig || !partialConfig.baseUrl || !partialConfig.modelName) {
       return null;
     }
-    
-    // 首先尝试按完全匹配查找配置
-    let matchedConfig = apiConfigs.find(config => 
-      config.baseUrl === partialConfig.baseUrl && 
+
+    // 尝试按 baseUrl 和 modelName 查找现有配置
+    let matchedConfig = apiConfigs.find(config =>
+      config.baseUrl === partialConfig.baseUrl &&
       config.modelName === partialConfig.modelName
     );
-    
-    // 如果找到完全匹配，返回该配置
+
+    // 如果找到完全匹配，返回该配置 (确保包含 apiKey 和轮询状态)
     if (matchedConfig) {
-      return matchedConfig;
+        // 确保返回的对象有 apiKey 和可能的轮询状态
+        const configId = getConfigIdentifier(matchedConfig);
+        return {
+            ...matchedConfig,
+            // nextApiKeyIndex: apiKeyUsageIndex[configId] || 0 // 附加轮询状态
+        };
     }
-    
-    // 如果没有找到完全匹配，则尝试按 URL 匹配并创建新配置
+
+    // 如果没有找到完全匹配，尝试仅按 URL 匹配以获取可能的 API Key
     const urlMatchedConfig = apiConfigs.find(config => config.baseUrl === partialConfig.baseUrl);
-    
-    // 创建新的配置对象（优先使用匹配到的配置的 API 密钥，如果有的话）
-    return {
+
+    // 获取当前选中配置的 apiKey 作为备选
+    const currentSelectedConfig = apiConfigs[selectedConfigIndex];
+    const fallbackApiKey = currentSelectedConfig ? currentSelectedConfig.apiKey : '';
+
+    // 创建新的配置对象
+    const newConfig = {
       baseUrl: partialConfig.baseUrl,
-      apiKey: urlMatchedConfig?.apiKey || apiConfigs[selectedConfigIndex]?.apiKey || '',
+      // 优先使用 URL 匹配到的配置的 apiKey，其次是当前选中的，最后是空字符串
+      // 注意：这里 apiKey 可能是数组或字符串
+      apiKey: urlMatchedConfig?.apiKey || fallbackApiKey || '',
       modelName: partialConfig.modelName,
       displayName: partialConfig.displayName || '',
       temperature: partialConfig.temperature ?? 1.0,
       customParams: partialConfig.customParams || ''
+      // isFavorite: false // 新创建的默认不收藏
     };
+
+     // 初始化新配置的轮询状态
+    const newConfigId = getConfigIdentifier(newConfig);
+    if (Array.isArray(newConfig.apiKey) && newConfig.apiKey.length > 0) {
+         apiKeyUsageIndex[newConfigId] = 0;
+    }
+
+    return newConfig;
   }
 
   /**
@@ -553,25 +673,57 @@ export function createApiManager(options) {
     setupUIEventHandlers,
     getModelConfig,
     getApiConfigFromPartial,
-    
+
     // 获取和设置配置
-    getSelectedConfig: () => apiConfigs[selectedConfigIndex],
-    getAllConfigs: () => [...apiConfigs],
+    getSelectedConfig: () => {
+        const config = apiConfigs[selectedConfigIndex];
+        // if (config) {
+        //     const configId = getConfigIdentifier(config);
+        //     // 返回时附加当前的轮询索引
+        //     return { ...config, nextApiKeyIndex: apiKeyUsageIndex[configId] || 0 };
+        // }
+        return config; // 返回内存中的配置对象
+    },
+    getAllConfigs: () => [...apiConfigs], // 返回包含轮询状态的配置副本
     getSelectedIndex: () => selectedConfigIndex,
     setSelectedIndex: (index) => {
       if (index >= 0 && index < apiConfigs.length) {
         selectedConfigIndex = index;
-        saveAPIConfigs();
+        saveAPIConfigs(); // 保存选中的索引
+        renderAPICards(); // 更新卡片选中状态
+        renderFavoriteApis(); // 更新收藏列表选中状态
         return true;
       }
       return false;
     },
-    
+
     // 添加新配置
     addConfig: (config) => {
-      apiConfigs.push(config);
-      saveAPIConfigs();
-      renderAPICards();
+        // 确保新配置有必要的字段
+        const newConfig = {
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1/chat/completions',
+            modelName: 'new-model',
+            displayName: '新配置',
+            temperature: 1,
+            isFavorite: false,
+            customParams: '',
+            ...config // 允许传入部分或完整配置覆盖默认值
+        };
+        // 处理传入的 apiKey 格式
+        if (typeof newConfig.apiKey === 'string' && newConfig.apiKey.includes(',')) {
+            newConfig.apiKey = newConfig.apiKey.split(',').map(k => k.trim()).filter(Boolean);
+        }
+         // 初始化轮询状态
+        const newConfigId = getConfigIdentifier(newConfig);
+        if (Array.isArray(newConfig.apiKey) && newConfig.apiKey.length > 0) {
+            apiKeyUsageIndex[newConfigId] = 0;
+        }
+
+        apiConfigs.push(newConfig);
+        saveAPIConfigs();
+        renderAPICards();
+        renderFavoriteApis();
     }
   };
 } 
