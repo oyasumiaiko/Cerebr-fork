@@ -50,6 +50,63 @@ export function createChatHistoryUI(options) {
   let lastStatsUpdateTime = 0;
   const STATS_CACHE_DURATION = 5 * 60 * 1000; // 5分钟更新一次统计数据
 
+  // --- 置顶功能相关 ---
+  const PINNED_STORAGE_KEY = 'pinnedConversationIds';
+
+  /**
+   * 获取已置顶的对话ID列表
+   * @returns {Promise<string[]>} 置顶ID数组
+   */
+  async function getPinnedIds() {
+    try {
+      const result = await chrome.storage.sync.get([PINNED_STORAGE_KEY]);
+      return result[PINNED_STORAGE_KEY] || [];
+    } catch (error) {
+      console.error('获取置顶 ID 失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 保存置顶对话ID列表
+   * @param {string[]} ids - 要保存的置顶ID数组
+   * @returns {Promise<void>}
+   */
+  async function setPinnedIds(ids) {
+    try {
+      await chrome.storage.sync.set({ [PINNED_STORAGE_KEY]: ids });
+    } catch (error) {
+      console.error('保存置顶 ID 失败:', error);
+    }
+  }
+
+  /**
+   * 置顶一个对话
+   * @param {string} id - 要置顶的对话ID
+   * @returns {Promise<void>}
+   */
+  async function pinConversation(id) {
+    const pinnedIds = await getPinnedIds();
+    if (!pinnedIds.includes(id)) {
+      pinnedIds.push(id);
+      await setPinnedIds(pinnedIds);
+    }
+  }
+
+  /**
+   * 取消置顶一个对话
+   * @param {string} id - 要取消置顶的对话ID
+   * @returns {Promise<void>}
+   */
+  async function unpinConversation(id) {
+    let pinnedIds = await getPinnedIds();
+    if (pinnedIds.includes(id)) {
+      pinnedIds = pinnedIds.filter(pinnedId => pinnedId !== id);
+      await setPinnedIds(pinnedIds);
+    }
+  }
+  // --- 置顶功能结束 ---
+
   /**
    * 提取消息的纯文本内容
    * @param {Object} msg - 消息对象
@@ -417,7 +474,7 @@ export function createChatHistoryUI(options) {
    * @param {MouseEvent} e - 右键事件
    * @param {string} conversationId - 对话记录ID
    */
-  function showChatHistoryItemContextMenu(e, conversationId) {
+  async function showChatHistoryItemContextMenu(e, conversationId) {
     e.preventDefault();
     // 如果已存在菜单，则删除
     const existingMenu = document.getElementById('chat-history-context-menu');
@@ -432,6 +489,24 @@ export function createChatHistoryUI(options) {
     menu.style.left = e.clientX + 'px';
     // 添加 CSS 类，设置其他样式
     menu.classList.add('chat-history-context-menu');
+
+    // --- 添加 置顶/取消置顶 选项 ---
+    const pinnedIds = await getPinnedIds();
+    const isPinned = pinnedIds.includes(conversationId);
+    const pinToggleOption = document.createElement('div');
+    pinToggleOption.textContent = isPinned ? '取消置顶' : '置顶';
+    pinToggleOption.classList.add('chat-history-context-menu-option');
+    pinToggleOption.addEventListener('click', async () => {
+      if (isPinned) {
+        await unpinConversation(conversationId);
+      } else {
+        await pinConversation(conversationId);
+      }
+      menu.remove();
+      refreshChatHistory(); // 刷新列表以显示更新后的顺序
+    });
+    menu.appendChild(pinToggleOption); // 添加到菜单顶部
+    // --- 置顶/取消置顶 选项结束 ---
 
     // 复制聊天记录选项
     const copyOption = document.createElement('div');
@@ -505,6 +580,8 @@ export function createChatHistoryUI(options) {
         loadedConversations.delete(conversationId);
         conversationUsageTimestamp.delete(conversationId);
       }
+      // 如果删除的是置顶对话，也从置顶列表中移除
+      await unpinConversation(conversationId); 
 
       // 刷新聊天记录面板
       const panel = document.getElementById('chat-history-panel');
@@ -585,32 +662,35 @@ export function createChatHistoryUI(options) {
       countThreshold = parseInt(countFilterMatch[2], 10);
     }
     
+    // 获取置顶 ID 列表
+    const pinnedIds = await getPinnedIds();
     // 获取所有对话元数据
     const allHistoriesMeta = await getAllConversationMetadata();
     // 如果在获取过程中过滤条件已变化，则放弃本次结果
     if (panel.dataset.currentFilter !== filterText) return;
 
     let historiesToShow = [];
+    let sourceHistories = allHistoriesMeta; // 默认使用所有元数据
 
     if (isCountFilter) {
-      // 按数量筛选
-      historiesToShow = allHistoriesMeta.filter(history => 
+      // 按数量筛选 - 先筛选再排序
+      sourceHistories = allHistoriesMeta.filter(history => 
         compareCount(history.messageCount, countOperator, countThreshold)
       );
       
-      if (historiesToShow.length === 0) {
+      if (sourceHistories.length === 0) {
         const emptyMsg = document.createElement('div');
         emptyMsg.textContent = `没有消息数量 ${countOperator} ${countThreshold} 的聊天记录`;
         listContainer.appendChild(emptyMsg);
         listContainer.scrollTop = newScrollPos;
         return;
       }
-      
-      displayConversationList(historiesToShow, '', listContainer); // Count filter doesn't need text highlighting
-      listContainer.scrollTop = newScrollPos;
+      // 不需要文本高亮，清空 filterText
+      filterText = ''; 
 
     } else if (filterText) {
-      // 按文本筛选
+      // 按文本筛选 - 需要加载完整内容，这个过程在下面处理
+      // 注意：文本筛选会改变 sourceHistories 的内容和结构
       const lowerFilter = filterText.toLowerCase();
       const filteredHistories = [];
       
@@ -653,6 +733,8 @@ export function createChatHistoryUI(options) {
             if (lowerMessages.includes(lowerFilter)) {
               // 使用完整会话数据替换元数据，以便后续高亮显示snippet
               filteredHistories.push(fullConversation); 
+              // 如果加载了完整内容，也更新缓存
+              updateConversationInCache(fullConversation); 
             } else {
               // 释放内存
               if (fullConversation.id !== activeConversation?.id) {
@@ -682,40 +764,76 @@ export function createChatHistoryUI(options) {
         return;
       }
       
-      displayConversationList(filteredHistories, filterText, listContainer);
-      // Restore scroll position based on filter change
-      listContainer.scrollTop = newScrollPos;
-    } else {
-      // 没有过滤条件，直接显示元数据列表
-      if (allHistoriesMeta.length === 0) {
+      // 文本过滤后的结果作为源数据
+      sourceHistories = filteredHistories; 
+    }
+    // --- 统一处理排序和显示 ---
+    
+    // 分离置顶和未置顶
+    const pinnedHistories = [];
+    const unpinnedHistories = [];
+    // 创建一个映射以便快速查找置顶顺序
+    const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
+
+    // 从 sourceHistories 中筛选出置顶项
+    sourceHistories.forEach(hist => {
+      if (pinnedIds.includes(hist.id)) {
+        pinnedHistories.push(hist);
+      }
+    });
+
+    // 分别排序
+    const sortByTime = (a, b) => b.endTime - a.endTime;
+    // 置顶列表按 pinnedIds 中的顺序排序，如果时间需要作为次要排序，可以修改
+    pinnedHistories.sort((a, b) => {
+      // 或者 return (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity); // 兼容ID可能不在Map的情况
+    });
+
+    // 对所有符合筛选条件的记录按时间排序，用于显示主列表
+    sourceHistories.sort(sortByTime);
+
+    // --- 更新显示逻辑 --- 
+    listContainer.innerHTML = ''; // 清空容器准备重新渲染
+
+    if (sourceHistories.length === 0 && !isCountFilter && !filterText.trim()) {
         const emptyMsg = document.createElement('div');
         emptyMsg.textContent = '暂无聊天记录';
         listContainer.appendChild(emptyMsg);
-        // Restore scroll position based on filter change
-        listContainer.scrollTop = newScrollPos;
-        return;
-      }
-      
-      displayConversationList(allHistoriesMeta, '', listContainer);
-      // Restore scroll position based on filter change
-      listContainer.scrollTop = newScrollPos;
-    }
+    } else if (sourceHistories.length > 0) {
+        // 显示列表，传入置顶列表和完整时间排序列表
+        displayConversationList(pinnedHistories, sourceHistories, filterText, listContainer, pinnedIds);
+    } 
+    // else: 筛选后无结果的消息已在前面处理 (例如数量筛选或文本筛选无结果)
+
+    // 恢复滚动位置
+    listContainer.scrollTop = newScrollPos;
   }
   
   /**
    * 显示会话列表
-   * @param {Array<Object>} histories - 会话历史数组
+   * @param {Array<Object>} pinnedHistories - 按置顶顺序排序的置顶对话数组
+   * @param {Array<Object>} allTimeSortedHistories - 按时间排序的所有符合条件的对话数组
    * @param {string} filterText - 过滤文本 (仅用于文本高亮)
    * @param {HTMLElement} listContainer - 列表容器元素
+   * @param {string[]} pinnedIds - 当前置顶的ID列表
    */
-  function displayConversationList(histories, filterText, listContainer) {
-    // 按结束时间降序排序
-    histories.sort((a, b) => b.endTime - a.endTime);
+  function displayConversationList(pinnedHistories, allTimeSortedHistories, filterText, listContainer, pinnedIds) {
+    // 渲染置顶区域
+    if (pinnedHistories.length > 0) {
+      const pinnedHeader = document.createElement('div');
+      pinnedHeader.className = 'chat-history-group-header pinned-header'; // 添加特殊类以区分
+      pinnedHeader.textContent = '已置顶';
+      listContainer.appendChild(pinnedHeader);
+      pinnedHistories.forEach(conv => {
+        renderConversationItem(conv, filterText, listContainer, pinnedIds, true);
+      });
+    }
 
-    // 根据会话的开始时间进行分组
+    // 渲染普通列表区域 (按日期分组)
+    // 根据会话的开始时间进行分组 - 仅对 allTimeSortedHistories 进行分组
     const groups = {};
     const groupLatestTime = {}; // 用于记录各分组中最新的会话时间以便排序
-    histories.forEach(conv => {
+    allTimeSortedHistories.forEach(conv => { // 使用完整时间排序列表进行分组
       const convDate = new Date(conv.startTime);
       const groupLabel = getGroupLabel(convDate);
       if (!groups[groupLabel]) {
@@ -738,103 +856,8 @@ export function createChatHistoryUI(options) {
       listContainer.appendChild(groupHeader);
 
       groups[groupLabel].forEach(conv => {
-        const item = document.createElement('div');
-        item.className = 'chat-history-item';
-        // 保存会话ID作为属性，便于后续加载
-        item.setAttribute('data-id', conv.id);
-
-        const summaryDiv = document.createElement('div');
-        summaryDiv.className = 'summary';
-        let displaySummary = conv.summary || '';
-        // 只有在提供了 filterText 并且是文本过滤时才高亮摘要
-        if (filterText && filterText.trim() !== "") {
-          const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const regex = new RegExp(`(${escapedFilterForSummary})`, 'gi');
-          displaySummary = displaySummary.replace(regex, '<mark>$1</mark>');
-        }
-        summaryDiv.innerHTML = displaySummary;
-
-        const infoDiv = document.createElement('div');
-        infoDiv.className = 'info';
-        const convDate = new Date(conv.startTime);
-        const relativeTime = formatRelativeTime(convDate);
-
-        // 使用新的URL处理函数
-        const domain = getDisplayUrl(conv.url);
-        let title = conv.title;
-
-        const displayInfos = [relativeTime, `消息数: ${conv.messageCount}`, domain].filter(Boolean).join(' · ');
-        infoDiv.textContent = displayInfos;
-        // 鼠标悬停显示具体的日期时间和完整URL
-        const details = [convDate.toLocaleString(), title, conv.url].filter(Boolean).join('\n');
-        infoDiv.title = details;
-
-        item.appendChild(summaryDiv);
-        item.appendChild(infoDiv);
-
-        // 只有在提供了 filterText 并且是文本过滤时才显示和高亮 snippet
-        if (filterText && filterText.trim() !== "" && conv.messages && Array.isArray(conv.messages)) {
-          let snippets = [];
-          let totalMatches = 0;
-          // 对 filterText 进行转义，避免正则特殊字符问题
-          const escapedFilter = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const lowerFilter = filterText.toLowerCase();
-          // 预先构造用于高亮的正则对象
-          const highlightRegex = new RegExp(escapedFilter, 'gi');
-
-          for (const msg of conv.messages) {
-            const plainText = extractMessagePlainText(msg);
-            if (plainText) {
-              const content = plainText;
-              const contentLower = content.toLowerCase();
-              // 若当前消息中未包含关键字，则跳过
-              if (contentLower.indexOf(lowerFilter) === -1) continue;
-              let startIndex = 0;
-              while (true) {
-                const index = contentLower.indexOf(lowerFilter, startIndex);
-                if (index === -1) break;
-                totalMatches++;
-                if (snippets.length < 5) {
-                  const snippetStart = Math.max(0, index - 30);
-                  const snippetEnd = Math.min(content.length, index + filterText.length + 30);
-                  let snippet = content.substring(snippetStart, snippetEnd);
-                  // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
-                  snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
-                  snippets.push(snippet);
-                }
-                startIndex = index + 1;
-              }
-            }
-          }
-          
-          if (snippets.length > 0) {
-            const snippetDiv = document.createElement('div');
-            snippetDiv.className = 'highlight-snippet';
-            let displaySnippets = snippets.map(s => '…' + s + '…');
-            if (totalMatches > snippets.length) {
-              displaySnippets.push(`…… 共 ${totalMatches} 匹配`);
-            }
-            snippetDiv.innerHTML = displaySnippets.join('<br>');
-            item.appendChild(snippetDiv);
-          }
-        }
-
-        // 添加聊天记录项的点击事件
-        item.addEventListener('click', async () => {
-          // 加载对话到聊天窗口
-          const conversation = await getConversationFromCacheOrLoad(conv.id);
-          if (conversation) {
-            loadConversationIntoChat(conversation);
-          }
-        });
-        
-        // 添加右键事件，显示删除菜单
-        item.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          showChatHistoryItemContextMenu(e, conv.id);
-        });
-
-        listContainer.appendChild(item);
+        // 在普通列表中渲染时，标记 isDirectlyPinned 为 false
+        renderConversationItem(conv, filterText, listContainer, pinnedIds, false); 
       });
     });
   }
@@ -1489,6 +1512,390 @@ export function createChatHistoryUI(options) {
     } catch (error) {
       console.error('创建分支对话失败:', error);
     }
+  }
+
+  /**
+   * 显示会话列表
+   * @param {Array<Object>} pinnedHistories - 按置顶顺序排序的置顶对话数组
+   * @param {Array<Object>} allTimeSortedHistories - 按时间排序的所有符合条件的对话数组
+   * @param {string} filterText - 过滤文本 (仅用于文本高亮)
+   * @param {HTMLElement} listContainer - 列表容器元素
+   * @param {string[]} pinnedIds - 当前置顶的ID列表
+   */
+  function displayConversationList(pinnedHistories, allTimeSortedHistories, filterText, listContainer, pinnedIds) {
+    // 渲染置顶区域
+    if (pinnedHistories.length > 0) {
+      const pinnedHeader = document.createElement('div');
+      pinnedHeader.className = 'chat-history-group-header pinned-header'; // 添加特殊类以区分
+      pinnedHeader.textContent = '已置顶';
+      listContainer.appendChild(pinnedHeader);
+      pinnedHistories.forEach(conv => {
+        renderConversationItem(conv, filterText, listContainer, pinnedIds, true);
+      });
+    }
+
+    // 渲染普通列表区域 (按日期分组)
+    // 根据会话的开始时间进行分组 - 仅对 allTimeSortedHistories 进行分组
+    const groups = {};
+    const groupLatestTime = {}; // 用于记录各分组中最新的会话时间以便排序
+    allTimeSortedHistories.forEach(conv => { // 使用完整时间排序列表进行分组
+      const convDate = new Date(conv.startTime);
+      const groupLabel = getGroupLabel(convDate);
+      if (!groups[groupLabel]) {
+        groups[groupLabel] = [];
+        groupLatestTime[groupLabel] = convDate.getTime();
+      } else {
+        groupLatestTime[groupLabel] = Math.max(groupLatestTime[groupLabel], convDate.getTime());
+      }
+      groups[groupLabel].push(conv);
+    });
+
+    // 根据每个分组中最新的时间降序排序分组
+    const sortedGroupLabels = Object.keys(groups).sort((a, b) => groupLatestTime[b] - groupLatestTime[a]);
+
+    sortedGroupLabels.forEach(groupLabel => {
+      // 创建分组标题
+      const groupHeader = document.createElement('div');
+      groupHeader.className = 'chat-history-group-header';
+      groupHeader.textContent = groupLabel;
+      listContainer.appendChild(groupHeader);
+
+      groups[groupLabel].forEach(conv => {
+        // 在普通列表中渲染时，标记 isDirectlyPinned 为 false
+        renderConversationItem(conv, filterText, listContainer, pinnedIds, false); 
+      });
+    });
+  }
+
+  /**
+   * 获取数据库统计信息，优先使用缓存
+   * @param {boolean} [forceUpdate=false] - 是否强制更新
+   * @returns {Promise<Object>} 数据库统计信息
+   */
+  async function getDbStatsWithCache(forceUpdate = false) {
+    const now = Date.now();
+    if (forceUpdate || !cachedDbStats || (now - lastStatsUpdateTime > STATS_CACHE_DURATION)) {
+      cachedDbStats = await getDatabaseStats();
+      lastStatsUpdateTime = now;
+    }
+    return cachedDbStats;
+  }
+  
+  /**
+   * 渲染数据库统计信息面板
+   * @param {Object} stats - 数据库统计数据
+   * @returns {HTMLElement} 统计信息面板元素
+   */
+  function renderStatsPanel(stats) {
+    const statsPanel = document.createElement('div');
+    statsPanel.className = 'db-stats-panel';
+    
+    // 添加标题
+    const header = document.createElement('div');
+    header.className = 'db-stats-header';
+    header.innerHTML = `
+      <span class="db-stats-title">数据统计</span>
+      <span class="db-stats-refresh" title="刷新统计数据">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 4v6h-6"></path>
+          <path d="M1 20v-6h6"></path>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+          <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+      </span>
+    `;
+    
+    // 点击刷新按钮刷新统计数据
+    const refreshBtn = header.querySelector('.db-stats-refresh');
+    refreshBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const updatedStats = await getDbStatsWithCache(true);
+      
+      // 查找父级面板并更新
+      const parentPanel = document.getElementById('chat-history-panel');
+      if (parentPanel) {
+        const oldStatsPanel = parentPanel.querySelector('.db-stats-panel');
+        if (oldStatsPanel) {
+          const newStatsPanel = renderStatsPanel(updatedStats);
+          oldStatsPanel.replaceWith(newStatsPanel);
+        }
+      }
+    });
+    
+    statsPanel.appendChild(header);
+    
+    // 创建内容区域 - 使用卡片布局
+    const statsContent = document.createElement('div');
+    statsContent.className = 'db-stats-content';
+    
+    // 第一行卡片：存储概览
+    const overviewCard = document.createElement('div');
+    overviewCard.className = 'db-stats-card overview-card';
+    overviewCard.innerHTML = `
+      <div class="db-stats-card-header">存储概览</div>
+      <div class="db-stats-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value highlight">${stats.totalSizeFormatted}</div>
+          <div class="db-stats-metric-label">总存储大小</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.totalTextSizeFormatted}</div>
+          <div class="db-stats-metric-label">文本数据</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.totalImageSizeFormatted}</div>
+          <div class="db-stats-metric-label">图片数据</div>
+        </div>
+      </div>
+    `;
+    
+    // 第二行卡片：聊天统计
+    const chatStatsCard = document.createElement('div');
+    chatStatsCard.className = 'db-stats-card chat-stats-card';
+    chatStatsCard.innerHTML = `
+      <div class="db-stats-card-header">聊天统计</div>
+      <div class="db-stats-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.conversationsCount}</div>
+          <div class="db-stats-metric-label">会话总数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.messagesCount}</div>
+          <div class="db-stats-metric-label">消息总数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.imageMessagesCount}</div>
+          <div class="db-stats-metric-label">图片消息</div>
+        </div>
+      </div>
+    `;
+    
+    // 第三行卡片：时间跨度
+    const timeCard = document.createElement('div');
+    timeCard.className = 'db-stats-card time-card';
+    
+    let timeContent = '<div class="db-stats-card-header">时间跨度</div>';
+    
+    if (stats.oldestMessageDate && stats.newestMessageDate) {
+      const formatDate = (date) => {
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      };
+      
+      timeContent += `
+        <div class="db-stats-metrics timeline">
+          <div class="db-stats-metric">
+            <div class="db-stats-metric-value">${formatDate(stats.oldestMessageDate)}</div>
+            <div class="db-stats-metric-label">最早消息</div>
+          </div>
+          <div class="db-stats-metric time-span">
+            <div class="db-stats-metric-value">${stats.timeSpanDays} 天</div>
+            <div class="db-stats-metric-label">总时长</div>
+          </div>
+          <div class="db-stats-metric">
+            <div class="db-stats-metric-value">${formatDate(stats.newestMessageDate)}</div>
+            <div class="db-stats-metric-label">最新消息</div>
+          </div>
+        </div>
+      `;
+    } else {
+      timeContent += `
+        <div class="db-stats-empty">
+          <div class="db-stats-empty-text">暂无消息数据</div>
+        </div>
+      `;
+    }
+    
+    timeCard.innerHTML = timeContent;
+    
+    // 第四行卡片：技术信息
+    const techCard = document.createElement('div');
+    techCard.className = 'db-stats-card tech-card';
+    techCard.innerHTML = `
+      <div class="db-stats-card-header">技术指标</div>
+      <div class="db-stats-metrics tech-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.largestMessageSizeFormatted}</div>
+          <div class="db-stats-metric-label">最大消息</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.messageContentRefsCount}</div>
+          <div class="db-stats-metric-label">分离存储数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${loadedConversations.size}</div>
+          <div class="db-stats-metric-label">内存缓存数</div>
+        </div>
+      </div>
+    `;
+    
+    // 添加所有卡片到内容区域
+    statsContent.appendChild(overviewCard);
+    statsContent.appendChild(chatStatsCard);
+    statsContent.appendChild(timeCard);
+    statsContent.appendChild(techCard);
+    
+    // 添加饼图显示数据比例
+    if (stats.totalTextSize > 0 || stats.totalImageSize > 0) {
+      const chartContainer = document.createElement('div');
+      chartContainer.className = 'db-stats-chart-container';
+      
+      const totalSize = stats.totalTextSize + stats.totalImageSize;
+      const textPercentage = Math.round((stats.totalTextSize / totalSize) * 100);
+      const imagePercentage = 100 - textPercentage;
+      
+      chartContainer.innerHTML = `
+        <div class="db-stats-chart">
+          <svg viewBox="0 0 36 36" class="circular-chart">
+            <path class="circle-bg" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <path class="circle image-data" stroke-dasharray="${imagePercentage}, 100" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <path class="circle text-data" stroke-dasharray="${textPercentage}, 100" stroke-dashoffset="-${imagePercentage}" d="M18 2.0845
+              a 15.9155 15.9155 0 0 1 0 31.831
+              a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+            <text x="18" y="20.35" class="percentage">${textPercentage}%</text>
+          </svg>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <span class="legend-color text-color"></span>
+              <span class="legend-label">文本 (${textPercentage}%)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color image-color"></span>
+              <span class="legend-label">图片 (${imagePercentage}%)</span>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      statsContent.appendChild(chartContainer);
+    }
+    
+    statsPanel.appendChild(statsContent);
+    
+    // 添加更新时间戳
+    const footer = document.createElement('div');
+    footer.className = 'db-stats-footer';
+    footer.innerHTML = `
+      <div class="db-stats-update-time">
+        最后更新: ${new Date(lastStatsUpdateTime).toLocaleTimeString()}
+      </div>
+    `;
+    statsPanel.appendChild(footer);
+    
+    return statsPanel;
+  }
+
+  /**
+   * 显示会话列表
+   * @param {Object} conv - 会话对象
+   * @param {string} filterText - 过滤文本 (仅用于文本高亮)
+   * @param {HTMLElement} listContainer - 列表容器元素
+   * @param {string[]} pinnedIds - 当前置顶的ID列表
+   * @param {boolean} isDirectlyPinned - 该项是否是置顶项（用于跳过分组渲染逻辑）
+   */
+  function renderConversationItem(conv, filterText, listContainer, pinnedIds, isDirectlyPinned) {
+    const item = document.createElement('div');
+    item.className = 'chat-history-item';
+    // 保存会话ID作为属性，便于后续加载
+    item.setAttribute('data-id', conv.id);
+
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'summary';
+    let displaySummary = conv.summary || '';
+    // 只有在提供了 filterText 并且是文本过滤时才高亮摘要
+    if (filterText && filterText.trim() !== "") {
+      const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(${escapedFilterForSummary})`, 'gi');
+      displaySummary = displaySummary.replace(regex, '<mark>$1</mark>');
+    }
+    summaryDiv.innerHTML = displaySummary;
+
+    const infoDiv = document.createElement('div');
+    infoDiv.className = 'info';
+    const convDate = new Date(conv.startTime);
+    const relativeTime = formatRelativeTime(convDate);
+
+    // 使用新的URL处理函数
+    const domain = getDisplayUrl(conv.url);
+    let title = conv.title;
+
+    const displayInfos = [relativeTime, `消息数: ${conv.messageCount}`, domain].filter(Boolean).join(' · ');
+    infoDiv.textContent = displayInfos;
+    // 鼠标悬停显示具体的日期时间和完整URL
+    const details = [convDate.toLocaleString(), title, conv.url].filter(Boolean).join('\n');
+    infoDiv.title = details;
+
+    item.appendChild(summaryDiv);
+    item.appendChild(infoDiv);
+
+    // 只有在提供了 filterText 并且是文本过滤时才显示和高亮 snippet
+    if (filterText && filterText.trim() !== "" && conv.messages && Array.isArray(conv.messages)) {
+      let snippets = [];
+      let totalMatches = 0;
+      // 对 filterText 进行转义，避免正则特殊字符问题
+      const escapedFilter = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const lowerFilter = filterText.toLowerCase();
+      // 预先构造用于高亮的正则对象
+      const highlightRegex = new RegExp(escapedFilter, 'gi');
+
+      for (const msg of conv.messages) {
+        const plainText = extractMessagePlainText(msg);
+        if (plainText) {
+          const content = plainText;
+          const contentLower = content.toLowerCase();
+          // 若当前消息中未包含关键字，则跳过
+          if (contentLower.indexOf(lowerFilter) === -1) continue;
+          let startIndex = 0;
+          while (true) {
+            const index = contentLower.indexOf(lowerFilter, startIndex);
+            if (index === -1) break;
+            totalMatches++;
+            if (snippets.length < 5) {
+              const snippetStart = Math.max(0, index - 30);
+              const snippetEnd = Math.min(content.length, index + filterText.length + 30);
+              let snippet = content.substring(snippetStart, snippetEnd);
+              // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
+              snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
+              snippets.push(snippet);
+            }
+            startIndex = index + 1;
+          }
+        }
+      }
+      
+      if (snippets.length > 0) {
+        const snippetDiv = document.createElement('div');
+        snippetDiv.className = 'highlight-snippet';
+        let displaySnippets = snippets.map(s => '…' + s + '…');
+        if (totalMatches > snippets.length) {
+          displaySnippets.push(`…… 共 ${totalMatches} 匹配`);
+        }
+        snippetDiv.innerHTML = displaySnippets.join('<br>');
+        item.appendChild(snippetDiv);
+      }
+    }
+
+    // 添加聊天记录项的点击事件
+    item.addEventListener('click', async () => {
+      // 加载对话到聊天窗口
+      const conversation = await getConversationFromCacheOrLoad(conv.id);
+      if (conversation) {
+        loadConversationIntoChat(conversation);
+        // 加载对话后关闭历史面板
+        // closeChatHistoryPanel(); 
+      }
+    });
+    
+    // 添加右键事件，显示删除菜单
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showChatHistoryItemContextMenu(e, conv.id);
+    });
+
+    listContainer.appendChild(item);
   }
 
   return {
