@@ -539,6 +539,25 @@ export function createChatHistoryUI(options) {
   }
 
   /**
+   * 比较数值
+   * @param {number} value - 要比较的值
+   * @param {string} operator - 比较操作符 ('>', '<', '>=', '<=', '=', '==')
+   * @param {number} threshold - 阈值
+   * @returns {boolean} 比较结果
+   */
+  function compareCount(value, operator, threshold) {
+    switch (operator) {
+      case '>': return value > threshold;
+      case '<': return value < threshold;
+      case '>=': return value >= threshold;
+      case '<=': return value <= threshold;
+      case '=': // Fallthrough, treat '=' and '==' the same
+      case '==': return value === threshold;
+      default: return false;
+    }
+  }
+
+  /**
    * 加载聊天历史记录列表
    * @param {HTMLElement} panel - 聊天历史面板元素
    * @param {string} filterText - 过滤文本
@@ -554,15 +573,45 @@ export function createChatHistoryUI(options) {
     panel.dataset.prevFilter = filterText;
     listContainer.innerHTML = '';
     
+    // 解析筛选条件
+    const countFilterMatch = filterText.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
+    let isCountFilter = false;
+    let countOperator = null;
+    let countThreshold = 0;
+    
+    if (countFilterMatch) {
+      isCountFilter = true;
+      countOperator = countFilterMatch[1];
+      countThreshold = parseInt(countFilterMatch[2], 10);
+    }
+    
     // 获取所有对话元数据
-    const histories = await getAllConversationMetadata();
+    const allHistoriesMeta = await getAllConversationMetadata();
     // 如果在获取过程中过滤条件已变化，则放弃本次结果
     if (panel.dataset.currentFilter !== filterText) return;
 
-    if (filterText) {
+    let historiesToShow = [];
+
+    if (isCountFilter) {
+      // 按数量筛选
+      historiesToShow = allHistoriesMeta.filter(history => 
+        compareCount(history.messageCount, countOperator, countThreshold)
+      );
+      
+      if (historiesToShow.length === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.textContent = `没有消息数量 ${countOperator} ${countThreshold} 的聊天记录`;
+        listContainer.appendChild(emptyMsg);
+        listContainer.scrollTop = newScrollPos;
+        return;
+      }
+      
+      displayConversationList(historiesToShow, '', listContainer); // Count filter doesn't need text highlighting
+      listContainer.scrollTop = newScrollPos;
+
+    } else if (filterText) {
+      // 按文本筛选
       const lowerFilter = filterText.toLowerCase();
-      // 对于有过滤条件的情况，需要加载完整内容进行搜索
-      // 这里为了避免内存压力，我们逐个加载并搜索，而不是一次性加载所有内容
       const filteredHistories = [];
       
       // 显示加载指示器
@@ -572,7 +621,7 @@ export function createChatHistoryUI(options) {
       listContainer.appendChild(loadingIndicator);
       
       // 异步搜索每个会话
-      for (const historyMeta of histories) {
+      for (const historyMeta of allHistoriesMeta) {
         // 先检查元数据是否匹配
         const url = (historyMeta.url || '').toLowerCase();
         const summary = (historyMeta.summary || '').toLowerCase();
@@ -584,6 +633,8 @@ export function createChatHistoryUI(options) {
         
         // 如果元数据不匹配，则加载完整内容并搜索
         try {
+          // 检查过滤条件是否仍然一致，若不一致则终止
+          if (panel.dataset.currentFilter !== filterText) return;
           const fullConversation = await getConversationById(historyMeta.id);
           // 检查过滤条件是否仍然一致，若不一致则终止
           if (panel.dataset.currentFilter !== filterText) return;
@@ -600,11 +651,13 @@ export function createChatHistoryUI(options) {
               
             const lowerMessages = messagesContent.toLowerCase();
             if (lowerMessages.includes(lowerFilter)) {
-              filteredHistories.push(fullConversation);
+              // 使用完整会话数据替换元数据，以便后续高亮显示snippet
+              filteredHistories.push(fullConversation); 
             } else {
               // 释放内存
               if (fullConversation.id !== activeConversation?.id) {
                 loadedConversations.delete(fullConversation.id);
+                conversationUsageTimestamp.delete(fullConversation.id);
               }
             }
           }
@@ -634,7 +687,7 @@ export function createChatHistoryUI(options) {
       listContainer.scrollTop = newScrollPos;
     } else {
       // 没有过滤条件，直接显示元数据列表
-      if (histories.length === 0) {
+      if (allHistoriesMeta.length === 0) {
         const emptyMsg = document.createElement('div');
         emptyMsg.textContent = '暂无聊天记录';
         listContainer.appendChild(emptyMsg);
@@ -643,7 +696,7 @@ export function createChatHistoryUI(options) {
         return;
       }
       
-      displayConversationList(histories, '', listContainer);
+      displayConversationList(allHistoriesMeta, '', listContainer);
       // Restore scroll position based on filter change
       listContainer.scrollTop = newScrollPos;
     }
@@ -652,7 +705,7 @@ export function createChatHistoryUI(options) {
   /**
    * 显示会话列表
    * @param {Array<Object>} histories - 会话历史数组
-   * @param {string} filterText - 过滤文本
+   * @param {string} filterText - 过滤文本 (仅用于文本高亮)
    * @param {HTMLElement} listContainer - 列表容器元素
    */
   function displayConversationList(histories, filterText, listContainer) {
@@ -693,6 +746,7 @@ export function createChatHistoryUI(options) {
         const summaryDiv = document.createElement('div');
         summaryDiv.className = 'summary';
         let displaySummary = conv.summary || '';
+        // 只有在提供了 filterText 并且是文本过滤时才高亮摘要
         if (filterText && filterText.trim() !== "") {
           const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           const regex = new RegExp(`(${escapedFilterForSummary})`, 'gi');
@@ -718,8 +772,8 @@ export function createChatHistoryUI(options) {
         item.appendChild(summaryDiv);
         item.appendChild(infoDiv);
 
-        // 高亮 snippet 的部分代码保持不变，此处也会使用转义后的正则
-        if (filterText && filterText.trim() !== "" && conv.messages) {
+        // 只有在提供了 filterText 并且是文本过滤时才显示和高亮 snippet
+        if (filterText && filterText.trim() !== "" && conv.messages && Array.isArray(conv.messages)) {
           let snippets = [];
           let totalMatches = 0;
           // 对 filterText 进行转义，避免正则特殊字符问题
@@ -727,32 +781,32 @@ export function createChatHistoryUI(options) {
           const lowerFilter = filterText.toLowerCase();
           // 预先构造用于高亮的正则对象
           const highlightRegex = new RegExp(escapedFilter, 'gi');
-          if (conv.messages && Array.isArray(conv.messages)) {
-            for (const msg of conv.messages) {
-              const plainText = extractMessagePlainText(msg);
-              if (plainText) {
-                const content = plainText;
-                const contentLower = content.toLowerCase();
-                // 若当前消息中未包含关键字，则跳过
-                if (contentLower.indexOf(lowerFilter) === -1) continue;
-                let startIndex = 0;
-                while (true) {
-                  const index = contentLower.indexOf(lowerFilter, startIndex);
-                  if (index === -1) break;
-                  totalMatches++;
-                  if (snippets.length < 5) {
-                    const snippetStart = Math.max(0, index - 30);
-                    const snippetEnd = Math.min(content.length, index + filterText.length + 30);
-                    let snippet = content.substring(snippetStart, snippetEnd);
-                    // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
-                    snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
-                    snippets.push(snippet);
-                  }
-                  startIndex = index + 1;
+
+          for (const msg of conv.messages) {
+            const plainText = extractMessagePlainText(msg);
+            if (plainText) {
+              const content = plainText;
+              const contentLower = content.toLowerCase();
+              // 若当前消息中未包含关键字，则跳过
+              if (contentLower.indexOf(lowerFilter) === -1) continue;
+              let startIndex = 0;
+              while (true) {
+                const index = contentLower.indexOf(lowerFilter, startIndex);
+                if (index === -1) break;
+                totalMatches++;
+                if (snippets.length < 5) {
+                  const snippetStart = Math.max(0, index - 30);
+                  const snippetEnd = Math.min(content.length, index + filterText.length + 30);
+                  let snippet = content.substring(snippetStart, snippetEnd);
+                  // 高亮 snippet 中所有匹配关键字，复用 highlightRegex
+                  snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
+                  snippets.push(snippet);
                 }
+                startIndex = index + 1;
               }
             }
           }
+          
           if (snippets.length > 0) {
             const snippetDiv = document.createElement('div');
             snippetDiv.className = 'highlight-snippet';
@@ -1084,7 +1138,7 @@ export function createChatHistoryUI(options) {
       filterContainer.className = 'filter-container';
       const filterInput = document.createElement('input');
       filterInput.type = 'text';
-      filterInput.placeholder = '筛选...';
+      filterInput.placeholder = '筛选文本 或 >10, <5, =20...';
       let debounceTimer;
       filterInput.addEventListener('input', () => {
         clearTimeout(debounceTimer);
@@ -1172,7 +1226,7 @@ export function createChatHistoryUI(options) {
    */
   function refreshChatHistory() {
     const panel = document.getElementById('chat-history-panel');
-    if (panel) {
+    if (panel && panel.classList.contains('visible')) { // 仅当面板可见时刷新
       const filterInput = panel.querySelector('input[type="text"]');
       loadConversationHistories(panel, filterInput ? filterInput.value : '');
     }
