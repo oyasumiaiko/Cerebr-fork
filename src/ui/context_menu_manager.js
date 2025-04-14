@@ -92,18 +92,13 @@ export function createContextMenuManager(options) {
     contextMenu.style.left = x + 'px';
     contextMenu.style.top = y + 'px';
 
-    // 只在右键点击最后一条用户消息时显示"重新生成"按钮
-    if (messageElement.classList.contains('user-message')) {
-      // 获取所有用户消息
-      const userMessages = chatContainer.querySelectorAll('.user-message');
-      if (userMessages.length > 0 && messageElement === userMessages[userMessages.length - 1]) {
-        regenerateButton.style.display = 'flex';
-      } else {
-        regenerateButton.style.display = 'none';
-      }
-    } else {
-      regenerateButton.style.display = 'none';
-    }
+    // 只在最后一条消息时显示"重新生成"按钮
+    const isMessage = messageElement.classList.contains('user-message') || messageElement.classList.contains('ai-message');
+    const isLastMessage = isMessage && (
+      messageElement === chatContainer.querySelector('.user-message:last-of-type') ||
+      messageElement === chatContainer.querySelector('.ai-message:last-of-type')
+    );
+    regenerateButton.style.display = isLastMessage ? 'flex' : 'none';
     
     // 始终显示创建分支对话按钮，但只有在有足够消息时才可用
     if (forkConversationButton) {
