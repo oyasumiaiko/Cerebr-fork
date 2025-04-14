@@ -187,8 +187,8 @@ export function createChatHistoryUI(options) {
           urlToSave = existingConversation.url || '';
           titleToSave = existingConversation.title || '';
           
-          // 如果原有摘要包含"(分支)"标识，则保留原有摘要
-          if (existingConversation.summary && existingConversation.summary.includes('(分支)')) {
+          // 如果原有摘要存在，则保留原有摘要，避免覆盖用户手动重命名的摘要
+          if (existingConversation.summary) {
             summaryToSave = existingConversation.summary;
           }
         }
@@ -507,6 +507,48 @@ export function createChatHistoryUI(options) {
     });
     menu.appendChild(pinToggleOption); // 添加到菜单顶部
     // --- 置顶/取消置顶 选项结束 ---
+
+    // 重命名选项
+    const renameOption = document.createElement('div');
+    renameOption.textContent = '重命名对话';
+    renameOption.classList.add('chat-history-context-menu-option');
+    renameOption.addEventListener('click', async () => {
+      menu.remove(); // 先关闭菜单
+      try {
+        const conversation = await getConversationFromCacheOrLoad(conversationId);
+        if (conversation) {
+          const newName = window.prompt('请输入新的对话名称:', conversation.summary || '');
+          if (newName !== null && newName.trim() !== '') { // 确保用户输入了内容且没有取消
+            conversation.summary = newName.trim();
+            await putConversation(conversation); // 保存更新
+            updateConversationInCache(conversation); // 更新缓存
+            refreshChatHistory(); // 刷新列表显示新名称
+            
+            // 可选：添加成功提示
+            const notification = document.createElement('div');
+            notification.className = 'notification';
+            notification.textContent = '对话已重命名';
+            document.body.appendChild(notification);
+            setTimeout(() => {
+              notification.classList.add('fade-out');
+              setTimeout(() => notification.remove(), 500);
+            }, 1500);
+          }
+        }
+      } catch (error) {
+        console.error('重命名对话失败:', error);
+        // 可选：添加失败提示
+        const notification = document.createElement('div');
+        notification.className = 'notification error';
+        notification.textContent = '重命名失败，请重试';
+        document.body.appendChild(notification);
+        setTimeout(() => {
+          notification.classList.add('fade-out');
+          setTimeout(() => notification.remove(), 500);
+        }, 2000);
+      }
+    });
+    menu.appendChild(renameOption); // 添加重命名选项
 
     // 复制聊天记录选项
     const copyOption = document.createElement('div');
