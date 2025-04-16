@@ -69,6 +69,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const emptyStateScreenshot = document.getElementById('empty-state-screenshot');
     const emptyStateExtract = document.getElementById('empty-state-extract');
     const stopAtTopSwitch = document.getElementById('stop-at-top-switch');
+    const maxChatHistory = document.getElementById('max-chat-history');
+    const maxChatHistoryValue = document.getElementById('max-chat-history-value');
 
     // 应用程序状态
     let isFullscreen = false; // 全屏模式
@@ -189,7 +191,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.cerebr = window.cerebr || {};
     // 将提示词设置暴露给全局对象，以便在其他模块中访问
     window.cerebr.settings = {
-        prompts: () => promptSettingsManager.getPrompts()
+        prompts: () => promptSettingsManager.getPrompts(),
+        maxChatHistory: 500 // 添加默认值
     };
     // 初始化 pageInfo
     window.cerebr.pageInfo = null;
@@ -857,4 +860,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             type: 'REQUEST_PAGE_INFO'
         }, '*');
     }, 500);
+
+    // 在 setupEventListeners 函数中添加新的事件监听
+    if (maxChatHistory) {
+        maxChatHistory.addEventListener('input', (e) => {
+            if (maxChatHistoryValue) {
+                maxChatHistoryValue.textContent = `${e.target.value}条`;
+            }
+        });
+        
+        maxChatHistory.addEventListener('change', (e) => {
+            const value = parseInt(e.target.value);
+            window.cerebr.settings.maxChatHistory = value;
+            settingsManager.setMaxChatHistory(value);
+        });
+    }
 });

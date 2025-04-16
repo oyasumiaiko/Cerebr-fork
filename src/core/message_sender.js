@@ -397,7 +397,12 @@ export function createMessageSender(options) {
       currentPromptType !== 'image';
       
     if (sendChatHistory) {
-      messages.push(...conversationChain.map(node => ({
+      // 获取最大历史消息条数设置
+      const maxHistory = window.cerebr?.settings?.maxChatHistory || 500;
+      // 如果历史消息超过限制，只取最近的消息
+      const historyToSend = conversationChain.slice(-maxHistory);
+      
+      messages.push(...historyToSend.map(node => ({
         role: node.role,
         content: node.content
       })));

@@ -59,7 +59,8 @@ export function createSettingsManager(options) {
     shouldSendChatHistory: true,
     showReference: true,
     sidebarPosition: 'right', // 'left' 或 'right'
-    stopAtTop: true // 滚动到顶部时停止
+    stopAtTop: true, // 滚动到顶部时停止
+    maxChatHistory: 500 // 最大发送聊天历史条数
   };
 
   // 当前设置
@@ -591,6 +592,12 @@ export function createSettingsManager(options) {
     saveSetting('sidebarPosition', position);
   }
   
+  // 设置最大聊天历史条数
+  function setMaxChatHistory(count) {
+    currentSettings.maxChatHistory = count;
+    saveSetting('maxChatHistory', count);
+  }
+  
   // 获取当前设置
   function getSettings() {
     return {...currentSettings};
@@ -626,6 +633,7 @@ export function createSettingsManager(options) {
     setSendChatHistory,
     setShowReference,
     setSidebarPosition,
+    setMaxChatHistory,
     updateReferenceVisibility,
     applyTheme
   };
