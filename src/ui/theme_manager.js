@@ -949,7 +949,7 @@ export function createThemeManager() {
       type: 'dark',
       variables: {
         '--cerebr-opacity': '0.85',
-        '--cerebr-bg-color': 'rgba(21, 21, 21, var(--cerebr-opacity))',
+        '--cerebr-bg-color': 'rgba(14, 14, 14, var(--cerebr-opacity))',
         '--cerebr-text-color': '#cccccc',
         '--cerebr-message-user-bg': 'rgba(31, 31, 31, var(--cerebr-opacity))',
         '--cerebr-message-ai-bg': 'rgba(26, 26, 26, var(--cerebr-opacity))',
