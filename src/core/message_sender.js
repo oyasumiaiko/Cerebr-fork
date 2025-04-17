@@ -397,8 +397,9 @@ export function createMessageSender(options) {
       currentPromptType !== 'image';
       
     if (sendChatHistory) {
-      // 获取最大历史消息条数设置
-      const maxHistory = window.cerebr?.settings?.maxChatHistory || 500;
+      // 获取当前 API 配置的最大历史消息条数设置
+      const config = apiManager.getSelectedConfig();
+      const maxHistory = config?.maxChatHistory || 500;
       // 如果历史消息超过限制，只取最近的消息
       const historyToSend = conversationChain.slice(-maxHistory);
       

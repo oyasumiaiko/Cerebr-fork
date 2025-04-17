@@ -60,7 +60,8 @@ export function createApiManager(options) {
           displayName: '',
           temperature: 1,
           isFavorite: false, // 添加收藏状态字段
-          customParams: ''
+          customParams: '',
+          maxChatHistory: 500
         }];
         selectedConfigIndex = 0;
         await saveAPIConfigs();
@@ -75,7 +76,8 @@ export function createApiManager(options) {
         displayName: '',
         temperature: 1,
         isFavorite: false,
-        customParams: ''
+        customParams: '',
+        maxChatHistory: 500
       }];
       selectedConfigIndex = 0;
     }
@@ -188,6 +190,48 @@ export function createApiManager(options) {
     const togglePasswordBtn = template.querySelector('.toggle-password-btn');
     const selectBtn = template.querySelector('.select-btn');
     const customParamsInput = template.querySelector('.custom-params');
+
+    // 在 temperature 设置后添加最大聊天历史设置
+    const maxHistoryGroup = document.createElement('div');
+    maxHistoryGroup.className = 'form-group';
+    
+    const maxHistoryHeader = document.createElement('div');
+    maxHistoryHeader.className = 'form-group-header';
+    
+    const maxHistoryLabel = document.createElement('label');
+    maxHistoryLabel.textContent = '最大聊天历史';
+    
+    const maxHistoryValue = document.createElement('span');
+    maxHistoryValue.className = 'max-history-value';
+    maxHistoryValue.textContent = `${config.maxChatHistory || 500}条`;
+    
+    maxHistoryHeader.appendChild(maxHistoryLabel);
+    maxHistoryHeader.appendChild(maxHistoryValue);
+    
+    const maxHistoryInput = document.createElement('input');
+    maxHistoryInput.type = 'range';
+    maxHistoryInput.className = 'max-chat-history';
+    maxHistoryInput.min = '10';
+    maxHistoryInput.max = '1000';
+    maxHistoryInput.step = '10';
+    maxHistoryInput.value = config.maxChatHistory || 500;
+    
+    maxHistoryGroup.appendChild(maxHistoryHeader);
+    maxHistoryGroup.appendChild(maxHistoryInput);
+    
+    // 在自定义参数之前插入最大聊天历史设置
+    const customParamsGroup = apiForm.querySelector('.form-group:last-child');
+    apiForm.insertBefore(maxHistoryGroup, customParamsGroup);
+    
+    // 添加事件监听
+    maxHistoryInput.addEventListener('input', () => {
+      maxHistoryValue.textContent = `${maxHistoryInput.value}条`;
+    });
+    
+    maxHistoryInput.addEventListener('change', () => {
+      apiConfigs[index].maxChatHistory = parseInt(maxHistoryInput.value);
+      saveAPIConfigs();
+    });
 
     // 选择按钮点击事件
     selectBtn.addEventListener('click', (e) => {
@@ -646,7 +690,8 @@ export function createApiManager(options) {
       modelName: partialConfig.modelName,
       displayName: partialConfig.displayName || '',
       temperature: partialConfig.temperature ?? 1.0,
-      customParams: partialConfig.customParams || ''
+      customParams: partialConfig.customParams || '',
+      maxChatHistory: 500, // 添加默认值
       // isFavorite: false // 新创建的默认不收藏
     };
 
@@ -708,6 +753,7 @@ export function createApiManager(options) {
             temperature: 1,
             isFavorite: false,
             customParams: '',
+            maxChatHistory: 500, // 添加默认值
             ...config // 允许传入部分或完整配置覆盖默认值
         };
         // 处理传入的 apiKey 格式
