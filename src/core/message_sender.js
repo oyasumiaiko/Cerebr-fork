@@ -446,6 +446,21 @@ export function createMessageSender(options) {
           if (content.trim() === '[DONE]') continue;
           try {
             const data = JSON.parse(content);
+            
+            // 检查是否有错误响应
+            if (data.error) {
+              const errorMessage = data.error.message || 'Unknown error';
+              console.error('OpenRouter error:', data.error);
+              throw new Error(errorMessage);
+            }
+
+            // 检查choices中的错误
+            if (data.choices?.[0]?.error) {
+              const errorMessage = data.choices[0].error.message || 'Unknown error';
+              console.error('Model error:', data.choices[0].error);
+              throw new Error(errorMessage);
+            }
+            
             const deltaContent = data.choices?.[0]?.delta?.content || 
                                 data.choices?.[0]?.delta?.reasoning_content;
             if (deltaContent) {
@@ -461,6 +476,10 @@ export function createMessageSender(options) {
             }
           } catch (e) {
             console.error('解析响应出错:', e);
+            // 如果是我们主动抛出的错误,则向上传播
+            if (e.message !== 'Unexpected end of JSON input') {
+              throw e;
+            }
           }
         }
       }
