@@ -245,6 +245,9 @@ export function createMessageSender(options) {
       } else {
         pageContent = null;  // 临时模式下不使用网页内容
       }
+      
+      // 更新加载状态：正在构建消息
+      loadingMessage.textContent = '正在构建消息...';
 
       // 构建消息数组
       const messages = await buildMessages(
@@ -281,8 +284,8 @@ export function createMessageSender(options) {
         userMessageDiv.appendChild(footer);
       }
 
-      // 更新加载状态消息
-      loadingMessage.textContent = '正在等待回复...';
+      // 更新加载状态：正在发送请求
+      loadingMessage.textContent = '正在发送请求...';
 
       // 构造API请求体
       const requestBody = apiManager.buildRequest({
@@ -296,6 +299,9 @@ export function createMessageSender(options) {
         config: config,
         signal: signal
       });
+      
+      // 更新加载状态：等待AI响应
+      loadingMessage.textContent = '正在等待响应...';
 
       if (!response.ok) {
         const error = await response.text();
