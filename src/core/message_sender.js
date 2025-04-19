@@ -301,7 +301,7 @@ export function createMessageSender(options) {
       });
       
       // 更新加载状态：等待AI响应
-      loadingMessage.textContent = '正在等待响应...';
+      loadingMessage.textContent = '正在等待回复...';
 
       if (!response.ok) {
         const error = await response.text();
