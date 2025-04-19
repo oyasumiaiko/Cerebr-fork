@@ -1252,11 +1252,6 @@ export function createChatHistoryUI(options) {
       statsContent.className = 'history-tab-content';
       statsContent.dataset.tab = 'stats';
       
-      // 加载统计信息
-      const statsData = await getDbStatsWithCache();
-      const statsPanel = renderStatsPanel(statsData);
-      statsContent.appendChild(statsPanel);
-      
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
       tabContents.appendChild(statsContent);
@@ -1272,25 +1267,59 @@ export function createChatHistoryUI(options) {
           // 给点击的标签和对应内容添加active类
           e.target.classList.add('active');
           const tabName = e.target.dataset.tab;
-          tabContents.querySelector(`.history-tab-content[data-tab="${tabName}"]`).classList.add('active');
+          const targetContent = tabContents.querySelector(`.history-tab-content[data-tab="${tabName}"]`);
+          targetContent.classList.add('active');
+          
+          // -- 修改开始: 仅在切换到 'stats' 标签页时加载/更新统计信息 --
+          if (tabName === 'stats') {
+            // 检查是否已渲染
+            const existingStatsPanel = targetContent.querySelector('.db-stats-panel');
+            if (!existingStatsPanel) {
+              // 首次加载
+              const loadingIndicator = document.createElement('div');
+              loadingIndicator.textContent = '正在加载统计数据...';
+              targetContent.appendChild(loadingIndicator);
+              
+              getDbStatsWithCache().then(statsData => {
+                loadingIndicator.remove();
+                const statsPanel = renderStatsPanel(statsData);
+                targetContent.appendChild(statsPanel);
+              }).catch(error => {
+                loadingIndicator.remove();
+                console.error('加载统计数据失败:', error);
+                targetContent.textContent = '加载统计数据失败';
+              });
+            } else {
+              // 如果已存在，则刷新数据 (可选，但保持与刷新按钮行为一致)
+              getDbStatsWithCache(true).then(updatedStats => {
+                const newStatsPanel = renderStatsPanel(updatedStats);
+                existingStatsPanel.replaceWith(newStatsPanel);
+              }).catch(error => {
+                console.error('更新统计数据失败:', error);
+              });
+            }
+          }
+          // -- 修改结束 --
         }
       });
       
       document.body.appendChild(panel);
     } else {
-      // 如果面板已存在，更新统计数据
-      const statsContent = panel.querySelector('.history-tab-content[data-tab="stats"]');
-      if (statsContent) {
-        const statsData = await getDbStatsWithCache();
-        const statsPanel = renderStatsPanel(statsData);
+      // -- 修改开始: 面板已存在时，也不再主动更新统计数据 --
+      // // 如果面板已存在，更新统计数据
+      // const statsContent = panel.querySelector('.history-tab-content[data-tab="stats"]');
+      // if (statsContent) {
+      //   const statsData = await getDbStatsWithCache();
+      //   const statsPanel = renderStatsPanel(statsData);
         
-        const oldStatsPanel = statsContent.querySelector('.db-stats-panel');
-        if (oldStatsPanel) {
-          oldStatsPanel.replaceWith(statsPanel);
-        } else {
-          statsContent.appendChild(statsPanel);
-        }
-      }
+      //   const oldStatsPanel = statsContent.querySelector('.db-stats-panel');
+      //   if (oldStatsPanel) {
+      //     oldStatsPanel.replaceWith(statsPanel);
+      //   } else {
+      //     statsContent.appendChild(statsPanel);
+      //   }
+      // }
+      // -- 修改结束 --
     }
     
     // 使用已有的筛选值，而不是默认空字符串
