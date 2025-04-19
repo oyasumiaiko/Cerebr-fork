@@ -827,22 +827,24 @@ export function createChatHistoryUI(options) {
     // 创建一个映射以便快速查找置顶顺序
     const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
 
-    // 从 sourceHistories 中筛选出置顶项
+    // 从 sourceHistories 中分离置顶和未置顶项
     sourceHistories.forEach(hist => {
       if (pinnedIds.includes(hist.id)) {
         pinnedHistories.push(hist);
+      } else {
+        unpinnedHistories.push(hist);
       }
     });
 
     // 分别排序
     const sortByTime = (a, b) => b.endTime - a.endTime;
-    // 置顶列表按 pinnedIds 中的顺序排序，如果时间需要作为次要排序，可以修改
+    // 置顶列表按 pinnedIds 中的顺序排序
     pinnedHistories.sort((a, b) => {
-      // 或者 return (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity); // 兼容ID可能不在Map的情况
+      return (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity);
     });
 
-    // 对所有符合筛选条件的记录按时间排序，用于显示主列表
-    sourceHistories.sort(sortByTime);
+    // 对未置顶记录按时间排序
+    unpinnedHistories.sort(sortByTime);
 
     // --- 更新显示逻辑 --- 
     listContainer.innerHTML = ''; // 清空容器准备重新渲染
@@ -853,7 +855,7 @@ export function createChatHistoryUI(options) {
         listContainer.appendChild(emptyMsg);
     } else if (sourceHistories.length > 0) {
         // --- 修改: 调用新的增量渲染函数 --- 
-        renderListIncrementally(pinnedHistories, sourceHistories, filterText, listContainer, pinnedIds);
+        renderListIncrementally(pinnedHistories, unpinnedHistories, filterText, listContainer, pinnedIds);
     } 
     // else: 筛选后无结果的消息已在前面处理 (例如数量筛选或文本筛选无结果)
 
@@ -1665,17 +1667,21 @@ export function createChatHistoryUI(options) {
     const infoDiv = document.createElement('div');
     infoDiv.className = 'info';
     const convDate = new Date(conv.startTime);
+    const endTime = new Date(conv.endTime);
     const relativeTime = formatRelativeTime(convDate);
+    const relativeEndTime = formatRelativeTime(endTime);
 
     // 使用新的URL处理函数
     const domain = getDisplayUrl(conv.url);
     let title = conv.title;
 
-    const displayInfos = [relativeTime, `消息数: ${conv.messageCount}`, domain].filter(Boolean).join(' · ');
+    const chatTimeSpan = relativeTime === relativeEndTime ? relativeTime : `${relativeTime} - ${relativeEndTime}`;
+    const displayInfos = `${chatTimeSpan} · 消息数: ${conv.messageCount} · ${domain}`
+
     infoDiv.textContent = displayInfos;
     // 鼠标悬停显示具体的日期时间和完整URL
-    const details = [convDate.toLocaleString(), title, conv.url].filter(Boolean).join('\n');
-    infoDiv.title = details;
+    const details = `开始: ${convDate.toLocaleString()} (${relativeTime})\n最新: ${endTime.toLocaleString()} (${relativeEndTime})\n${title}\n${conv.url}`.split('\n').filter(Boolean).join('\n');
+    item.title = details;
 
     item.appendChild(summaryDiv);
     item.appendChild(infoDiv);
