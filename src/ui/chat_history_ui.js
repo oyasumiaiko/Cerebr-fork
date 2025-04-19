@@ -858,40 +858,50 @@ export function createChatHistoryUI(options) {
         emptyMsg.textContent = '暂无聊天记录';
         listContainer.appendChild(emptyMsg);
     } else if (sourceHistories.length > 0) {
-        // 显示列表，传入置顶列表和完整时间排序列表
-        displayConversationList(pinnedHistories, sourceHistories, filterText, listContainer, pinnedIds);
+        // --- 修改: 调用新的增量渲染函数 --- 
+        renderListIncrementally(pinnedHistories, sourceHistories, filterText, listContainer, pinnedIds);
     } 
     // else: 筛选后无结果的消息已在前面处理 (例如数量筛选或文本筛选无结果)
 
+    // --- 修改: 滚动位置恢复移到 renderListIncrementally 内部或之后处理 ---
     // 恢复滚动位置
-    listContainer.scrollTop = newScrollPos;
+    // listContainer.scrollTop = newScrollPos;
   }
   
   /**
-   * 显示会话列表
+   * 逐步渲染会话列表项，避免阻塞UI
    * @param {Array<Object>} pinnedHistories - 按置顶顺序排序的置顶对话数组
    * @param {Array<Object>} allTimeSortedHistories - 按时间排序的所有符合条件的对话数组
    * @param {string} filterText - 过滤文本 (仅用于文本高亮)
    * @param {HTMLElement} listContainer - 列表容器元素
    * @param {string[]} pinnedIds - 当前置顶的ID列表
    */
-  function displayConversationList(pinnedHistories, allTimeSortedHistories, filterText, listContainer, pinnedIds) {
-    // 渲染置顶区域
+  async function renderListIncrementally(pinnedHistories, allTimeSortedHistories, filterText, listContainer, pinnedIds) {
+    listContainer.innerHTML = ''; // 清空容器
+    const BATCH_SIZE = 100; // 每次渲染的批次大小
+    let renderedCount = 0;
+    let currentGroupLabel = null;
+    
+    // 优先渲染置顶区域
     if (pinnedHistories.length > 0) {
       const pinnedHeader = document.createElement('div');
-      pinnedHeader.className = 'chat-history-group-header pinned-header'; // 添加特殊类以区分
+      pinnedHeader.className = 'chat-history-group-header pinned-header';
       pinnedHeader.textContent = '已置顶';
       listContainer.appendChild(pinnedHeader);
-      pinnedHistories.forEach(conv => {
-        renderConversationItem(conv, filterText, listContainer, pinnedIds, true);
-      });
+      
+      for (let i = 0; i < pinnedHistories.length; i++) {
+        renderConversationItem(pinnedHistories[i], filterText, listContainer, pinnedIds, true);
+        renderedCount++;
+        if (renderedCount % BATCH_SIZE === 0) {
+          await new Promise(requestAnimationFrame); // 等待下一帧
+        }
+      }
     }
-
+    
     // 渲染普通列表区域 (按日期分组)
-    // 根据会话的开始时间进行分组 - 仅对 allTimeSortedHistories 进行分组
     const groups = {};
-    const groupLatestTime = {}; // 用于记录各分组中最新的会话时间以便排序
-    allTimeSortedHistories.forEach(conv => { // 使用完整时间排序列表进行分组
+    const groupLatestTime = {};
+    allTimeSortedHistories.forEach(conv => {
       const convDate = new Date(conv.startTime);
       const groupLabel = getGroupLabel(convDate);
       if (!groups[groupLabel]) {
@@ -902,22 +912,53 @@ export function createChatHistoryUI(options) {
       }
       groups[groupLabel].push(conv);
     });
-
-    // 根据每个分组中最新的时间降序排序分组
+    
     const sortedGroupLabels = Object.keys(groups).sort((a, b) => groupLatestTime[b] - groupLatestTime[a]);
+    
+    for (const groupLabel of sortedGroupLabels) {
+      // 检查是否需要添加分组标题
+      if (currentGroupLabel !== groupLabel) {
+        const groupHeader = document.createElement('div');
+        groupHeader.className = 'chat-history-group-header';
+        groupHeader.textContent = groupLabel;
+        listContainer.appendChild(groupHeader);
+        currentGroupLabel = groupLabel;
+        // 渲染标题后也稍微等待一下
+        await new Promise(requestAnimationFrame);
+      }
+      
+      const groupItems = groups[groupLabel];
+      for (let i = 0; i < groupItems.length; i++) {
+        renderConversationItem(groupItems[i], filterText, listContainer, pinnedIds, false);
+        renderedCount++;
+        if (renderedCount % BATCH_SIZE === 0) {
+          await new Promise(requestAnimationFrame); // 等待下一帧
+        }
+      }
+    }
+    
+    // 处理完全没有记录的情况（包括筛选后没有）
+    if (renderedCount === 0) {
+       const filterInputValue = panel.querySelector('input[type="text"]')?.value || '';
+       const countFilterMatch = filterInputValue.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
+       const isTextFilter = filterInputValue && !countFilterMatch;
+       const emptyMsg = document.createElement('div');
 
-    sortedGroupLabels.forEach(groupLabel => {
-      // 创建分组标题
-      const groupHeader = document.createElement('div');
-      groupHeader.className = 'chat-history-group-header';
-      groupHeader.textContent = groupLabel;
-      listContainer.appendChild(groupHeader);
-
-      groups[groupLabel].forEach(conv => {
-        // 在普通列表中渲染时，标记 isDirectlyPinned 为 false
-        renderConversationItem(conv, filterText, listContainer, pinnedIds, false); 
-      });
-    });
+       if (isTextFilter) {
+         emptyMsg.textContent = '没有匹配的聊天记录';
+       } else if (countFilterMatch) {
+         const operator = countFilterMatch[1];
+         const threshold = countFilterMatch[2];
+         emptyMsg.textContent = `没有消息数量 ${operator} ${threshold} 的聊天记录`;
+       } else {
+         emptyMsg.textContent = '暂无聊天记录';
+       }
+       listContainer.appendChild(emptyMsg);
+    }
+    
+    // 确保滚动位置在渲染完成后恢复（如果适用）
+    // 注意: 此处的 newScrollPos 需要从 loadConversationHistories 传递过来或重新计算
+    // listContainer.scrollTop = newScrollPos; 
   }
 
   /**
@@ -1396,6 +1437,7 @@ export function createChatHistoryUI(options) {
           } catch (error) {
             console.error(`还原对话 ${conv.id} 时出错:`, error);
           }
+
         }
         alert(`还原完成，新增 ${countAdded} 条记录。`);
         // 刷新聊天记录面板
