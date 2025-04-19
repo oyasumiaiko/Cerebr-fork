@@ -399,7 +399,7 @@ export function createChatHistoryUI(options) {
   /**
    * 格式化相对时间字符串
    * @param {Date} date - 日期对象
-   * @returns {string} 相对时间描述，例如 "5分钟前"、"2小时前"、"3天前"、"2周前"、"4月前"
+   * @returns {string} 相对时间描述，例如 "5分钟前"、"2小时前"、"3天前"
    */
   function formatRelativeTime(date) {
     const now = new Date();
@@ -411,13 +411,7 @@ export function createChatHistoryUI(options) {
     const hours = Math.floor(minutes / 60);
     if (hours < 24) return `${hours}小时前`;
     const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}天前`;
-    const weeks = Math.floor(days / 7);
-    if (weeks < 4) return `${weeks}周前`;
-    const months = Math.floor(days / 30);
-    if (months < 12) return `${months}月前`;
-    const years = Math.floor(days / 365);
-    return `${years}年前`;
+    return `${days}天前`;
   }
 
   /**
