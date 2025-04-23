@@ -14,8 +14,17 @@ export async function packRemoteRepoViaApiExtension(repoUrl) {
   console.log(`[Repomix Ext] 开始打包: ${repoUrl}`);
 
   // --- 配置 ---
-  const packOptions = {}; // 依赖服务器端默认值
-  const format = 'xml'; // CLI 默认且对 AI 友好
+  const format = 'xml';
+  const packOptions = {
+    removeComments: false,
+    removeEmptyLines: true,
+    showLineNumbers: false,
+    fileSummary: true,
+    directoryStructure: true,
+    ignorePatterns: "LICENSE",
+    outputParsable: false,
+    compress: false
+  };
   // --------------
 
   if (!repoUrl || typeof repoUrl !== 'string') {

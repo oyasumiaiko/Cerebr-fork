@@ -3158,3 +3158,26 @@ body.hide-references .reference-number.superscript {
 :root.night-theme .empty-state-action:hover {
   opacity: 0.8;
 }
+
+/* 新增 Repomix 按钮样式 */
+#repomix-button {
+    padding: 12px;
+    height: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--cerebr-icon-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+#repomix-button:hover {
+    opacity: 1;
+}
+#repomix-button:active {
+    transform: scale(0.95);
+}

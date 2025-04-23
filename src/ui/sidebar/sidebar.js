@@ -10,6 +10,7 @@ import { createSettingsManager } from '../settings_manager.js'; // 导入设置�
 import { createContextMenuManager } from '../context_menu_manager.js'; // 导入上下文菜单管理模块
 import { createUIManager } from '../ui_manager.js'; // 导入UI管理模块
 import { getAllConversationMetadata } from '../../storage/indexeddb_helper.js';
+import { packRemoteRepoViaApiExtension } from '../../utils/repomix.js';
 
 // 内存管理相关配置
 const MEMORY_MANAGEMENT = {
@@ -69,6 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const emptyStateScreenshot = document.getElementById('empty-state-screenshot');
     const emptyStateExtract = document.getElementById('empty-state-extract');
     const stopAtTopSwitch = document.getElementById('stop-at-top-switch');
+    const repomixButton = document.getElementById('empty-state-repomix');
 
     // 应用程序状态
     let isFullscreen = false; // 全屏模式
@@ -536,6 +538,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+
+
+    // ====================== Repomix 功能 ======================
+    // 检查当前标签页是否是 GitHub 仓库页面
+    if (repomixButton) {
+        repomixButton.addEventListener('click', async () => {
+            const isGithubRepo = window.cerebr.pageInfo?.url?.includes('github.com');
+            if (isGithubRepo) {
+                // 从URL中提取仓库根路径
+                const repoUrl = window.cerebr.pageInfo?.url?.match(/https:\/\/github\.com\/[^\/]+\/[^\/]+/)?.[0];
+                if (repoUrl) {
+                    const content = await packRemoteRepoViaApiExtension(repoUrl);
+                    messageInput.textContent = content + `\n---\n
+以上是当前 GitHub 仓库的全部内容
+
+​**​核心任务:​**​ 生成一份​**​深度​**​、​**​结构化​**​的仓库总结报告。​**​最高优先级:​**​ 兼顾​**​宏观概览​**​与​**​关键技术细节​**​，提供​**​深刻洞察​**​，使读者能​**​快速、完整​**​地把握项目。
+
+​**​报告必须包含以下部分 (按此结构和标题输出):​**​
+
+1.  ​**​## 1. 核心目标与价值​**​
+    *   精炼定义项目解决的核心问题及独特价值。
+
+2.  ​**​## 2. 主要功能与特性​**​
+    *   详尽列举核心功能。
+    *   简述关键功能的实现原理（若可推断）。
+    *   突出创新或亮点功能。
+
+3.  ​**​## 3. 技术栈与架构​**​
+    *   识别主要技术栈（语言、框架、库）。
+    *   分析核心架构设计（模式、思想）。
+    *   推断技术选型考量（性能、效率、生态等，需注明推断）。
+
+4.  ​**​## 4. 代码结构与关键模块​**​
+    *   描述主要目录结构及其用途。
+    *   识别并解释​**​核心代码模块/文件​**​的作用与重要性（深入细节）。
+
+5.  ​**​## 5. 安装、配置与使用指南​**​
+    *   概述安装和配置步骤。
+    *   提供简洁的核心用法示例或 API 调用。
+
+6.  ​**​## 6. 项目状态与维护​**​
+    *   评估活跃度、维护情况（基于 commit、issue、PR、发布）。
+
+7.  ​**​## 7. 目标用户与适用场景​**​
+    *   定义主要用户画像。
+    *   描述典型应用场景。
+
+​**​高级分析要求 (必须包含，并单独设为第 8 部分):​**​
+
+8.  ​**​## 8. 洞察、与补充视角​**​
+    *   ​**​分析性洞察:​**​ 提供对项目设计优劣、潜在影响的深刻见解，而非简单罗列。
+    *   ​**​关键补充信息:​**​ ​**​主动思考并补充​**​ 任何对于全面理解此仓库​**​至关重要但容易被忽略​**​的方面（例如：特定的设计权衡、未在文档中明确说明的依赖关系、与其他技术的关键集成点等）。
+
+​**​输出格式:​**​
+*   ​**​严格使用 Markdown​**​，包含清晰的二级标题 (##)。
+*   语言​**​专业、精炼、准确​**​。
+
+​**​执行。​**​`;
+                    // 发送消息
+                    messageSender.sendMessage();
+                }
+            }
+        });
+    }
     // 添加全局键盘事件监听器，处理ESC键打开/关闭聊天记录窗口
     document.addEventListener('keydown', (e) => {
         // 检测ESC键
@@ -605,6 +671,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             window.cerebr.pageInfo = event.data;
             // 更新ChatHistoryUI中的页面信息
             chatHistoryUI.updatePageInfo(event.data);
+            const isGithubRepo = window.cerebr.pageInfo?.url?.includes('github.com');
+            if (isGithubRepo) {
+                repomixButton.style.display = 'block';
+            } else {
+                repomixButton.style.display = 'none';
+            }
         } else if (event.data.type === 'UPDATE_PLACEHOLDER') {
             console.log('收到更新placeholder消息:', event.data);
             if (messageInput) {
