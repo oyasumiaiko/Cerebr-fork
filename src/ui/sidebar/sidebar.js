@@ -664,7 +664,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const prompts = promptSettingsManager.getPrompts();
                 const selectionPrompt = prompts.selection.prompt;
                 if (selectionPrompt) {
-                    this.textContent = selectionPrompt.replace('<SELECTION>', text);
+                    const userMessageText = selectionPrompt.replace('<SELECTION>', text);
+                    messageSender.sendMessage({ originalMessageText: userMessageText, specificPromptType: 'selection' });
+                    return;
                 }
             }
             // 发送消息

@@ -556,10 +556,9 @@ export function createMessageSender(options) {
         const promptType = forceQuery ? 'query' : 
           ((prompts.selection.model || '').endsWith('-search') ? 'selection' : 'query');
         const prompt = prompts[promptType].prompt.replace('<SELECTION>', selectedText);
-        messageInput.textContent = prompt;
 
         // 发送消息
-        await sendMessage({ specificPromptType: promptType });
+        await sendMessage({ originalMessageText: prompt, specificPromptType: promptType });
       } else {
         if (wasTemporaryMode) {
           exitTemporaryMode();
