@@ -188,6 +188,24 @@ body {
     margin-left: 0;
     border-bottom-left-radius: 4px;
 }
+.user-message .text-content {
+    max-height: 25vh;
+    overflow-y: auto;
+}
+.user-message .text-content::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.user-message .text-content::-webkit-scrollbar-thumb {
+    background-color: var(--cerebr-border-color);
+    border: 2px solid var(--cerebr-border-color);
+    border-radius: 4px;
+}
+
+.user-message .text-content::-webkit-scrollbar-track {
+    background-color: transparent;
+}
 
 /* 输入区域样式 */
 #input-container {

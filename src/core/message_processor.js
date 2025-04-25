@@ -638,7 +638,7 @@ export function createMessageProcessor(options) {
    */
   function foldMessageContent(text) {
     // 尝试从 Chrome 存储中获取折叠设置
-    let regexPattern = /^([\s\S]*?)<\/search>/; // 默认正则
+    let regexPattern = /^([\s\S]*)<\/search>/; // 默认正则
     let summary = '搜索过程'; // 默认摘要文本
     
     // 应用正则表达式
