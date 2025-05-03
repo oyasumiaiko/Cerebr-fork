@@ -96,8 +96,7 @@ export function createMessageSender(options) {
     try {
       console.log('发送获取网页内容请求');
       const response = await chrome.runtime.sendMessage({
-        type: 'GET_PAGE_CONTENT_FROM_SIDEBAR',
-        includeDOM: false
+        type: 'GET_PAGE_CONTENT_FROM_SIDEBAR'
       });
       return response;
     } catch (error) {

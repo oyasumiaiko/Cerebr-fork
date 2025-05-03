@@ -646,10 +646,10 @@ export function createApiManager(options) {
       // 如果仅按 modelName 找不到，可以考虑其他逻辑或回退
       console.log(`未找到 promptType "${promptType}" 指定的模型配置 "${preferredModel}"，将使用默认选中配置。`);
     }
-    
+
     // 1. 检查对话长度并尝试查找特定配置
     if (messagesCount !== undefined) {
-      if (messagesCount < 10) {
+      if (messagesCount < 50) {
         const shortConvoConfig = apiConfigs.find(c => c.displayName?.includes(SHORT_CONVO_DISPLAY_NAME));
         if (shortConvoConfig) {
           console.log(`使用短对话配置: ${shortConvoConfig.displayName}`);

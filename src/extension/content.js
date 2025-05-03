@@ -2,6 +2,16 @@ console.log('Cerebr content script loaded at:', new Date().toISOString());
 console.log('Window location:', window.location.href);
 console.log('Document readyState:', document.readyState);
 
+// 新增：全局变量，用于存储当前选中的文本
+let currentSelection = "";
+
+// 新增：监听选区变化事件
+document.addEventListener('selectionchange', () => {
+  currentSelection = window.getSelection().toString();
+  // 可选：如果需要实时调试，可以取消下面的注释
+  // console.log('Selection changed:', currentSelection);
+});
+
 class CerebrSidebar {
   constructor() {
     this.isVisible = false;
@@ -1079,7 +1089,8 @@ async function extractPageContent() {
   const result = {
     title: document.title,
     url: window.location.href,
-    content: mainContent
+    content: mainContent,
+    selectedText: currentSelection
   };
   
   return result;
