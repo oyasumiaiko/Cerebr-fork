@@ -46,6 +46,9 @@ export function createContextMenuManager(options) {
   // 私有状态
   let currentMessageElement = null;
   let currentCodeBlock = null;
+  
+  // 获取复制为图片按钮
+  const copyAsImageButton = document.getElementById('copy-as-image');
 
   /**
    * 显示上下文菜单
@@ -231,6 +234,105 @@ export function createContextMenuManager(options) {
   }
 
   /**
+   * 将消息元素复制为图片并复制到剪贴板
+   */
+  async function copyMessageAsImage() {
+    if (currentMessageElement) {
+      try {
+        // 显示加载状态
+        const originalText = copyAsImageButton.innerHTML;
+        copyAsImageButton.innerHTML = '<i class="far fa-spinner fa-spin"></i> 处理中...';
+
+        // 移除临时添加内边距的代码
+        // const originalPadding = currentMessageElement.style.padding;
+        // currentMessageElement.style.padding = '15px'; 
+        
+        // --- 1. 使用 dom-to-image 生成原始 Canvas ---
+        const originalCanvas = await domtoimage.toCanvas(currentMessageElement, {
+          // 不指定背景色，尝试捕获实际背景
+        });
+
+        // --- 2. 创建带边距的新 Canvas ---
+        const padding = 15; // 设置边距大小 (像素)
+        const newWidth = originalCanvas.width + 2 * padding;
+        const newHeight = originalCanvas.height + 2 * padding;
+
+        const newCanvas = document.createElement('canvas');
+        newCanvas.width = newWidth;
+        newCanvas.height = newHeight;
+        const ctx = newCanvas.getContext('2d');
+
+        // --- 3. 填充新 Canvas 背景色 ---
+        // 尝试获取元素的计算背景色，如果透明或无效，则默认为白色
+        let bgColor = window.getComputedStyle(currentMessageElement).backgroundColor;
+        if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
+          bgColor = '#ffffff'; // 默认白色背景
+        }
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, newWidth, newHeight);
+
+        // --- 4. 将原始 Canvas 绘制到新 Canvas 中央 ---
+        ctx.drawImage(originalCanvas, padding, padding);
+
+        // --- 5. 将新 Canvas 转换为 Blob ---
+        newCanvas.toBlob(async (blob) => {
+          if (!blob) {
+             console.error('Failed to convert canvas to Blob.');
+             copyAsImageButton.innerHTML = '<i class="far fa-times"></i> 失败';
+             setTimeout(() => {
+               copyAsImageButton.innerHTML = '<i class="far fa-image"></i> 复制为图片'; 
+               hideContextMenu();
+             }, 1000);
+             return;
+          }
+          // --- 6. 后续处理 Blob --- 
+          try {
+            // 使用Clipboard API复制图片
+            await navigator.clipboard.write([
+              new ClipboardItem({
+                'image/png': blob
+              })
+            ]);
+            
+            // 显示成功提示
+            copyAsImageButton.innerHTML = '<i class="far fa-check"></i> 已复制';
+            setTimeout(() => {
+              copyAsImageButton.innerHTML = originalText; // 恢复按钮原始文本
+              hideContextMenu();
+            }, 1000);
+          } catch (err) {
+            console.error('复制图片到剪贴板失败:', err);
+            // 如果复制失败，提供下载选项
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `消息截图_${new Date().toISOString().replace(/:/g, '-')}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            copyAsImageButton.innerHTML = '<i class="far fa-download"></i> 已下载';
+            setTimeout(() => {
+              copyAsImageButton.innerHTML = originalText; // 恢复按钮原始文本
+              hideContextMenu();
+            }, 1000);
+          }
+          // --- Blob 处理结束 ---
+        }, 'image/png'); // 指定输出格式
+
+      } catch (err) {
+        console.error('生成图片过程中出错:', err); 
+        copyAsImageButton.innerHTML = '<i class="far fa-times"></i> 失败';
+        setTimeout(() => {
+          copyAsImageButton.innerHTML = '<i class="far fa-image"></i> 复制为图片'; 
+          hideContextMenu();
+        }, 1000);
+      }
+    }
+  }
+
+  /**
    * 设置事件监听器
    */
   function setupEventListeners() {
@@ -267,6 +369,9 @@ export function createContextMenuManager(options) {
       await clearChatHistory();
       hideContextMenu();
     });
+    
+    // 添加复制为图片按钮点击事件
+    copyAsImageButton.addEventListener('click', copyMessageAsImage);
 
     // 添加创建分支对话按钮点击事件
     if (forkConversationButton) {
@@ -302,6 +407,7 @@ export function createContextMenuManager(options) {
     showContextMenu,
     copyMessageContent,
     copyCodeContent,
+    copyMessageAsImage,
     regenerateMessage,
     forkConversation,
     getCurrentMessage: () => currentMessageElement

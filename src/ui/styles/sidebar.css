@@ -3199,3 +3199,30 @@ body.hide-references .reference-number.superscript {
 #repomix-button:active {
     transform: scale(0.95);
 }
+
+.context-menu-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    user-select: none;
+}
+
+.context-menu-item#copy-as-image {
+    position: relative;
+    overflow: hidden;
+}
+
+.context-menu-item#copy-as-image .fa-spinner {
+    animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.context-menu-item:hover {
+    background-color: var(--menu-item-hover-bg, rgba(0, 0, 0, 0.05));
+}
