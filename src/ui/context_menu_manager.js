@@ -274,6 +274,15 @@ export function createContextMenuManager(options) {
         // --- 4. 将原始 Canvas 绘制到新 Canvas 中央 ---
         ctx.drawImage(originalCanvas, padding, padding);
 
+        // --- 4.5. 强制去除 Alpha 通道 ---
+        const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
+        const data = imageData.data; // Uint8ClampedArray [R, G, B, A, ...]
+        for (let i = 0; i < data.length; i += 4) {
+          data[i + 3] = 255; // 设置 Alpha 为 255 (完全不透明)
+        }
+        ctx.putImageData(imageData, 0, 0);
+        // --- Alpha 处理结束 ---
+
         // --- 5. 将新 Canvas 转换为 Blob ---
         newCanvas.toBlob(async (blob) => {
           if (!blob) {
