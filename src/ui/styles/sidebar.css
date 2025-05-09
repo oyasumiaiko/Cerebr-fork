@@ -189,7 +189,7 @@ body {
     border-bottom-left-radius: 4px;
 }
 .user-message .text-content {
-    max-height: 25vh;
+    max-height: 50vh;
     overflow-y: auto;
 }
 .user-message .text-content::-webkit-scrollbar {
