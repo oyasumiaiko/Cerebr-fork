@@ -206,7 +206,7 @@ export function createApiManager(appContext) {
     maxHistoryLabel.textContent = '最大聊天历史';
     
     const maxHistoryValue = document.createElement('span');
-    maxHistoryValue.className = 'max-history-value';
+    maxHistoryValue.className = 'max-history-value temperature-value';
     maxHistoryValue.textContent = `${config.maxChatHistory || 500}条`;
     
     maxHistoryHeader.appendChild(maxHistoryLabel);
@@ -214,7 +214,7 @@ export function createApiManager(appContext) {
     
     const maxHistoryInput = document.createElement('input');
     maxHistoryInput.type = 'range';
-    maxHistoryInput.className = 'max-chat-history';
+    maxHistoryInput.className = 'max-chat-history temperature';
     maxHistoryInput.min = '10';
     maxHistoryInput.max = '1000';
     maxHistoryInput.step = '10';

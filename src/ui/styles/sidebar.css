@@ -2269,7 +2269,7 @@ body.hide-references .reference-number.superscript {
 }
 
 .api-card .custom-params {
-    min-height: 40px;               /* 调整为较小高度 */
+    min-height: calc(3rem + 12px);               /* 调整为大约三行的高度 */
     padding: 6px 8px;               /* 较小的内边距 */
     border-radius: 4px;
     background: var(--cerebr-input-bg);

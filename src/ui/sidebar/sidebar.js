@@ -493,13 +493,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             case 'FOCUS_INPUT':
                 appContext.dom.messageInput.focus();
                 setTimeout(() => {
-                    const range = document.createRange();
+            const range = document.createRange();
                     range.selectNodeContents(appContext.dom.messageInput);
-                    range.collapse(false);
-                    const selection = window.getSelection();
+            range.collapse(false);
+            const selection = window.getSelection();
                     if (selection) {
-                        selection.removeAllRanges();
-                        selection.addRange(range);
+            selection.removeAllRanges();
+            selection.addRange(range);
                     }
                 }, 0);
                 break;
@@ -514,7 +514,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (appContext.dom.messageInput) {
                     appContext.dom.messageInput.setAttribute('placeholder', data.placeholder);
                     if (data.timeout) {
-                        setTimeout(() => {
+                    setTimeout(() => {
                             appContext.dom.messageInput.setAttribute('placeholder', '输入消息...');
                         }, data.timeout);
                     }
