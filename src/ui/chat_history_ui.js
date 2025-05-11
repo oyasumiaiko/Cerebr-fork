@@ -40,7 +40,7 @@ export function createChatHistoryUI(appContext) {
   const appendMessage = services.messageProcessor.appendMessage;
   const chatHistory = services.chatHistoryManager.chatHistory; // The history object itself
   const clearHistory = services.chatHistoryManager.clearHistory;
-  const getPrompts = services.promptSettingsManager.getPrompts;
+  const promptSettingsManager = services.promptSettingsManager; // Keep instance
   const createImageTag = services.imageHandler.createImageTag;
   const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
   const messageSender = services.messageSender;
@@ -153,7 +153,7 @@ export function createChatHistoryUI(appContext) {
     if (firstMessageTextContent) {
       // 使用 getPlainText 转换为字符串
       let content = firstMessageTextContent;
-      const prompts = getPrompts();
+      const prompts = promptSettingsManager.getPrompts(); // New way: Call on instance
       
       // 替换预设模板为模板名称
       const selectionPrompt = prompts.selection.prompt.split('<SELECTION>');

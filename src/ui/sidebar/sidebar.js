@@ -52,6 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             screenshotButton: document.getElementById('screenshot-button'),
             sidebarPositionSwitch: document.getElementById('sidebar-position-switch'),
             forkConversationButton: document.getElementById('fork-conversation'),
+            copyAsImageButton: document.getElementById('copy-as-image'),
             emptyStateHistory: document.getElementById('empty-state-history'),
             emptyStateSummary: document.getElementById('empty-state-summary'),
             emptyStateTempMode: document.getElementById('empty-state-temp-mode'),
@@ -68,6 +69,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             previewModal: document.querySelector('.image-preview-modal'),
             previewImage: document.querySelector('.image-preview-modal img'),
             previewCloseButton: document.querySelector('.image-preview-modal .image-preview-close'),
+            promptSettingsBackButton: document.querySelector('#prompt-settings .back-button'),
+            resetPromptsButton: document.getElementById('reset-prompts'),
+            savePromptsButton: document.getElementById('save-prompts'),
+            selectionPrompt: document.getElementById('selection-prompt'),
+            systemPrompt: document.getElementById('system-prompt'),
+            pdfPrompt: document.getElementById('pdf-prompt'),
+            summaryPrompt: document.getElementById('summary-prompt'),
+            queryPrompt: document.getElementById('query-prompt'),
+            imagePrompt: document.getElementById('image-prompt'),
+            screenshotPrompt: document.getElementById('screenshot-prompt'),
+            extractPrompt: document.getElementById('extract-prompt'),
+            urlRulesPrompt: document.getElementById('url-rules-prompt'),
+            urlRulesList: document.getElementById('url-rules-list'),
+            showThoughtProcessSwitch: document.getElementById('show-thought-process-switch'),
+            resetSettingsButton: document.getElementById('reset-settings-button'),
+            settingsBackButton: document.querySelector('#settings-menu .back-button')
         },
         services: {},
         state: {
@@ -198,21 +215,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     appContext.services.chatHistoryManager = { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage };
     
     appContext.services.promptSettingsManager = new PromptSettings(appContext);
-
+    appContext.services.settingsManager = createSettingsManager(appContext);
     appContext.services.imageHandler = createImageHandler(appContext);
+    appContext.services.apiManager = createApiManager(appContext);
 
     appContext.services.messageProcessor = createMessageProcessor(appContext);
     appContext.services.chatHistoryUI = createChatHistoryUI(appContext);
 
     appContext.services.uiManager = createUIManager(appContext);
-    appContext.services.apiManager = createApiManager(appContext);
     
     appContext.services.messageSender = createMessageSender(appContext);
     appContext.services.messageSender.setCurrentConversationId(appContext.services.chatHistoryUI.getCurrentConversationId());
     window.cerebr.messageSender = appContext.services.messageSender;
 
     appContext.services.contextMenuManager = createContextMenuManager(appContext);
-    appContext.services.settingsManager = createSettingsManager(appContext);
 
     appContext.services.contextMenuManager.init();
     appContext.services.uiManager.init();

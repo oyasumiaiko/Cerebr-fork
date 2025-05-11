@@ -30,7 +30,8 @@ export function createMessageSender(appContext) {
   const messageInput = dom.messageInput;
   const imageContainer = dom.imageContainer;
   const scrollToBottom = utils.scrollToBottom;
-  const getPrompts = services.promptSettingsManager.getPrompts;
+  const settingsManager = services.settingsManager;
+  const promptSettingsManager = services.promptSettingsManager;
   const uiManager = services.uiManager;
   const showNotification = utils.showNotification;
 
@@ -165,7 +166,7 @@ export function createMessageSender(appContext) {
     if (isEmptyMessage) return;
 
     // 获取当前提示词设置
-    const promptsConfig = getPrompts();
+    const promptsConfig = promptSettingsManager.getPrompts();
     
     // 如果只有图片没有文本，使用图片专用提示词
     const shouldUseImagePrompt = imageTags.length > 0 && messageText.trim() === '';
@@ -514,7 +515,7 @@ export function createMessageSender(appContext) {
       // 确保提示词设置已加载完成
       await new Promise(resolve => {
         const checkSettings = () => {
-          const prompts = getPrompts();
+          const prompts = promptSettingsManager.getPrompts();
           // 检查提示词设置是否已完全加载
           if (prompts && prompts.summary && prompts.summary.model) {
             resolve();
@@ -539,7 +540,7 @@ export function createMessageSender(appContext) {
       const isPDF = contentType === 'application/pdf';
 
       // 获取当前提示词设置
-      const prompts = getPrompts();
+      const prompts = promptSettingsManager.getPrompts();
 
       if (selectedText) {
         // 检查是否需要清空聊天记录

@@ -612,10 +612,14 @@ class PromptSettings {
     getPrompts() {
         const prompts = {};
         Object.keys(DEFAULT_PROMPTS).forEach(type => {
-            const textarea = this[`${type}Prompt`];
-            if (!textarea) {
-                console.error(`找不到提示词文本框: ${type}`);
-                return;
+            const elementKey = `${type}Prompt`;
+            const textarea = this[elementKey];
+
+            // 更健壮的检查，确保textarea存在并且拥有value属性
+            if (!textarea || typeof textarea.value === 'undefined') {
+                console.error(`提示词元素 '${elementKey}' 未找到、无效或没有 'value' 属性. 当前值:`, textarea);
+                // 对于无效的元素，不设置 prompts[type]
+                return; // 继续处理下一个类型
             }
 
             let promptValue = textarea.value;

@@ -40,13 +40,13 @@ export function createSettingsManager(appContext) {
   } = appContext;
 
   // UI elements from appContext.dom
-  const themeSwitch = dom.themeSwitch; // Might be named themeToggle in appContext
+  const themeSwitch = dom.themeSwitch;
   const themeSelect = dom.themeSelect;
-  const sidebarWidthSlider = dom.sidebarWidthSlider; // Renamed from sidebarWidth for clarity
-  const widthValueDisplay = dom.sidebarWidthValue; // Renamed from widthValue
-  const fontSizeSlider = dom.fontSizeSlider; // Renamed from fontSize
+  const sidebarWidthSlider = dom.sidebarWidth;
+  const widthValueDisplay = dom.widthValue;
+  const fontSizeSlider = dom.fontSize;
   const fontSizeValueDisplay = dom.fontSizeValue;
-  const scaleFactorSlider = dom.scaleFactorSlider; // Renamed from scaleFactor
+  const scaleFactorSlider = dom.scaleFactor;
   const scaleValueDisplay = dom.scaleValue;
   const autoScrollSwitch = dom.autoScrollSwitch;
   const clearOnSearchSwitch = dom.clearOnSearchSwitch;
@@ -54,10 +54,10 @@ export function createSettingsManager(appContext) {
   const showReferenceSwitch = dom.showReferenceSwitch;
   const sidebarPositionSwitch = dom.sidebarPositionSwitch;
   const stopAtTopSwitch = dom.stopAtTopSwitch;
-  const showThoughtProcessSwitch = dom.showThoughtProcessSwitch; // Added based on typical settings
-  const resetSettingsButton = dom.resetSettingsButton;     // Added based on typical settings
-  const settingsPanel = dom.settingsPanel;
-  const settingsToggle = dom.settingsToggle;
+  const showThoughtProcessSwitch = dom.showThoughtProcessSwitch;
+  const resetSettingsButton = dom.resetSettingsButton;
+  const settingsPanel = dom.settingsMenu;
+  const settingsToggle = dom.settingsButton;
   const settingsBackButton = dom.settingsBackButton;
 
   // Services from appContext.services
@@ -84,7 +84,8 @@ export function createSettingsManager(appContext) {
     shouldSendChatHistory: true,
     showReference: true,
     sidebarPosition: 'right', // 'left' 或 'right'
-    stopAtTop: true // 滚动到顶部时停止
+    stopAtTop: true, // 滚动到顶部时停止
+    scaleFactor: 1 // Added default scaleFactor
   };
 
   // 当前设置
@@ -193,12 +194,12 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-sidebar-width', `${width}px`);
     
     // 更新UI元素
-    if (sidebarWidth) {
-      sidebarWidth.value = width;
+    if (sidebarWidthSlider) {
+      sidebarWidthSlider.value = width;
     }
     
-    if (widthValue) {
-      widthValue.textContent = `${width}px`;
+    if (widthValueDisplay) {
+      widthValueDisplay.textContent = `${width}px`;
     }
     
     // 通知父窗口宽度变化
@@ -210,24 +211,24 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-font-size', `${size}px`);
     
     // 更新UI元素
-    if (fontSize) {
-      fontSize.value = size;
+    if (fontSizeSlider) {
+      fontSizeSlider.value = size;
     }
     
-    if (fontSizeValue) {
-      fontSizeValue.textContent = `${size}px`;
+    if (fontSizeValueDisplay) {
+      fontSizeValueDisplay.textContent = `${size}px`;
     }
   }
   
   // 应用缩放比例
   function applyScaleFactor(value) {
     // 更新UI元素
-    if (scaleFactor) {
-      scaleFactor.value = value;
+    if (scaleFactorSlider) {
+      scaleFactorSlider.value = value;
     }
     
-    if (scaleValue) {
-      scaleValue.textContent = `${value.toFixed(1)}x`;
+    if (scaleValueDisplay) {
+      scaleValueDisplay.textContent = `${value.toFixed(1)}x`;
     }
     
     // 通知父窗口缩放比例变化
@@ -266,8 +267,8 @@ export function createSettingsManager(appContext) {
     }
     
     // 更新消息发送器设置
-    if (setMessageSenderChatHistory) {
-      setMessageSenderChatHistory(enabled);
+    if (messageSender && typeof messageSender.setSendChatHistory === 'function') {
+      messageSender.setSendChatHistory(enabled);
     }
   }
   
@@ -403,40 +404,40 @@ export function createSettingsManager(appContext) {
     }
     
     // 侧边栏宽度滑块
-    if (sidebarWidth) {
-      sidebarWidth.addEventListener('input', (e) => {
-        if (widthValue) {
-          widthValue.textContent = `${e.target.value}px`;
+    if (sidebarWidthSlider) {
+      sidebarWidthSlider.addEventListener('input', (e) => {
+        if (widthValueDisplay) {
+          widthValueDisplay.textContent = `${e.target.value}px`;
         }
       });
       
-      sidebarWidth.addEventListener('change', (e) => {
+      sidebarWidthSlider.addEventListener('change', (e) => {
         setSidebarWidth(parseInt(e.target.value));
       });
     }
     
     // 字体大小滑块
-    if (fontSize) {
-      fontSize.addEventListener('input', (e) => {
-        if (fontSizeValue) {
-          fontSizeValue.textContent = `${e.target.value}px`;
+    if (fontSizeSlider) {
+      fontSizeSlider.addEventListener('input', (e) => {
+        if (fontSizeValueDisplay) {
+          fontSizeValueDisplay.textContent = `${e.target.value}px`;
         }
       });
       
-      fontSize.addEventListener('change', (e) => {
+      fontSizeSlider.addEventListener('change', (e) => {
         setFontSize(parseInt(e.target.value));
       });
     }
     
     // 缩放比例滑块
-    if (scaleFactor) {
-      scaleFactor.addEventListener('input', (e) => {
-        if (scaleValue) {
-          scaleValue.textContent = `${parseFloat(e.target.value).toFixed(1)}x`;
+    if (scaleFactorSlider) {
+      scaleFactorSlider.addEventListener('input', (e) => {
+        if (scaleValueDisplay) {
+          scaleValueDisplay.textContent = `${parseFloat(e.target.value).toFixed(1)}x`;
         }
       });
       
-      scaleFactor.addEventListener('change', (e) => {
+      scaleFactorSlider.addEventListener('change', (e) => {
         setScaleFactor(parseFloat(e.target.value));
       });
     }
