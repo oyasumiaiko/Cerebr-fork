@@ -90,20 +90,22 @@ export function createUIManager(appContext) {
    * @param {boolean|undefined} show - 是否显示菜单，不传则切换状态
    */
   function toggleSettingsMenu(show) {
+    if (!appContext.dom.settingsMenu) {
+        console.error("settingsMenu DOM element is not defined in appContext.dom");
+        return;
+    }
+
     if (show === undefined) {
-      // 如果没有传参数，就切换当前状态
-      dom.settingsPanel.classList.toggle('visible');
+      appContext.dom.settingsMenu.classList.toggle('visible');
     } else {
-      // 否则设置为指定状态
       if (show) {
-        dom.settingsPanel.classList.add('visible');
+        appContext.dom.settingsMenu.classList.add('visible');
       } else {
-        dom.settingsPanel.classList.remove('visible');
+        appContext.dom.settingsMenu.classList.remove('visible');
       }
     }
 
-    // 每次打开菜单时重新渲染收藏的API列表
-    if (dom.settingsPanel.classList.contains('visible') && apiManager && typeof apiManager.renderFavoriteApis === 'function') {
+    if (appContext.dom.settingsMenu.classList.contains('visible') && apiManager && typeof apiManager.renderFavoriteApis === 'function') {
       apiManager.renderFavoriteApis();
     }
   }
@@ -113,7 +115,7 @@ export function createUIManager(appContext) {
    */
   function closeExclusivePanels() {
     // 定义需要互斥的面板ID列表
-    const panelsToCloseDirectly = ['prompt-settings', 'api-settings', 'settings-panel']; // IDs
+    const panelsToCloseDirectly = ['prompt-settings', 'api-settings', 'settings-menu']; // IDs, changed 'settings-panel' to 'settings-menu'
     
     // Close panels managed by their respective services if they have a close method
     if (chatHistoryUI && typeof chatHistoryUI.closeChatHistoryPanel === 'function') {
@@ -121,30 +123,55 @@ export function createUIManager(appContext) {
     }
     if (promptSettingsManager && typeof promptSettingsManager.closePanel === 'function') {
       promptSettingsManager.closePanel();
-    } else if (dom.promptSettingsPanel) {
-      dom.promptSettingsPanel.classList.remove('visible');
+    } else if (appContext.dom.promptSettingsPanel) { // Use appContext.dom reference
+      appContext.dom.promptSettingsPanel.classList.remove('visible');
     }
 
     if (apiManager && typeof apiManager.closePanel === 'function') {
       apiManager.closePanel();
-    } else if (dom.apiSettingsPanel) {
-      dom.apiSettingsPanel.classList.remove('visible');
+    } else if (appContext.dom.apiSettingsPanel) { // Use appContext.dom reference
+      appContext.dom.apiSettingsPanel.classList.remove('visible');
     }
 
     if (settingsManager && typeof settingsManager.closePanel === 'function') {
       settingsManager.closePanel();
-    } else if (dom.settingsPanel) {
-      dom.settingsPanel.classList.remove('visible');
+    } else if (appContext.dom.settingsMenu) { // Changed from dom.settingsPanel to appContext.dom.settingsMenu
+      appContext.dom.settingsMenu.classList.remove('visible');
     }
     
     // Fallback for any other panels by ID if not covered by services
     panelsToCloseDirectly.forEach(pid => {
-      const panel = document.getElementById(pid); // Keep this for panels not managed by a service with closePanel
-      if (panel && panel.classList.contains('visible') && 
-          !((pid === 'prompt-settings' && promptSettingsManager?.closePanel) || 
-            (pid === 'api-settings' && apiManager?.closePanel) ||
-            (pid === 'settings-panel' && settingsManager?.closePanel)) ) {
-        panel.classList.remove('visible');
+      const panel = document.getElementById(pid);
+      if (panel && panel.classList.contains('visible')) {
+        // Check if a dedicated service method already handled it
+        let handledByService = false;
+        if (pid === 'prompt-settings' && promptSettingsManager?.closePanel) {
+          // Already handled or would be handled by promptSettingsManager.closePanel()
+          // If promptSettingsManager.closePanel doesn't exist, it's handled by the direct classList.remove above.
+          handledByService = true; 
+        } else if (pid === 'api-settings' && apiManager?.closePanel) {
+          handledByService = true;
+        } else if (pid === 'settings-menu' && settingsManager?.closePanel) { // Changed from 'settings-panel'
+          handledByService = true;
+        }
+
+        if (!handledByService) {
+            // This explicit removal is only needed if no service method took care of it OR if the service method does not exist.
+            // The direct classList.remove calls for promptSettingsPanel, apiSettingsPanel, and settingsMenu earlier cover cases where service methods might not exist.
+            // This loop is more of a true fallback for panels *not* directly referenced via appContext.dom above and not having a service method.
+            // However, given the current structure, if a panel is in panelsToCloseDirectly AND has an appContext.dom reference used above,
+            // this secondary check here for it might be redundant if the service method for it doesn't exist.
+            // To simplify, let's assume the earlier direct appContext.dom.xxx.classList.remove() calls are the primary fallback if service methods don't exist.
+            // This loop then truly becomes for panels *only* identified by ID string not explicitly managed by a service with a closePanel method AND not covered by the direct appContext.dom calls.
+            // For 'prompt-settings', 'api-settings', 'settings-menu', they are covered. So this loop might only be for *other* panels if any were added to panelsToCloseDirectly.
+            // If panelsToCloseDirectly ONLY contains these three, and their service method and direct DOM access fallbacks are handled above, this loop might not do much more for them.
+            // Let's refine the condition to ensure it doesn't try to re-close if already handled by a service method.
+            if (!((pid === 'prompt-settings' && promptSettingsManager?.closePanel) || 
+                  (pid === 'api-settings' && apiManager?.closePanel) ||
+                  (pid === 'settings-menu' && settingsManager?.closePanel))) {
+               panel.classList.remove('visible');
+            }
+        }
       }
     });
   }
