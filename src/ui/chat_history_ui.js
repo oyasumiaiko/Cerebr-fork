@@ -1545,15 +1545,14 @@ export function createChatHistoryUI(appContext) {
         return;
       }
       
-      // 保存当前对话的相关信息（页面信息等）
-      const currentConvId = currentConversationId;
-      let pageInfo = null;
-      if (currentConvId) {
-        const currentConversation = await getConversationFromCacheOrLoad(currentConvId);
-        if (currentConversation) {
+      // 优先使用当前的页面信息，如果不存在，则尝试从原始对话获取（如果已保存）
+      let pageInfo = appContext.state.pageInfo ? { ...appContext.state.pageInfo } : null;
+      if (!pageInfo && currentConversationId) {
+        const originalConversation = await getConversationFromCacheOrLoad(currentConversationId, false); // false: 不要强制重新加载完整内容
+        if (originalConversation && originalConversation.url) {
           pageInfo = {
-            url: currentConversation.url,
-            title: currentConversation.title
+            url: originalConversation.url,
+            title: originalConversation.title
           };
         }
       }

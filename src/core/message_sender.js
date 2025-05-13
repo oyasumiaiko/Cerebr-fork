@@ -241,8 +241,6 @@ export function createMessageSender(appContext) {
         } else {
           console.error('获取网页内容失败。');
         }
-      } else {
-        state.pageInfo = null;
       }
       
       // 更新加载状态：正在构建消息
