@@ -176,6 +176,8 @@ export function createMessageSender(appContext) {
     const currentPromptType = specificPromptType || messageProcessor.getPromptTypeFromContent(messageText, promptsConfig);
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
+    let pageContentResponse = null;
+    let pageContentLength = 0;
 
     try {
       // 开始处理消息
@@ -230,13 +232,12 @@ export function createMessageSender(appContext) {
       loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true);
       loadingMessage.classList.add('loading-message');
 
-      let pageContentLength = 0;
       // 如果不是临时模式，获取网页内容
       if (!isTemporaryMode) {
         loadingMessage.textContent = '正在获取网页内容...';
-        const pageContentResponse = await getPageContent();
+        pageContentResponse = await getPageContent();
         if (pageContentResponse) {
-          pageContentLength = state.pageInfo.content ? state.pageInfo.content.length : 0;
+          pageContentLength = state.pageInfo?.content?.length || 0;
         } else {
           console.error('获取网页内容失败。');
         }
@@ -251,7 +252,7 @@ export function createMessageSender(appContext) {
       const messages = await buildMessages(
         promptsConfig,
         injectedSystemMessages,
-        pageContent,
+        pageContentResponse,
         imageContainsScreenshot,
         currentPromptType,
         regenerateMode,
