@@ -338,31 +338,32 @@ export function createUIManager(appContext) {
    * 添加聊天容器事件监听器
    */
   function setupChatContainerEventListeners() {
-    // Scroll event for auto-scroll logic
-    if (chatContainer && messageSender && typeof messageSender.setShouldAutoScroll === 'function') {
-        chatContainer.addEventListener('wheel', (e) => {
-          if (e.deltaY < 0) { // Scrolling up
-            messageSender.setShouldAutoScroll(false);
-          } else if (e.deltaY > 0) { // Scrolling down
-            const threshold = 100; // Px from bottom to re-enable auto-scroll
-            const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
-            if (distanceFromBottom < threshold) {
-              messageSender.setShouldAutoScroll(true);
-            }
-          }
-        }, { passive: true });
+    // 移除外层条件检查，如果 chatContainer 或 messageSender 无效，将直接报错
+    chatContainer.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) { // Scrolling up
+        messageSender.setShouldAutoScroll(false);
+      } else if (e.deltaY > 0) { // Scrolling down
+        const threshold = 100; // Px from bottom to re-enable auto-scroll
+        const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+        if (distanceFromBottom < threshold) {
+          messageSender.setShouldAutoScroll(true);
+        }
+      }
+    }, { passive: true });
 
-        // Click event to disable auto-scroll
-        chatContainer.addEventListener('click', (e) => {
-          messageSender.setShouldAutoScroll(false);
-        });
-    }
+    chatContainer.addEventListener('mousedown', (e) => {
+      if (e.offsetX < chatContainer.clientWidth) { 
+         messageSender.setShouldAutoScroll(false);
+      }
+    });
 
     // Prevent default image click behavior in chat
     chatContainer.addEventListener('click', (e) => {
-      if (e.target.tagName === 'IMG') {
-        e.preventDefault();
-        e.stopPropagation();
+      if (e.target.tagName === 'IMG' && e.target.closest('.message-content__ai_message_content_img')) {
+        e.preventDefault(); // 阻止图片链接跳转等默认行为
+        // e.stopPropagation(); // 暂时移除，观察是否解决了自动滚动问题。如果需要阻止其他冒泡行为，可以再加回来。
+        // 可以考虑在这里添加其他图片交互，如新标签页打开
+        // window.open(e.target.src, '_blank');
       }
     });
   }

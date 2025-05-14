@@ -222,11 +222,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     appContext.services.messageProcessor = createMessageProcessor(appContext);
     appContext.services.chatHistoryUI = createChatHistoryUI(appContext);
 
-    appContext.services.uiManager = createUIManager(appContext);
-    
     appContext.services.messageSender = createMessageSender(appContext);
     appContext.services.messageSender.setCurrentConversationId(appContext.services.chatHistoryUI.getCurrentConversationId());
     window.cerebr.messageSender = appContext.services.messageSender;
+    appContext.services.uiManager = createUIManager(appContext);
 
     appContext.services.contextMenuManager = createContextMenuManager(appContext);
 
