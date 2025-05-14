@@ -640,22 +640,30 @@ export function createMessageProcessor(appContext) {
    * @returns {string} 处理后的消息文本，其中符合条件的部分被包裹在一个折叠元素中
    */
   function foldMessageContent(text) {
-    // 尝试从 Chrome 存储中获取折叠设置
-    let regexPattern = /^([\s\S]*)<\/search>/; // 默认正则
-    let summary = '搜索过程'; // 默认摘要文本
-    
-    // 应用正则表达式
-    const match = text.match(regexPattern);
-    if (!match || (match[1] && match[1].trim() === '')) {
-      return text;
+    // 定义折叠配置
+    const foldConfigs = [
+      {
+        regex: /^([\s\S]*)<\/search>/,
+        summary: '搜索过程'
+      },
+      {
+        regex: /^<think>([\s\S]*)<\/think>/,
+        summary: '思考过程'
+      }
+    ];
+
+    // 对每个配置应用折叠处理
+    for (const config of foldConfigs) {
+      const match = text.match(config.regex);
+      if (match && match[1] && match[1].trim() !== '') {
+        const foldedPart = match[1];
+        const remainingPart = text.slice(match[0].length);
+        const quotedFoldedPart = `<blockquote>${foldedPart}</blockquote>`;
+        text = `<details class="folded-message"><summary>${config.summary}</summary><div>\n${quotedFoldedPart}</div></details>\n\n${remainingPart}`;
+      }
     }
-    
-    const foldedPart = match[1];
-    const remainingPart = text.slice(match[0].length);
-    
-    // 将折叠部分包裹在 <blockquote> 中，以实现 Markdown 引用效果
-    const quotedFoldedPart = `<blockquote>${foldedPart}</blockquote>`;
-    return `<details class="folded-message"><summary>${summary}</summary><div>\n${quotedFoldedPart}</div></details>\n\n${remainingPart}`;
+
+    return text;
   }
 
   /**
