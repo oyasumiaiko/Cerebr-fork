@@ -36,17 +36,20 @@ export function createChatHistoryUI(appContext) {
 
   // Destructure dependencies from appContext
   const chatContainer = dom.chatContainer;
-  const chatInputElement = dom.messageInput; // Assuming messageInput is the chatInputElement
+  const chatInputElement = dom.messageInput; 
   const appendMessage = services.messageProcessor.appendMessage;
-  const chatHistory = services.chatHistoryManager.chatHistory; // The history object itself
-  const clearHistory = services.chatHistoryManager.clearHistory;
-  const promptSettingsManager = services.promptSettingsManager; // Keep instance
+  
+  // 修改: 直接使用 services.chatHistoryManager.chatHistory 访问数据对象
+  // const chatHistory = services.chatHistoryManager.chatHistory; 
+  // 修改: 直接使用 services.chatHistoryManager.clearHistory 访问清空函数
+  // const clearHistory = services.chatHistoryManager.clearHistory;
+  
+  const promptSettingsManager = services.promptSettingsManager; 
   const createImageTag = services.imageHandler.createImageTag;
-  const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
+  // 修改: 直接使用 services.chatHistoryManager.getCurrentConversationChain 访问获取会话链函数
+  // const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
   const messageSender = services.messageSender;
-  // pageInfo will be accessed from state.pageInfo directly where needed or via the updatePageInfo parameter
   const showNotification = utils.showNotification;
-  // closeExclusivePanels will be called via uiManager, which has its own access through appContext
 
   let currentConversationId = null;
   // let currentPageInfo = null; // Replaced by appContext.state.pageInfo or parameter to updatePageInfo
@@ -140,8 +143,8 @@ export function createChatHistoryUI(appContext) {
    * @returns {Promise<void>}
    */
   async function saveCurrentConversation(isUpdate = false) {
-    if (chatHistory.messages.length === 0) return;
-    const messages = chatHistory.messages.slice();
+    if (services.chatHistoryManager.chatHistory.messages.length === 0) return;
+    const messages = services.chatHistoryManager.chatHistory.messages.slice();
     const timestamps = messages.map(msg => msg.timestamp);
     const startTime = Math.min(...timestamps);
     const endTime = Math.max(...timestamps);
@@ -352,11 +355,10 @@ export function createChatHistoryUI(appContext) {
       messageElem.setAttribute('data-message-id', msg.id);
     });
     // 恢复加载的对话历史到聊天管理器
-    chatHistory.messages = fullConversation.messages.slice();
-    // 若存在消息，则设置第一条消息的 id 为根节点
-    chatHistory.root = fullConversation.messages.length > 0 ? fullConversation.messages[0].id : null;
-    // 将 currentNode 更新为最后一条消息的 id
-    chatHistory.currentNode = fullConversation.messages.length > 0 ? fullConversation.messages[fullConversation.messages.length - 1].id : null;
+    // 修改: 使用 services.chatHistoryManager.chatHistory 访问数据对象
+    services.chatHistoryManager.chatHistory.messages = fullConversation.messages.slice();
+    services.chatHistoryManager.chatHistory.root = fullConversation.messages.length > 0 ? fullConversation.messages[0].id : null;
+    services.chatHistoryManager.chatHistory.currentNode = fullConversation.messages.length > 0 ? fullConversation.messages[fullConversation.messages.length - 1].id : null;
     // 保存加载的对话记录ID，用于后续更新操作
     currentConversationId = fullConversation.id;
     
@@ -392,12 +394,14 @@ export function createChatHistoryUI(appContext) {
       messageSender.abortCurrentRequest();
     }
     // 如果有消息，等待保存完成
-    if (chatHistory.messages.length > 0) {
+    // 修改: 使用 services.chatHistoryManager.chatHistory 访问消息
+    if (services.chatHistoryManager.chatHistory.messages.length > 0) {
       await saveCurrentConversation(true);
     }
     // 清空聊天容器和内存中的聊天记录
     chatContainer.innerHTML = '';
-    clearHistory();
+    // 修改: 直接调用 services.chatHistoryManager.clearHistory()
+    services.chatHistoryManager.clearHistory();
     // 重置当前会话ID，确保下次发送新消息创建新会话
     currentConversationId = null;
     activeConversation = null;
@@ -1519,7 +1523,7 @@ export function createChatHistoryUI(appContext) {
    * @returns {Promise<void>}
    */
   async function createForkConversation(targetMessageId) {
-    if (!chatHistory || !chatHistory.messages || chatHistory.messages.length === 0) {
+    if (!services.chatHistoryManager.chatHistory || !services.chatHistoryManager.chatHistory.messages || services.chatHistoryManager.chatHistory.messages.length === 0) {
       console.error('创建分支对话失败: 没有可用的聊天历史');
       return;
     }
@@ -1529,14 +1533,14 @@ export function createChatHistoryUI(appContext) {
       await saveCurrentConversation(true);
 
       // 查找目标消息
-      const targetMessage = chatHistory.messages.find(msg => msg.id === targetMessageId);
+      const targetMessage = services.chatHistoryManager.chatHistory.messages.find(msg => msg.id === targetMessageId);
       if (!targetMessage) {
         console.error('创建分支对话失败: 找不到目标消息');
         return;
       }
       
       // 获取当前完整对话链
-      const currentChain = getCurrentConversationChain();
+      const currentChain = services.chatHistoryManager.getCurrentConversationChain();
       
       // 截取从开始到目标消息的对话
       const targetIndex = currentChain.findIndex(msg => msg.id === targetMessageId);
@@ -1623,9 +1627,9 @@ export function createChatHistoryUI(appContext) {
       await putConversation(newConversation);
       
       // 清空当前会话并加载新创建的会话
-      chatHistory.messages = [];
-      chatHistory.root = null;
-      chatHistory.currentNode = null;
+      services.chatHistoryManager.chatHistory.messages = [];
+      services.chatHistoryManager.chatHistory.root = null;
+      services.chatHistoryManager.chatHistory.currentNode = null;
       
       // 清空聊天容器
       chatContainer.innerHTML = '';
