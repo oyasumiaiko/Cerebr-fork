@@ -69,7 +69,8 @@ export function createMessageSender(appContext) {
       messageInput.innerHTML = '';
       imageContainer.innerHTML = '';
       // 重置输入框高度
-      uiManager.resetInputHeight();
+      // 直接从 appContext.services 获取最新的 uiManager 实例
+      appContext.services.uiManager.resetInputHeight();
     } catch (error) {
       console.error('清空消息输入框和图片容器失败:', error);
     }

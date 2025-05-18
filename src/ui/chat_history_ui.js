@@ -390,9 +390,7 @@ export function createChatHistoryUI(appContext) {
    */
   async function clearChatHistory() {
     // 终止当前请求（若存在）
-    if (messageSender && typeof messageSender.abortCurrentRequest === 'function') {
-      messageSender.abortCurrentRequest();
-    }
+    appContext.services.messageSender.abortCurrentRequest();
     // 如果有消息，等待保存完成
     // 修改: 使用 services.chatHistoryManager.chatHistory 访问消息
     if (services.chatHistoryManager.chatHistory.messages.length > 0) {

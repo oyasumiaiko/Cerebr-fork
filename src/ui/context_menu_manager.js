@@ -191,12 +191,7 @@ export function createContextMenuManager(appContext) {
       
       // 如果有AI消息，先删除它
       if (lastAiMessage) {
-        if (utils && typeof utils.deleteMessageContent === 'function') {
-          await utils.deleteMessageContent(lastAiMessage);
-        } else {
-          console.warn('deleteMessageFromUIAndHistory function not available on utils');
-          lastAiMessage.remove(); // Fallback to just removing from DOM
-        }
+        await utils.deleteMessageContent(lastAiMessage);
       }
       
       // 如果找到了用户消息，直接使用它重新生成AI回复
@@ -393,10 +388,10 @@ export function createContextMenuManager(appContext) {
       hideContextMenu();
     });
     deleteMessageButton.addEventListener('click', () => {
-      if (currentMessageElement && utils && typeof utils.deleteMessageContent === 'function') {
+      if (currentMessageElement) {
         utils.deleteMessageContent(currentMessageElement);
       } else {
-        console.error('删除消息功能不可用或消息元素未找到。');
+        console.error('消息元素未找到。');
       }
     });
     regenerateButton.addEventListener('click', regenerateMessage);

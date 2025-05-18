@@ -105,7 +105,7 @@ export function createUIManager(appContext) {
       }
     }
 
-    if (appContext.dom.settingsMenu.classList.contains('visible') && apiManager && typeof apiManager.renderFavoriteApis === 'function') {
+    if (appContext.dom.settingsMenu.classList.contains('visible')) {
       apiManager.renderFavoriteApis();
     }
   }
@@ -214,25 +214,6 @@ export function createUIManager(appContext) {
    * 设置设置菜单事件监听器
    */
   function setupSettingsMenuEventListeners() {
-    // Remove or comment out the click listener if hover is the primary interaction
-    /*
-    if (dom.settingsButton && dom.settingsMenu) {
-        dom.settingsButton.addEventListener('click', (e) => {
-            e.stopPropagation(); 
-            const isVisible = dom.settingsMenu.classList.contains('visible');
-            if (isVisible) {
-                closeExclusivePanels(); 
-            } else {
-                closeExclusivePanels();
-                dom.settingsMenu.classList.add('visible');
-                if (apiManager && typeof apiManager.renderFavoriteApis === 'function') {
-                    apiManager.renderFavoriteApis();
-                }
-            }
-        });
-    }
-    */
-
     // Hover behavior for settings menu
     if (dom.settingsButton && dom.settingsMenu) {
         const openSettingsMenu = () => {
@@ -250,9 +231,7 @@ export function createUIManager(appContext) {
             }
 
             dom.settingsMenu.classList.add('visible');
-            if (apiManager && typeof apiManager.renderFavoriteApis === 'function') {
-                apiManager.renderFavoriteApis();
-            }
+            apiManager.renderFavoriteApis();
         };
 
         const scheduleCloseSettingsMenu = () => {
@@ -292,7 +271,7 @@ export function createUIManager(appContext) {
    */
   function setupPanelEventListeners() {
     // Prompt Settings Panel Toggle
-    if (promptSettingsToggle && promptSettingsManager && typeof promptSettingsManager.togglePanel === 'function') {
+    if (promptSettingsToggle) {
       promptSettingsToggle.addEventListener('click', (e) => {
         e.stopPropagation();
         promptSettingsManager.togglePanel();
@@ -309,7 +288,7 @@ export function createUIManager(appContext) {
     }
 
     // API Settings Panel Toggle
-    if (dom.apiSettingsToggle && apiManager && typeof apiManager.togglePanel === 'function') {
+    if (dom.apiSettingsToggle) {
         dom.apiSettingsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
             apiManager.togglePanel();
@@ -317,7 +296,7 @@ export function createUIManager(appContext) {
     } 
 
     // Chat History Panel Toggle
-    if (dom.chatHistoryToggle && chatHistoryUI && typeof chatHistoryUI.toggleChatHistoryPanel === 'function') {
+    if (dom.chatHistoryToggle) {
         dom.chatHistoryToggle.addEventListener('click', (e) => {
             e.stopPropagation();
             chatHistoryUI.toggleChatHistoryPanel();

@@ -267,7 +267,7 @@ export function createSettingsManager(appContext) {
     }
     
     // 更新消息发送器设置
-    if (messageSender && typeof messageSender.setSendChatHistory === 'function') {
+    if (messageSender) {
       messageSender.setSendChatHistory(enabled);
     }
   }
