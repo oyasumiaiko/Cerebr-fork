@@ -629,7 +629,7 @@ export function createMessageSender(appContext) {
    */
   function setCurrentConversationId(id) {
     currentConversationId = id;
-    console.log(`消息发送器: 设置当前会话ID为 ${id}`);
+    // console.log(`消息发送器: 设置当前会话ID为 ${id}`);
   }
 
   /**

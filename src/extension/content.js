@@ -21,7 +21,7 @@ class CerebrSidebar {
     this.lastUrl = window.location.href;
     this.isFullscreen = false;
     this.sidebarPosition = 'right'; // 默认侧边栏位置为右侧
-    console.log('CerebrSidebar 实例创建');
+    // console.log('CerebrSidebar 实例创建');
     this.initializeSidebar();
     this.setupUrlChangeListener();
     this.setupDragAndDrop();
@@ -65,7 +65,7 @@ class CerebrSidebar {
 
     chrome.storage.sync.set({ sidebarPosition: this.sidebarPosition });
     
-    console.log(`侧边栏位置已更新为: ${position}, 可见状态: ${this.isVisible}`);
+    // console.log(`侧边栏位置已更新为: ${position}, 可见状态: ${this.isVisible}`);
   }
 
   setupUrlChangeListener() {
@@ -133,7 +133,7 @@ class CerebrSidebar {
 
   async initializeSidebar() {
     try {
-      console.log('开始初始化侧边栏');
+      // console.log('开始初始化侧边栏');
 
       // 从存储中加载宽度、缩放因子和位置
       const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor', 'sidebarPosition']);
@@ -141,7 +141,7 @@ class CerebrSidebar {
       this.scaleFactor = result.scaleFactor || 1.0;
       this.sidebarPosition = result.sidebarPosition || 'right';
       
-      console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
+      // console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
       const container = document.createElement('cerebr-root');
 
@@ -310,7 +310,7 @@ class CerebrSidebar {
         childList: true
       });
 
-      console.log('侧边栏已添加到文档');
+      // console.log('侧边栏已添加到文档');
 
       this.setupEventListeners(resizer);
 
@@ -318,7 +318,7 @@ class CerebrSidebar {
       requestAnimationFrame(() => {
         this.sidebar.classList.add('initialized');
         this.initialized = true;
-        console.log('侧边栏初始化完成');
+        // console.log('侧边栏初始化完成');
       });
 
       // 延迟发送 URL_CHANGED 消息，等待 iframe 加载完毕
@@ -400,7 +400,7 @@ class CerebrSidebar {
           captureAndDropScreenshot();
           break;
         case 'REQUEST_PAGE_INFO':
-          console.log('收到请求页面信息消息');
+          // console.log('收到请求页面信息消息');
           const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
           if (iframe) {
             iframe.contentWindow.postMessage({
@@ -412,7 +412,7 @@ class CerebrSidebar {
               lang: document.documentElement.lang,
               charset: document.characterSet
             }, '*');
-            console.log('已发送当前页面信息到侧边栏');
+            // console.log('已发送当前页面信息到侧边栏');
           }
           break;
       }
@@ -448,7 +448,7 @@ class CerebrSidebar {
       // 如果之前和现在都是显示状态，无需操作
       if (wasVisible && this.isVisible && !this.isFullscreen) return;
 
-      console.log(`切换侧边栏: ${wasVisible} -> ${this.isVisible}, 位置: ${this.sidebarPosition}`);
+      // console.log(`切换侧边栏: ${wasVisible} -> ${this.isVisible}, 位置: ${this.sidebarPosition}`);
 
       // 根据当前显示状态更新侧边栏
       if (this.isVisible) {
@@ -501,7 +501,7 @@ class CerebrSidebar {
   }
 
   setupDragAndDrop() {
-    console.log('初始化拖放功能');
+    // console.log('初始化拖放功能');
 
     // 存储最后一次设置的图片数据
     let lastImageData = null;
@@ -665,7 +665,7 @@ class CerebrSidebar {
 let sidebar;
 try {
   sidebar = new CerebrSidebar();
-  console.log('侧边栏实例已创建');
+  // console.log('侧边栏实例已创建');
 } catch (error) {
   console.error('创建侧边栏实例失败:', error);
 }
@@ -682,7 +682,7 @@ let iframe = (_iframe || (_iframe = sidebar.sidebar?.querySelector('.cerebr-side
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type != 'REQUEST_STARTED' && message.type != 'REQUEST_COMPLETED' &&
     message.type != 'REQUEST_FAILED' && message.type != 'PING') {
-    console.log('content.js 收到消息:', message.type);
+    // console.log('content.js 收到消息:', message.type);
   }
 
   // 处理 PING 消息
@@ -791,17 +791,17 @@ function sendInitMessage(retryCount = 0) {
   const maxRetries = 10;
   const retryDelay = 1000;
 
-  console.log(`尝试发送初始化消息，第 ${retryCount + 1} 次尝试`);
+  // console.log(`尝试发送初始化消息，第 ${retryCount + 1} 次尝试`);
 
   chrome.runtime.sendMessage({
     type: 'CONTENT_LOADED',
     url: window.location.href
   }).then(response => {
-    console.log('Background 响应:', response);
+    // console.log('Background 响应:', response);
   }).catch(error => {
     console.log('发送消息失败:', error);
     if (retryCount < maxRetries) {
-      console.log(`${retryDelay}ms 后重试...`);
+      // console.log(`${retryDelay}ms 后重试...`);
       setTimeout(() => sendInitMessage(retryCount + 1), retryDelay);
     } else {
       console.error('达最大重试次数，初始化消息发送失败');

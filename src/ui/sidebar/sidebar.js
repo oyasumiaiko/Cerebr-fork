@@ -195,7 +195,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const imageTag = appContext.services.imageHandler.createImageTag(imageData, fileName);
             appContext.dom.imageContainer.appendChild(imageTag);
             appContext.dom.messageInput.dispatchEvent(new Event('input'));
-            console.log("图片插入到图片容器");
+            // console.log("图片插入到图片容器");
         };
     }
     initializeAppContextUtils();
@@ -595,7 +595,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.addEventListener('mousemove', throttle(updateUserActivity, 5000));
         setInterval(checkAndCleanupMemory, mmConfig.IDLE_CLEANUP_INTERVAL);
         setInterval(forcedMemoryCleanup, mmConfig.FORCED_CLEANUP_INTERVAL);
-        console.log(`内存管理系统已初始化: 空闲清理间隔=${mmConfig.IDLE_CLEANUP_INTERVAL/1000}秒, 强制清理间隔=${mmConfig.FORCED_CLEANUP_INTERVAL/60000}分钟`);
+        //console.log(`内存管理系统已初始化: 空闲清理间隔=${mmConfig.IDLE_CLEANUP_INTERVAL/1000}秒, 强制清理间隔=${mmConfig.FORCED_CLEANUP_INTERVAL/60000}分钟`);
     }
     function updateUserActivity() {
         appContext.state.memoryManagement.lastUserActivity = Date.now();
@@ -605,13 +605,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!mmState.isEnabled) return;
         const idleTime = Date.now() - mmState.lastUserActivity;
         if (idleTime > mmState.USER_IDLE_THRESHOLD) {
-            console.log(`用户已空闲${(idleTime/1000).toFixed(0)}秒，执行内存清理`);
+            //console.log(`用户已空闲${(idleTime/1000).toFixed(0)}秒，执行内存清理`);
             appContext.services.chatHistoryUI.clearMemoryCache();
         }
     }
     function forcedMemoryCleanup() {
         if (!appContext.state.memoryManagement.isEnabled) return;
-        console.log('执行定期强制内存清理');
+        //console.log('执行定期强制内存清理');
         appContext.services.chatHistoryUI.clearMemoryCache();
     }
     function throttle(func, limit) {
@@ -636,7 +636,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initMemoryManagement();
 
     setTimeout(() => {
-        console.log('初始化完成，主动请求当前页面信息');
+        //console.log('初始化完成，主动请求当前页面信息');
         window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
     }, 500);
 });

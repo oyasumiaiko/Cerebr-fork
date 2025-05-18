@@ -2,25 +2,7 @@
 window.addEventListener('message', (event) => {
     // 处理 URL 变化消息
     if (event.data && event.data.type === 'URL_CHANGED') {
-        console.log('[收到URL变化]', event.data.url);
-        // 检查网页问答开关是否打开
-        const webpageSwitch = document.querySelector('#webpage-switch');
-        if (webpageSwitch && webpageSwitch.checked) {
-            console.log('[网页问答] 重新获取页面内容');
-            // 模拟手动关闭再打开网页问答
-            console.log('[网页问答] 模拟关闭网页问答');
-            webpageSwitch.checked = false;
-            // 触发 change 事件
-            webpageSwitch.dispatchEvent(new Event('change'));
 
-            // 延迟一秒后重新打开
-            setTimeout(() => {
-                console.log('[网页问答] 模拟打开网页问答');
-                webpageSwitch.checked = true;
-                // 触发 change 事件
-                webpageSwitch.dispatchEvent(new Event('change'));
-            }, 1000);
-        }
     } else if (event.data && event.data.type === 'CLEAR_CHAT_COMMAND') {
         console.log('收到清空聊天记录命令');
         const clearChatButton = document.querySelector('#clear-chat');
@@ -40,7 +22,7 @@ let clearChat;
 function initializeUserQuestions() {
     const userMessages = document.querySelectorAll('.user-message');
     userQuestions = Array.from(userMessages).map(msg => msg.textContent.trim());
-    console.log('初始化历史问题:', userQuestions);
+    // console.log('初始化历史问题:', userQuestions);
 }
 
 // 等 DOM 加载完成
