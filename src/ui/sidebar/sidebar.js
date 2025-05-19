@@ -364,54 +364,36 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (isGithubRepo) {
                 const repoUrl = appContext.state.pageInfo?.url?.match(/https:\/\/github\.com\/[^\/]+\/[^\/]+/)?.[0];
                 if (repoUrl) {
-                    const content = await packRemoteRepoViaApiExtension(repoUrl);
-                    appContext.dom.messageInput.textContent = content + `\n---\n
-以上是当前 GitHub 仓库的全部内容
+                    try {
+                        appContext.utils.showNotification('正在打包仓库...', 3000);
+                        const content = await packRemoteRepoViaApiExtension(repoUrl);
+                        
+                        if (content) {
+                            const messageElement = appContext.services.messageProcessor.appendMessage(
+                                content, 
+                                'user', 
+                                false, // skipHistory = false, so it's added to history
+                                null,  // fragment = null, append to main chat container
+                                null   // imagesHTML = null
+                            );
 
-​**​核心任务:​**​ 生成一份​**​深度​**​、​**​结构化​**​的仓库总结报告。​**​最高优先级:​**​ 兼顾​**​宏观概览​**​与​**​关键技术细节​**​，提供​**​深刻洞察​**​，使读者能​**​快速、完整​**​地把握项目。
-
-​**​报告必须包含以下部分 (按此结构和标题输出):​**​
-
-1.  ​**​## 1. 核心目标与价值​**​
-    *   精炼定义项目解决的核心问题及独特价值。
-
-2.  ​**​## 2. 主要功能与特性​**​
-    *   详尽列举核心功能。
-    *   简述关键功能的实现原理（若可推断）。
-    *   突出创新或亮点功能。
-
-3.  ​**​## 3. 技术栈与架构​**​
-    *   识别主要技术栈（语言、框架、库）。
-    *   分析核心架构设计（模式、思想）。
-    *   推断技术选型考量（性能、效率、生态等，需注明推断）。
-
-4.  ​**​## 4. 代码结构与关键模块​**​
-    *   描述主要目录结构及其用途。
-    *   识别并解释​**​核心代码模块/文件​**​的作用与重要性（深入细节）。
-
-5.  ​**​## 5. 安装、配置与使用指南​**​
-    *   概述安装和配置步骤。
-    *   提供简洁的核心用法示例或 API 调用。
-
-6.  ​**​## 6. 项目状态与维护​**​
-    *   评估活跃度、维护情况（基于 commit、issue、PR、发布）。
-
-7.  ​**​## 7. 目标用户与适用场景​**​
-    *   定义主要用户画像。
-    *   描述典型应用场景。
-
-​**​高级分析要求 (必须包含，并单独设为第 8 部分):​**​
-
-8.  ​**​## 8. 洞察、与补充视角​**​
-    *   ​**​分析性洞察:​**​ 提供对项目设计优劣、潜在影响的深刻见解，而非简单罗列。
-    *   ​**​关键补充信息:​**​ ​**​主动思考并补充​**​ 任何对于全面理解此仓库​**​至关重要但容易被忽略​**​的方面（例如：特定的设计权衡、未在文档中明确说明的依赖关系、与其他技术的关键集成点等）。
-
-​**​输出格式:​**​
-*   ​**​严格使用 Markdown​**​，包含清晰的二级标题 (##)。
-*   语言​**​专业、精炼、准确​**​。
-
-​**​执行。​**​`;
-                    appContext.services.messageSender.sendMessage();
+                            if (messageElement) {
+                                // 用户添加的DOM操作：先设置输入框内容并聚焦
+                                appContext.dom.messageInput.textContent = '全面介绍一下当前仓库的结构和内容、逻辑';
+                                appContext.dom.messageInput.focus();
+                                
+                                appContext.utils.showNotification('仓库内容已添加到当前对话。', 2000);
+                                // 移除了 scrollToBottom，因为用户可能想查看输入框内容并立即发送
+                            } else {
+                                appContext.utils.showNotification('无法将仓库内容添加到对话中。', 3000);
+                            }
+                        } else {
+                            appContext.utils.showNotification('未能打包仓库内容或内容为空。', 3000);
+                        }
+                    } catch (error) {
+                        console.error("处理 repomixButton 点击事件失败:", error);
+                        appContext.utils.showNotification('打包仓库时发生错误。', 3000);
+                    }
                 }
             }
         });
