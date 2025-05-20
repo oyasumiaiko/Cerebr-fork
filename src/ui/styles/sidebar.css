@@ -2306,11 +2306,31 @@ body.hide-references .reference-number.superscript {
 
 /* 搜索加载指示器 */
 .search-loading-indicator {
+    font-family: monospace;
     text-align: center;
     padding: 20px;
     color: var(--cerebr-text-color);
 }
-
+.search-progress {
+    padding: 10px;
+    text-align: center;
+}
+.search-progress-text {
+    margin-bottom: 8px;
+    color: var(--cerebr-text-color);
+}
+.search-progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--cerebr-border-color);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.search-progress-fill {
+    height: 100%;
+    background: var(--cerebr-highlight);
+    transition: width 0.2s ease;
+}
 /* 添加更多间距 */
 #chat-history-panel .panel-header {
     margin-bottom: 20px;

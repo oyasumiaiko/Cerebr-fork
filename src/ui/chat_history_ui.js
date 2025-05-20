@@ -761,8 +761,7 @@ export function createChatHistoryUI(appContext) {
       
       // 在列表容器顶部插入搜索进度指示器
       const searchProgressIndicator = document.createElement('div');
-      searchProgressIndicator.textContent = '正在搜索聊天记录... (0%)';
-      searchProgressIndicator.className = 'search-loading-indicator'; // 可以复用或定义新的样式
+      searchProgressIndicator.className = 'search-loading-indicator';
       // 尝试将进度条放在筛选框下方，如果结构允许
       const filterBoxContainer = panel.querySelector('.filter-container');
       if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
@@ -822,7 +821,17 @@ export function createChatHistoryUI(appContext) {
         // 定期更新进度并交还控制权给事件循环
         if ((i + 1) % BATCH_PROCESS_SIZE === 0 || i === allHistoriesMeta.length - 1) {
           const percentComplete = Math.round(((i + 1) / allHistoriesMeta.length) * 100);
-          searchProgressIndicator.textContent = `正在搜索聊天记录... (${percentComplete}%)`;
+          
+          // 更新进度条样式
+          searchProgressIndicator.innerHTML = `
+            <div class="search-progress">
+              <div class="search-progress-text">正在搜索聊天记录... (${i+1}/${allHistoriesMeta.length})</div>
+              <div class="search-progress-bar">
+                <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
+              </div>
+            </div>
+          `;
+
           await new Promise(resolve => setTimeout(resolve, 0)); // Yield to event loop
         }
       }
