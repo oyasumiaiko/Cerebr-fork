@@ -555,11 +555,8 @@ export function createApiManager(appContext) {
         generationConfig: {
           responseMimeType: "text/plain",
           temperature: config.temperature ?? 1.0,
-          // topP: 0.95, // Gemini 使用 topP 而不是 top_p
+          topP: 0.95, // Gemini 使用 topP 而不是 top_p
         },
-        // tools: [ // 根据需要添加 tools
-        //   { "googleSearch": {} }
-        // ],
         ...overrides
       };
 
@@ -567,15 +564,28 @@ export function createApiManager(appContext) {
       const systemMessage = messages.find(msg => msg.role === 'system');
       if (systemMessage && systemMessage.content) {
         requestBody.systemInstruction = {
-          role: "system", // Gemini API文档中 systemInstruction 内部似乎不需要 role，但其类型是 Content，Content可以有role
+          // 根据Gemini API文档，systemInstruction是Content类型，其role是可选的 ('user'或'model')
+          // 对于系统指令，通常不指定role或留空，此处移除role字段
           parts: [{ text: systemMessage.content }]
         };
       }
        // 如果存在自定义参数，解析并合并到 generationConfig
       if (config.customParams) {
         try {
-          const extraParams = JSON.parse(config.customParams);
-          requestBody.generationConfig = { ...requestBody.generationConfig, ...extraParams };
+          const allCustomParams = JSON.parse(config.customParams);
+          const { tools, ...generationCustomParams } = allCustomParams; // 分离 tools 和其他参数
+
+          if (tools && Array.isArray(tools)) {
+            requestBody.tools = tools; // 将 tools 添加到请求体的根级别
+          }
+          
+          // 将剩余的自定义参数合并到 generationConfig
+          if (Object.keys(generationCustomParams).length > 0) {
+            requestBody.generationConfig = { 
+              ...requestBody.generationConfig, 
+              ...generationCustomParams 
+            };
+          }
         } catch (e) {
           console.error("解析自定义参数 JSON 失败 (Gemini)，请检查格式。", e);
         }
