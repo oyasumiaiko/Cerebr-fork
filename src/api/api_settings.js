@@ -544,11 +544,44 @@ export function createApiManager(appContext) {
         if (msg.role === 'system') {
           return null; // 在后面单独处理
         }
-        return {
-          role: role,
-          parts: [{ text: msg.content }]
-        };
-      }).filter(Boolean); // 过滤掉 null (即 system 消息)
+
+        const parts = [];
+        if (Array.isArray(msg.content)) { // OpenAI Vision 格式 (文本和/或图片)
+          msg.content.forEach(item => {
+            if (item.type === 'text') {
+              parts.push({ text: item.text });
+            } else if (item.type === 'image_url' && item.image_url && item.image_url.url) {
+              const dataUrl = item.image_url.url;
+              // 从 dataUrl 中提取 mime_type 和 base64 数据
+              // dataUrl 格式: "data:[<mime_type>];base64,<data>"
+              // 支持常见的图片类型: jpeg, png, gif, webp
+              const match = dataUrl.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,(.*)$/);
+              if (match) {
+                parts.push({
+                  inline_data: {
+                    mime_type: match[1], // 例如 "image/jpeg"
+                    data: match[2]       // Base64 编码的图片数据
+                  }
+                });
+              } else {
+                console.warn('不支持的图片数据URL格式或MIME类型 (Gemini):', dataUrl.substring(0, 30) + "...");
+                // 如果格式不匹配，可以考虑将原始文本作为回退（如果适用）
+                // 或者在此处不添加任何 part，具体取决于期望的行为
+              }
+            }
+          });
+        } else if (typeof msg.content === 'string') { // 纯文本消息
+          parts.push({ text: msg.content });
+        } else {
+            console.warn('未知的消息内容格式 (Gemini):', msg.content);
+        }
+        
+        // 只有当 parts 数组不为空时才创建 content 对象
+        if (parts.length > 0) {
+            return { role: role, parts: parts };
+        }
+        return null; // 如果没有有效的 parts，则不为此消息创建 content entry
+      }).filter(Boolean); // 过滤掉 null (例如 system 消息或无效消息)
 
       requestBody = {
         contents: contents,
@@ -565,7 +598,7 @@ export function createApiManager(appContext) {
       if (systemMessage && systemMessage.content) {
         requestBody.systemInstruction = {
           // 根据Gemini API文档，systemInstruction是Content类型，其role是可选的 ('user'或'model')
-          // 对于系统指令，通常不指定role或留空，此处移除role字段
+          // 对于系统指令，通常不指定role或留空
           parts: [{ text: systemMessage.content }]
         };
       }
@@ -595,7 +628,7 @@ export function createApiManager(appContext) {
       // 其他 API (如 OpenAI) 请求格式
       requestBody = {
         model: config.modelName,
-        messages: messages,
+        messages: messages, // OpenAI API可以直接处理包含图片数组的 messages
         stream: true,
         temperature: config.temperature ?? 1.0, // 确保有默认值
         top_p: 0.95,
