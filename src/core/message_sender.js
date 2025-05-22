@@ -43,6 +43,8 @@ export function createMessageSender(appContext) {
   let pageContent = null;
   let shouldSendChatHistory = true;
   let currentConversationId = null;
+  let aiThoughtsRaw = '';
+  let currentAiMessageId = null;
 
   /**
    * 获取是否应该自动滚动
@@ -151,6 +153,10 @@ export function createMessageSender(appContext) {
   async function sendMessage(options = {}) {
     // 验证API配置
     if (!validateApiConfig()) return;
+
+    // !!! 重置累积的思考内容和当前AI消息ID !!!
+    aiThoughtsRaw = ''; 
+    currentAiMessageId = null;
 
     // 从options中提取重新生成所需的变量
     const {
@@ -522,15 +528,63 @@ export function createMessageSender(appContext) {
         if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
         throw new Error(errorMessage); // Propagates to sendMessage's catch block
       }
-      const deltaContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (deltaContent) {
+
+      // Accumulators for the current event's content parts
+      let currentEventAnswerDelta = '';
+      let currentEventThoughtsDelta = '';
+      let groundingMetadata = null;
+
+      if (data.candidates && data.candidates.length > 0) {
+        const candidate = data.candidates[0];
+        if (candidate.content && candidate.content.parts) {
+          candidate.content.parts.forEach(part => {
+            if (part.text) {
+              if (part.thought) {
+                currentEventThoughtsDelta += part.text;
+              } else {
+                currentEventAnswerDelta += part.text;
+              }
+            }
+          });
+        }
+        groundingMetadata = candidate.groundingMetadata;
+      }
+      
+      // Only proceed if there's actual content (answer or thoughts)
+      if (currentEventAnswerDelta || currentEventThoughtsDelta) {
+        // Update global accumulators
+        aiResponse += currentEventAnswerDelta; // aiResponse now specifically tracks the main answer
+        aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta; // Accumulate thoughts separately
+
         if (!hasStartedResponse) {
           if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
           hasStartedResponse = true;
+          
+          // First event with content: create the message element
+          // Pass both accumulated answer and thoughts to appendMessage
+          const newAiMessageDiv = messageProcessor.appendMessage(
+            aiResponse, // Initial answer content
+            'ai',
+            false, // skipHistory = false, to create history node
+            null,  // fragment = null
+            null,  // imagesHTML = null
+            aiThoughtsRaw, // Initial thoughts content
+            null   // messageIdToUpdate = null for new message
+          );
+          if (newAiMessageDiv) {
+            currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+          }
           scrollToBottom();
+        } else if (currentAiMessageId) {
+          // Subsequent events: update the existing message element
+          messageProcessor.updateAIMessage(
+            currentAiMessageId, 
+            aiResponse, // Full current answer
+            aiThoughtsRaw, // Full current thoughts
+            groundingMetadata // Pass grounding metadata for each update
+          );
+          // scrollToBottom() is called within updateAIMessage
         }
-        aiResponse += deltaContent;
-        updateAIMessage(aiResponse, data.candidates?.[0]?.groundingMetadata);
       }
     }
 

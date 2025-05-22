@@ -12,6 +12,8 @@
  * @property {string} content - 消息内容
  * @property {string|null} parentId - 父节点ID
  * @property {Array<string>} children - 子节点ID列表
+ * @property {number} timestamp - 消息时间戳
+ * @property {string} [thoughtsRaw] - AI思考过程的原始文本 (可选)
  */
 
 /**
@@ -39,7 +41,8 @@ function createMessageNode(role, content, parentId = null) {
     content,
     parentId,
     children: [],
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    thoughtsRaw: null // 初始化思考过程文本
   };
 }
 

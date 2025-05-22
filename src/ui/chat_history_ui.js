@@ -341,6 +341,7 @@ export function createChatHistoryUI(appContext) {
     fullConversation.messages.forEach(msg => {
       const role = msg.role.toLowerCase() === 'assistant' ? 'ai' : msg.role;
       let messageElem = null;
+      const thoughtsToDisplay = msg.thoughtsRaw || null; // 获取思考过程文本
 
       if (Array.isArray(msg.content)) {
         const imagesHTML = document.createElement('div');
@@ -354,10 +355,11 @@ export function createChatHistoryUI(appContext) {
             imagesHTML.appendChild(imageTag);
           }
         });
-
-        messageElem = appendMessage(textContent, role, true, null, imagesHTML.innerHTML);
+        // 调用 appendMessage 时传递 thoughtsToDisplay
+        messageElem = appendMessage(textContent, role, true, null, imagesHTML.innerHTML, thoughtsToDisplay);
       } else {
-        messageElem = appendMessage(msg.content, role, true);
+        // 调用 appendMessage 时传递 thoughtsToDisplay
+        messageElem = appendMessage(msg.content, role, true, null, null, thoughtsToDisplay);
       }
       
       messageElem.setAttribute('data-message-id', msg.id);

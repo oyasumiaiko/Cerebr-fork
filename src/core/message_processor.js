@@ -48,22 +48,43 @@ export function createMessageProcessor(appContext) {
    * @param {boolean} skipHistory - 是否不更新历史记录
    * @param {DocumentFragment|null} fragment - 如使用文档片段则追加到此处，否则直接追加到聊天容器
    * @param {string|null} imagesHTML - 图片部分的 HTML 内容（可为空）
-   * @returns {HTMLElement} 新生成的消息元素
+   * @param {string|null} [initialThoughtsRaw=null] - AI的初始思考过程文本 (可选)
+   * @param {string|null} [messageIdToUpdate=null] - 如果是更新现有消息，则提供其ID
+   * @returns {HTMLElement} 新生成或更新的消息元素
    */
-  function appendMessage(text, sender, skipHistory = false, fragment = null, imagesHTML = null) {
-    const messageDiv = document.createElement('div');
-    messageDiv.classList.add('message', `${sender}-message`);
+  function appendMessage(text, sender, skipHistory = false, fragment = null, imagesHTML = null, initialThoughtsRaw = null, messageIdToUpdate = null) {
+    let messageDiv;
+    let node;
+
+    if (messageIdToUpdate) {
+      messageDiv = chatContainer.querySelector(`[data-message-id="${messageIdToUpdate}"]`);
+      if (!messageDiv) {
+        console.error('appendMessage: 试图更新的消息未找到 DOM 元素', messageIdToUpdate);
+        return null; // 或者创建一个新的
+      }
+      // 清理现有内容以便重新渲染，但保留消息ID等属性
+      const textContentDiv = messageDiv.querySelector('.text-content');
+      if (textContentDiv) textContentDiv.innerHTML = '';
+      const thoughtsDiv = messageDiv.querySelector('.thoughts-content');
+      if (thoughtsDiv) thoughtsDiv.remove(); // 移除旧的思考内容区域
+    } else {
+      messageDiv = document.createElement('div');
+      messageDiv.classList.add('message', `${sender}-message`);
+    }
 
     // 如果是批量加载，添加特殊类名
-    if (fragment) {
+    if (fragment && !messageIdToUpdate) { // 仅在新建时且使用fragment时添加
       messageDiv.classList.add('batch-load');
     }
 
     // 存储原始文本用于复制
     messageDiv.setAttribute('data-original-text', text);
+    if (initialThoughtsRaw) {
+      messageDiv.setAttribute('data-original-thoughts', initialThoughtsRaw);
+    }
     
-    // 如果存在图片内容，则创建图片区域容器
-    if (imagesHTML && imagesHTML.trim()) {
+    // 如果存在图片内容，则创建图片区域容器 (仅在新建时)
+    if (imagesHTML && imagesHTML.trim() && !messageIdToUpdate) {
       const imageContentDiv = document.createElement('div');
       imageContentDiv.classList.add('image-content');
       imageContentDiv.innerHTML = imagesHTML;
@@ -78,16 +99,31 @@ export function createMessageProcessor(appContext) {
       messageDiv.appendChild(imageContentDiv);
     }
 
-    // 创建文本内容容器，并处理 Markdown 与数学公式
-    const textContentDiv = document.createElement('div');
-    textContentDiv.classList.add('text-content');
+    // 创建或获取文本内容容器，并处理 Markdown 与数学公式
+    let textContentDiv = messageDiv.querySelector('.text-content');
+    if (!textContentDiv) {
+        textContentDiv = document.createElement('div');
+        textContentDiv.classList.add('text-content');
+        messageDiv.appendChild(textContentDiv);
+    }
     try {
       textContentDiv.innerHTML = processMathAndMarkdown(text);
     } catch (error) {
       console.error('处理数学公式和Markdown失败:', error);
       textContentDiv.innerText = text;
     }
-    messageDiv.appendChild(textContentDiv);
+
+    // 创建思考过程的显示区域 (如果需要)
+    if (initialThoughtsRaw) {
+      let thoughtsDiv = messageDiv.querySelector('.thoughts-content');
+      if (!thoughtsDiv) {
+        thoughtsDiv = document.createElement('div');
+        thoughtsDiv.classList.add('thoughts-content');
+        // 将思考内容区域插入到文本内容之前，或根据需要调整位置
+        messageDiv.insertBefore(thoughtsDiv, textContentDiv);
+      }
+      thoughtsDiv.innerHTML = `<div class="thoughts-prefix">思考过程:</div>${processMathAndMarkdown(initialThoughtsRaw)}`;
+    }
     
     // 处理消息中的其他元素
     messageDiv.querySelectorAll('a').forEach(link => {
@@ -108,114 +144,156 @@ export function createMessageProcessor(appContext) {
       // 渲染失败时保持原样
     }
 
-    // 如果提供了文档片段，添加到片段中；否则直接添加到聊天容器
-    if (fragment) {
-      fragment.appendChild(messageDiv);
-    } else {
-      chatContainer.appendChild(messageDiv);
+    // 如果提供了文档片段，添加到片段中；否则直接添加到聊天容器 (仅在新建时)
+    if (!messageIdToUpdate) {
+      if (fragment) {
+        fragment.appendChild(messageDiv);
+      } else {
+        chatContainer.appendChild(messageDiv);
+      }
     }
     
     // 更新聊天历史，将文本和图片信息封装到一个对象中
     if (!skipHistory) {
-      const processedContent = imageHandler.processImageTags(text, imagesHTML);
-      const node = chatHistoryManager.addMessageToTree(
-        sender === 'user' ? 'user' : 'assistant',
-        processedContent,
-        chatHistoryManager.chatHistory.currentNode
-      );
+      if (messageIdToUpdate) {
+        // 更新现有节点
+        node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageIdToUpdate);
+        if (node) {
+          node.content = text;
+          if (initialThoughtsRaw !== null) { // 允许清空thoughts
+             node.thoughtsRaw = initialThoughtsRaw;
+          }
+        }
+      } else {
+        // 创建新节点
+        const processedContent = imageHandler.processImageTags(text, imagesHTML);
+        node = chatHistoryManager.addMessageToTree(
+          sender === 'user' ? 'user' : 'assistant',
+          processedContent,
+          chatHistoryManager.chatHistory.currentNode
+        );
+        if (initialThoughtsRaw) {
+          node.thoughtsRaw = initialThoughtsRaw;
+        }
+        // 为消息div添加节点ID
+        messageDiv.setAttribute('data-message-id', node.id);
+      }
 
-      // 为消息div添加节点ID
-      messageDiv.setAttribute('data-message-id', node.id);
-
-      if (sender === 'ai') {
+      if (sender === 'ai' && !messageIdToUpdate) { // 仅在新建AI消息时添加updating
         messageDiv.classList.add('updating');
       }
     }
-
     return messageDiv;
   }
 
   /**
-   * 更新AI消息内容
-   * @param {string} aiResponse - 消息文本内容
+   * 更新AI消息内容，包括思考过程和最终答案
+   * @param {string} messageId - 要更新的消息的ID
+   * @param {string} newAnswerContent - 最新的完整答案文本
+   * @param {string|null} newThoughtsRaw - 最新的完整思考过程原始文本 (可选)
    * @param {Object|null} groundingMetadata - 引用元数据对象，包含引用信息
    */
-  function updateAIMessage(aiResponse, groundingMetadata) {
-    const lastMessage = chatContainer.querySelector('.ai-message:last-child');
+  function updateAIMessage(messageId, newAnswerContent, newThoughtsRaw, groundingMetadata) {
+    const messageDiv = chatContainer.querySelector(`[data-message-id="${messageId}"]`);
+    const node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
 
-    if (lastMessage) {
-      // 获取当前显示的文本
-      const currentText = lastMessage.getAttribute('data-original-text') || '';
-      // 如果新文本比当前文本长，说明有新内容需要更新
-      if (aiResponse.length > currentText.length) {
-        // 更新原始文本属性
-        lastMessage.setAttribute('data-original-text', aiResponse);
-
-        let processedText = aiResponse;
-        let htmlElements = [];
-        let processedResult = aiResponse;
-
-        // 处理引用标记和来源信息(如果存在)
-        if (groundingMetadata) {
-          processedResult = addGroundingToMessage(aiResponse, groundingMetadata);
-          if (typeof processedResult === 'object') {
-            processedText = processedResult.text;
-            htmlElements = processedResult.htmlElements;
-          }
-        }
-
-        // 处理数学公式和Markdown
-        let renderedHtml = processMathAndMarkdown(processedText);
-        lastMessage.innerHTML = renderedHtml;
-
-        // 处理新渲染的链接
-        lastMessage.querySelectorAll('a').forEach(link => {
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-        });
-
-        // 处理代码块的语法高亮
-        lastMessage.querySelectorAll('pre code').forEach(block => {
-          hljs.highlightElement(block);
-        });
-
-        // 渲染LaTeX公式
-        renderMathInElement(lastMessage, MATH_DELIMITERS.renderConfig);
-
-        if (groundingMetadata) {
-          // 替换引用标记占位符为HTML元素
-          if (htmlElements && htmlElements.length > 0) {
-            htmlElements.forEach(element => {
-              const placeholder = element.placeholder;
-              const html = element.html;
-              lastMessage.innerHTML = lastMessage.innerHTML.replace(placeholder, html);
-            });
-          }
-
-          // 清理任何剩余的未替换placeholder
-          lastMessage.innerHTML = lastMessage.innerHTML.replace(/\u200B😎REF_\d+😎\u200B/g, '');
-
-          // 添加引用来源列表
-          if (typeof processedResult === 'object' && processedResult.sources && processedResult.sources.length > 0) {
-            renderSourcesList(lastMessage, processedResult, groundingMetadata);
-          }
-        }
-
-        // 更新历史记录
-        const messageId = lastMessage.getAttribute('data-message-id');
-        if (messageId && chatHistoryManager.chatHistory.messages) {
-          const node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
-          if (node) {
-            node.content = aiResponse;
-          }
-        }
-
-        // 执行滚动
-        scrollToBottom();
-      }
-    } else {
-      appendMessage(aiResponse, 'ai');
+    if (!messageDiv || !node) {
+      console.error('updateAIMessage: 消息或历史节点未找到', messageId);
+      // 理论上，此时消息应该已由 appendMessage 创建，如果未找到则可能是逻辑错误
+      // 可以考虑调用 appendMessage 创建一个新的，但这可能表明流程问题
+      // appendMessage(newAnswerContent, 'ai', false, null, null, newThoughtsRaw, null);
+      return;
     }
+
+    // 更新原始文本属性
+    messageDiv.setAttribute('data-original-text', newAnswerContent);
+    if (newThoughtsRaw !== null) { // 允许 null 来表示没有思考过程
+      messageDiv.setAttribute('data-original-thoughts', newThoughtsRaw || '');
+    }
+
+    // 更新聊天历史节点
+    node.content = newAnswerContent;
+    if (newThoughtsRaw !== null) {
+        node.thoughtsRaw = newThoughtsRaw;
+    }
+
+    // 更新思考过程显示
+    let thoughtsDiv = messageDiv.querySelector('.thoughts-content');
+    if (newThoughtsRaw) {
+      if (!thoughtsDiv) {
+        thoughtsDiv = document.createElement('div');
+        thoughtsDiv.classList.add('thoughts-content');
+        // 确保 thoughtsDiv 在 textContentDiv 之前或之后，按需调整
+        const textContentDivForOrder = messageDiv.querySelector('.text-content');
+        if (textContentDivForOrder) {
+            messageDiv.insertBefore(thoughtsDiv, textContentDivForOrder);
+        } else {
+            messageDiv.appendChild(thoughtsDiv); // Fallback if textContent isn't there yet (should be rare)
+        }
+      }
+      thoughtsDiv.innerHTML = `<div class="thoughts-prefix">思考过程:</div>${processMathAndMarkdown(newThoughtsRaw)}`;
+    } else if (thoughtsDiv) {
+      thoughtsDiv.remove(); // 如果没有新的思考内容，移除旧的
+    }
+
+    // 更新答案显示
+    const textContentDiv = messageDiv.querySelector('.text-content');
+    if (!textContentDiv) {
+        console.error('updateAIMessage: .text-content div not found for message', messageId);
+        return;
+    }
+    
+    let processedText = newAnswerContent;
+    let htmlElements = [];
+    let processedResult = newAnswerContent;
+
+    // 处理引用标记和来源信息(如果存在)
+    if (groundingMetadata) {
+      processedResult = addGroundingToMessage(newAnswerContent, groundingMetadata);
+      if (typeof processedResult === 'object') {
+        processedText = processedResult.text;
+        htmlElements = processedResult.htmlElements;
+      }
+    }
+
+    // 处理数学公式和Markdown
+    textContentDiv.innerHTML = processMathAndMarkdown(processedText);
+
+    // 处理新渲染的链接
+    textContentDiv.querySelectorAll('a').forEach(link => {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    });
+
+    // 处理代码块的语法高亮
+    textContentDiv.querySelectorAll('pre code').forEach(block => {
+      hljs.highlightElement(block);
+    });
+
+    // 渲染LaTeX公式
+    renderMathInElement(messageDiv, MATH_DELIMITERS.renderConfig); // Render in whole messageDiv for thoughts + answer
+
+    if (groundingMetadata) {
+      // 替换引用标记占位符为HTML元素 (在答案部分)
+      if (htmlElements && htmlElements.length > 0) {
+        htmlElements.forEach(element => {
+          const placeholder = element.placeholder;
+          const html = element.html;
+          textContentDiv.innerHTML = textContentDiv.innerHTML.replace(placeholder, html);
+        });
+      }
+
+      // 清理任何剩余的未替换placeholder (在答案部分)
+      textContentDiv.innerHTML = textContentDiv.innerHTML.replace(/\u200B😎REF_\d+😎\u200B/g, '');
+
+      // 添加引用来源列表 (在答案部分之后)
+      if (typeof processedResult === 'object' && processedResult.sources && processedResult.sources.length > 0) {
+        renderSourcesList(textContentDiv, processedResult, groundingMetadata); // Append to textContentDiv
+      }
+    }
+
+    // 执行滚动
+    scrollToBottom();
   }
 
   /**
