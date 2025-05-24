@@ -189,7 +189,11 @@ export function createMessageProcessor(appContext) {
         }
     }
     try {
-      textContentDiv.innerHTML = processMathAndMarkdown(text);
+      if (sender === 'user') {
+        textContentDiv.innerText = text;
+      } else {
+        textContentDiv.innerHTML = processMathAndMarkdown(text);
+      }
     } catch (error) {
       console.error('处理数学公式和Markdown失败:', error);
       textContentDiv.innerText = text;
@@ -714,7 +718,7 @@ export function createMessageProcessor(appContext) {
     marked.setOptions({
       breaks: true,
       gfm: true,
-      sanitize: false,
+      sanitize: true,
       highlight: function (code, lang) {
         if (lang && hljs.getLanguage(lang)) {
           try {
