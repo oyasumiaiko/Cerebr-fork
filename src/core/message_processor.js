@@ -222,6 +222,39 @@ export function createMessageProcessor(appContext) {
       }
     }
     
+    // 为消息元素添加双击事件监听器，用于展开/折叠 foldMessageContent 创建的 details 元素
+    if (!messageDiv.dataset.dblclickListenerAdded) {
+      messageDiv.addEventListener('dblclick', function(event) { // 使用 function 关键字使 this 指向 messageDiv
+        const detailsElement = this.querySelector('details.folded-message');
+        if (detailsElement) {
+          const summaryElement = detailsElement.querySelector('summary');
+          if (summaryElement && summaryElement.contains(event.target)) {
+            return;
+          }
+
+          const scrollContainer = chatContainer; // chatContainer 来自外部作用域
+          // const scrollYBefore = scrollContainer.scrollTop; // 不再需要
+          // const rectBefore = this.getBoundingClientRect(); // 不再需要
+
+          // 切换 details 元素的 open 状态
+          if (detailsElement.hasAttribute('open')) {
+            detailsElement.removeAttribute('open');
+          } else {
+            detailsElement.setAttribute('open', '');
+          }
+
+          // 使用 requestAnimationFrame 等待浏览器完成布局更新
+          requestAnimationFrame(() => {
+            const messageTopRelativeToViewport = this.getBoundingClientRect().top;
+            const scrollContainerTopRelativeToViewport = scrollContainer.getBoundingClientRect().top;
+            const offsetToScroll = messageTopRelativeToViewport - scrollContainerTopRelativeToViewport;
+            scrollContainer.scrollTop += offsetToScroll;
+          });
+        }
+      });
+      messageDiv.dataset.dblclickListenerAdded = 'true';
+    }
+    
     if (!skipHistory) {
       if (messageIdToUpdate) {
         node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageIdToUpdate);
