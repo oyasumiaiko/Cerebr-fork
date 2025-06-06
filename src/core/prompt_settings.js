@@ -615,7 +615,7 @@ class PromptSettings {
                         
                         // Max bytes per chunk data, leaving room for key name and system overhead.
                         // A conservative estimate for non-data overhead per chunk item is ~100-200 bytes.
-                        const maxBytesPerChunkData = MAX_SYNC_ITEM_BYTES - 200; 
+                        const maxBytesPerChunkData = MAX_SYNC_ITEM_BYTES - 1000; 
 
                         while (charOffset < promptToChunk.length) {
                             let currentChunkStr = "";
