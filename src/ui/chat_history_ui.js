@@ -48,7 +48,6 @@ export function createChatHistoryUI(appContext) {
   const createImageTag = services.imageHandler.createImageTag;
   // 修改: 直接使用 services.chatHistoryManager.getCurrentConversationChain 访问获取会话链函数
   // const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
-  const messageSender = services.messageSender;
   const showNotification = utils.showNotification;
 
   let currentConversationId = null;
@@ -373,9 +372,7 @@ export function createChatHistoryUI(appContext) {
     currentConversationId = fullConversation.id;
     
     // 通知消息发送器当前会话ID已更新
-    if (messageSender) {
-      messageSender.setCurrentConversationId(currentConversationId);
-    }
+    services.messageSender.setCurrentConversationId(currentConversationId);
 
     // 滚动到底部
     requestAnimationFrame(() => {
@@ -400,7 +397,7 @@ export function createChatHistoryUI(appContext) {
    */
   async function clearChatHistory() {
     // 终止当前请求（若存在）
-    appContext.services.messageSender.abortCurrentRequest();
+    services.messageSender.abortCurrentRequest();
     // 如果有消息，等待保存完成
     // 修改: 使用 services.chatHistoryManager.chatHistory 访问消息
     if (services.chatHistoryManager.chatHistory.messages.length > 0) {
@@ -415,9 +412,7 @@ export function createChatHistoryUI(appContext) {
     activeConversation = null;
     
     // 通知消息发送器当前会话ID已重置
-    if (messageSender) {
-      messageSender.setCurrentConversationId(null);
-    }
+    services.messageSender.setCurrentConversationId(null);
   }
 
   /**
@@ -1759,9 +1754,7 @@ export function createChatHistoryUI(appContext) {
       currentConversationId = newConversationId;
       
       // 通知消息发送器更新当前会话ID
-      if (messageSender) {
-        messageSender.setCurrentConversationId(newConversationId);
-      }
+      services.messageSender.setCurrentConversationId(newConversationId);
       
       console.log('成功创建分支对话:', newConversationId);
       

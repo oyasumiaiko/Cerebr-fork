@@ -22,9 +22,7 @@ export function createMessageProcessor(appContext) {
   const chatContainer = dom.chatContainer;
   const chatHistoryManager = services.chatHistoryManager;
   const imageHandler = services.imageHandler;
-  const settingsManager = services.settingsManager;
   const scrollToBottom = utils.scrollToBottom;
-  const showReference = settingsManager.getSetting('showReference');
   
   // 配置常量
   const MATH_DELIMITERS = {
@@ -382,7 +380,7 @@ export function createMessageProcessor(appContext) {
     if (!groundingMetadata?.groundingSupports) return text;
 
     // Dynamically get showReference setting
-    const showReferenceSetting = settingsManager.getSetting('showReference');
+    const showReferenceSetting = appContext.services.settingsManager.getSetting('showReference');
 
     let markedText = text;
     const htmlElements = [];
