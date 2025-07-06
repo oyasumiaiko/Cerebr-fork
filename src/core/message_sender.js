@@ -588,42 +588,79 @@ export function createMessageSender(appContext) {
       }
     }
 
+    /**
+     * 处理与OpenAI兼容的API的SSE事件
+     * @param {Object} data - 从SSE事件中解析出的JSON对象
+     */
     function handleOpenAIEvent(data) {
-        if (data.error) { 
-            const msg = data.error.message || 'Unknown OpenAI error'; 
-            console.error('OpenAI API error:', data.error);
-            if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-            throw new Error(msg);
-        }
-        if (data.choices?.[0]?.error) { 
-            const msg = data.choices[0].error.message || 'Unknown OpenAI model error';
-            console.error('OpenAI Model error:', data.choices[0].error);
-            if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-            throw new Error(msg);
-        }
-        
-        const deltaContent = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content;
-        if (deltaContent) {
-            if (!hasStartedResponse) {
-                if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-                hasStartedResponse = true;
-                scrollToBottom();
-            }
-            aiResponse += deltaContent;
-            aiResponse = aiResponse.replace(/\nabla/g, '\\nabla'); 
-            updateAIMessage(aiResponse, data.choices?.[0]?.groundingMetadata);
-        }
-    }
-  }
+      // 检查API返回的错误信息
+      if (data.error) { 
+          const msg = data.error.message || 'Unknown OpenAI error'; 
+          console.error('OpenAI API error:', data.error);
+          if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+          // 抛出错误，让外层`sendMessage`的try...catch块捕获并处理
+          throw new Error(msg);
+      }
+      // 检查 choices 数组中的错误信息
+      if (data.choices?.[0]?.error) { 
+          const msg = data.choices[0].error.message || 'Unknown OpenAI model error';
+          console.error('OpenAI Model error:', data.choices[0].error);
+          if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+          throw new Error(msg);
+      }
 
-  /**
-   * 更新AI消息内容
-   * @private
-   * @param {string} aiResponse - 消息文本内容
-   * @param {Object|null} groundingMetadata - 引用元数据对象
-   */
-  function updateAIMessage(aiResponse, groundingMetadata) {
-    messageProcessor.updateAIMessage(aiResponse, groundingMetadata);
+      // 从事件数据中提取内容增量 (delta)
+      let currentEventAnswerDelta = data.choices?.[0]?.delta?.content;
+      let currentEventThoughtsDelta = data.choices?.[0]?.delta?.reasoning_content || data.choices?.[0]?.delta?.reasoning || '';
+      
+
+      // 只有在有实际内容增量时才继续处理
+      if (currentEventAnswerDelta || currentEventThoughtsDelta) {
+          // 累积AI的完整响应文本
+          aiResponse += currentEventAnswerDelta;
+          aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta; // Accumulate thoughts separately
+
+          // 【关键逻辑】检查这是否是流式响应的第一个数据块
+          if (!hasStartedResponse) {
+              // 如果是，则移除 "正在等待回复..." 等加载提示信息
+              if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+              
+              // 标记响应已经开始，后续数据块将走更新逻辑
+              hasStartedResponse = true;
+              
+              // 【创建消息】调用 appendMessage 来创建新的AI消息DOM元素
+              // 这是获取唯一 messageId 的关键步骤
+              const newAiMessageDiv = messageProcessor.appendMessage(
+                  aiResponse,     // 传入初始的文本内容
+                  'ai',           // 指定发送者为 'ai'
+                  false,          // false: 需要在聊天历史中创建节点
+                  null,           // fragment: null, 直接添加到DOM
+                  null,           // imagesHTML: null
+                  aiThoughtsRaw,  // initialThoughtsRaw: 传入初始的思考内容
+                  null            // messageIdToUpdate: null, 因为是创建新消息
+              );
+              
+              // 从新创建的DOM元素中获取并保存 messageId
+              if (newAiMessageDiv) {
+                  currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+              }
+              
+              // 自动滚动到聊天底部
+              scrollToBottom();
+
+          } else if (currentAiMessageId) {
+              // 【更新消息】如果不是第一个数据块，并且我们已经有了 messageId
+              // 则调用 updateAIMessage 来更新已存在的消息内容
+              messageProcessor.updateAIMessage(
+                  currentAiMessageId, // <-- 使用之前保存的正确ID
+                  aiResponse,         // <-- 传递当前累积的完整文本
+                  aiThoughtsRaw,      // thoughtsRaw, 传入当前累积的思考内容
+                  null                // groundingMetadata: 传递引用元数据（如果存在）
+              );
+              // scrollToBottom() 会在 updateAIMessage 内部被调用，这里无需重复调用
+          }
+      }
+    }
   }
 
   /**
