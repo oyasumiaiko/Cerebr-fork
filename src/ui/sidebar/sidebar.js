@@ -285,59 +285,90 @@ document.addEventListener('DOMContentLoaded', async () => {
                 appContext.utils.showNotification('未能获取当前页面URL');
                 return;
             }
+    
+            // 1. 获取并排序历史记录（最新的在前）
             const histories = await getAllConversationMetadata();
             const sortedHistories = histories.sort((a, b) => b.endTime - a.endTime);
-            
+    
+            /**
+             * 生成候选 URL 列表 (更新版：使用 /, ?, &, # 作为分隔符)
+             */
             function generateCandidateUrls(urlString) {
-                const candidates = [];
+                const candidates = new Set();
                 try {
                     const urlObj = new URL(urlString);
-                    candidates.push(urlString);
-                    const baseUrl = urlObj.origin + urlObj.pathname;
-                    if (baseUrl !== urlString) candidates.push(baseUrl);
-                    const segments = urlObj.pathname.split('/').filter(Boolean);
-                    for (let i = segments.length - 1; i > 0; i--) {
-                        const candidate = urlObj.origin + "/" + segments.slice(0, i).join('/');
-                        if (!candidates.includes(candidate)) candidates.push(candidate);
+                    const origin = urlObj.origin;
+    
+                    let current = urlString;
+    
+                    while (current.length > origin.length) {
+                        candidates.add(current);
+    
+                        const searchArea = current.substring(origin.length);
+                        
+                        // 使用结构性分隔符: /, ?, &, #
+                        const lastDelimiterIndexInSearchArea = Math.max(
+                            searchArea.lastIndexOf('/'),
+                            searchArea.lastIndexOf('?'),
+                            searchArea.lastIndexOf('&'),
+                            searchArea.lastIndexOf('#') // <-- 添加了 Hash
+                        );
+    
+                        if (lastDelimiterIndexInSearchArea === -1) {
+                            break;
+                        }
+    
+                        const delimiterIndex = origin.length + lastDelimiterIndexInSearchArea;
+                        current = current.substring(0, delimiterIndex);
+    
+                        // 避免产生 "origin/" 这样的无效中间态
+                        if (current === origin + '/') {
+                            current = origin;
+                        }
                     }
-                    if (!candidates.includes(urlObj.origin)) candidates.push(urlObj.origin);
-                } catch (error) { console.error("generateCandidateUrls error: ", error); }
-                return candidates;
+    
+                    candidates.add(origin);
+    
+                } catch (error) {
+                    console.error("generateCandidateUrls error: ", error);
+                    if (urlString) candidates.add(urlString);
+                }
+                return Array.from(candidates);
             }
-            
+    
+            // 2. 生成候选 URL 列表
+            const candidateUrls = generateCandidateUrls(currentUrl);
+            // console.log("Candidates:", candidateUrls); // 用于调试
+    
+            // 3. 匹配逻辑 (保持不变)
             let matchingConversation = null;
-            if (currentUrl.includes('?')) {
-                matchingConversation = sortedHistories.find(conv => conv.url === currentUrl);
-                if (!matchingConversation) {
-                    const normalizedCurrent = new URL(currentUrl).origin + new URL(currentUrl).pathname;
-                    matchingConversation = sortedHistories.find(conv => {
-                        try {
-                            const convUrlObj = new URL(conv.url);
-                            return (convUrlObj.origin + convUrlObj.pathname) === normalizedCurrent;
-                        } catch { return false; }
-                    });
-                }
-            } else {
-                const candidateUrls = generateCandidateUrls(currentUrl);
-                for (const candidate of candidateUrls) {
-                    matchingConversation = sortedHistories.find(conv => {
-                        try {
-                            const convUrlObj = new URL(conv.url);
-                            const normalizedConv = convUrlObj.origin + convUrlObj.pathname;
-                            return conv.url === candidate || normalizedConv === candidate;
-                        } catch { return false; }
-                    });
-                    if (matchingConversation) break;
+    
+            for (const candidate of candidateUrls) {
+                const match = sortedHistories.find(conv => {
+                    try {
+                        // 实现“前缀匹配”
+                        return conv.url.startsWith(candidate);
+                    } catch {
+                        return false;
+                    }
+                });
+    
+                if (match) {
+                    matchingConversation = match;
+                    break;
                 }
             }
-            
+    
+            // 4. 加载对话或提示
             if (matchingConversation) {
+                // console.log("Loading matched conversation:", matchingConversation.url);
                 appContext.services.chatHistoryUI.loadConversationIntoChat(matchingConversation);
             } else {
-                appContext.utils.showNotification('未找到本页面的历史对话');
+                appContext.utils.showNotification('未找到本页面的相关历史对话');
             }
         });
     }
+    
 
     if (appContext.dom.emptyStateScreenshot) {
         appContext.dom.emptyStateScreenshot.addEventListener('click', () => {
