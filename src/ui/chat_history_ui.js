@@ -64,6 +64,121 @@ export function createChatHistoryUI(appContext) {
   let lastStatsUpdateTime = 0;
   const STATS_CACHE_DURATION = 5 * 60 * 1000; // 5分钟更新一次统计数据
 
+  // --- 元数据缓存（UI层） ---
+  let metaCache = { data: null, time: 0 };
+  const META_CACHE_TTL = 30 * 1000; // 30秒缓存元数据，打开面板/轻度操作极速响应
+
+  function invalidateMetadataCache() {
+    metaCache.data = null;
+    metaCache.time = 0;
+  }
+
+  async function getAllConversationMetadataWithCache(forceUpdate = false) {
+    if (forceUpdate || !metaCache.data || (Date.now() - metaCache.time > META_CACHE_TTL)) {
+      metaCache.data = await getAllConversationMetadata();
+      metaCache.time = Date.now();
+    }
+    return metaCache.data;
+  }
+
+  // --- 任务令牌（运行ID）用于取消过期的加载流程 ---
+  function createRunId() {
+    return `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  }
+
+  // --- 面板样式注入 & 骨架屏与哨兵 ---
+  let historyStylesInjected = false;
+  function ensurePanelStylesInjected() {
+    if (historyStylesInjected) return;
+    const style = document.createElement('style');
+    style.id = 'chat-history-enhanced-styles';
+    style.textContent = `
+#chat-history-list {
+  content-visibility: auto;
+  contain-intrinsic-size: 1000px 600px;
+}
+.skeleton-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #2a2a2a);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+.skeleton-title, .skeleton-sub {
+  background: linear-gradient(90deg, rgba(180,180,180,0.08) 25%, rgba(255,255,255,0.18) 37%, rgba(180,180,180,0.08) 63%);
+  background-size: 400% 100%;
+  border-radius: 6px;
+}
+.skeleton-title { height: 14px; width: 70%; margin-bottom: 8px; }
+.skeleton-sub { height: 10px; width: 45%; }
+@keyframes skeletonPulse {
+  0% { opacity: .7 }
+  50% { opacity: 1 }
+  100% { opacity: .7 }
+}
+.end-sentinel { height: 1px; width: 100%; }
+`;
+    document.head.appendChild(style);
+    historyStylesInjected = true;
+  }
+
+  function renderSkeleton(container, count = 8) {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < count; i++) {
+      const sk = document.createElement('div');
+      sk.className = 'skeleton-item';
+      sk.innerHTML = '<div class="skeleton-title"></div><div class="skeleton-sub"></div>';
+      frag.appendChild(sk);
+    }
+    container.appendChild(frag);
+  }
+
+  function removeSkeleton(container) {
+    container.querySelectorAll('.skeleton-item').forEach(n => n.remove());
+  }
+
+  function ensureEndSentinel(container) {
+    let sentinel = container.querySelector('.end-sentinel');
+    if (!sentinel) {
+      sentinel = document.createElement('div');
+      sentinel.className = 'end-sentinel';
+      container.appendChild(sentinel);
+    }
+    return sentinel;
+  }
+
+  function setupEndSentinelObserver(panel, container, onIntersect, runId) {
+    if (panel._ioObserver) {
+      panel._ioObserver.disconnect();
+    }
+    const sentinel = ensureEndSentinel(container);
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (!entry || !entry.isIntersecting) return;
+      if (panel.dataset.runId !== runId) return;
+      onIntersect();
+    }, { root: container, rootMargin: '800px 0px 0px 0px', threshold: 0.0 });
+    observer.observe(sentinel);
+    panel._ioObserver = observer;
+  }
+
+  function cleanupHistoryPanel(panel) {
+    try {
+      const listContainer = panel.querySelector('#chat-history-list');
+      if (listContainer && listContainer._scrollListener) {
+        listContainer.removeEventListener('scroll', listContainer._scrollListener);
+        listContainer._scrollListener = null;
+      }
+      if (panel._ioObserver) {
+        panel._ioObserver.disconnect();
+        panel._ioObserver = null;
+      }
+      const menu = document.getElementById('chat-history-context-menu');
+      if (menu) menu.remove();
+      panel.dataset.runId = '';
+    } catch (e) {
+      console.warn('清理面板异常:', e);
+    }
+  }
+
   // --- Infinite Scroll/Batch Rendering State ---
   const BATCH_SIZE = 100; // 每批加载的项目数
   let currentDisplayItems = []; // 当前筛选和排序后的所有项目
@@ -239,6 +354,7 @@ export function createChatHistoryUI(appContext) {
 
     // 使用 IndexedDB 存储对话记录
     await putConversation(conversation);
+    invalidateMetadataCache();
     
     // 更新当前会话ID和活动会话
     currentConversationId = conversation.id;
@@ -481,6 +597,7 @@ export function createChatHistoryUI(appContext) {
       panel.addEventListener('transitionend', function handler(e) {
         if (e.propertyName === 'opacity' && !panel.classList.contains('visible')) {
           panel.style.display = 'none';
+          cleanupHistoryPanel(panel);
           // 尝试将焦点设置回主输入框
           chatInputElement?.focus();
           panel.removeEventListener('transitionend', handler);
@@ -555,6 +672,7 @@ export function createChatHistoryUI(appContext) {
             conversation.summary = newName.trim();
             await putConversation(conversation); // 保存更新
             updateConversationInCache(conversation); // 更新缓存
+            invalidateMetadataCache();
             refreshChatHistory(); // 刷新列表显示新名称
             
             // 可选：添加成功提示
@@ -650,6 +768,7 @@ export function createChatHistoryUI(appContext) {
     deleteOption.addEventListener('click', async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
       await deleteConversation(conversationId);
+      invalidateMetadataCache();
       menu.remove();
 
       // 从缓存中移除
@@ -717,84 +836,86 @@ export function createChatHistoryUI(appContext) {
    * @param {string} filterText - 过滤文本
    */
   async function loadConversationHistories(panel, filterText) {
-    // 设置当前的过滤条件标识
+    // 生成本次加载的 runId 并标记到面板，用于取消过期任务
+    ensurePanelStylesInjected();
+    const runId = createRunId();
     panel.dataset.currentFilter = filterText;
+    panel.dataset.runId = runId;
+
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
-    // const oldFilter = panel.dataset.prevFilter || ""; // Not directly used with scroll-to-top approach
-    // const currentScroll = listContainer.scrollTop || 0; // Not directly used
-    // panel.dataset.prevFilter = filterText; // Not directly used
 
-    listContainer.innerHTML = ''; // 清空列表以进行新的加载/筛选
-    listContainer.scrollTop = 0; // 新的筛选/加载总是滚动到顶部
+    // 重置并显示骨架屏，立刻给到视觉反馈
+    listContainer.innerHTML = '';
+    listContainer.scrollTop = 0;
+    renderSkeleton(listContainer, 8);
 
     // 解析筛选条件
     const countFilterMatch = filterText.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
     let isCountFilter = false;
     let countOperator = null;
     let countThreshold = 0;
-    
+
     if (countFilterMatch) {
       isCountFilter = true;
       countOperator = countFilterMatch[1];
       countThreshold = parseInt(countFilterMatch[2], 10);
     }
-    
-    const pinnedIds = await getPinnedIds();
-    const allHistoriesMeta = await getAllConversationMetadata();
-    if (panel.dataset.currentFilter !== filterText) return; // 筛选条件在异步获取数据时已改变
 
-    let sourceHistories = []; 
-    let effectiveFilterTextForHighlight = filterText; // 用于高亮的实际文本
+    const pinnedIds = await getPinnedIds();
+    const allHistoriesMeta = await getAllConversationMetadataWithCache();
+    // 任务可能已被新一轮加载替换
+    if (panel.dataset.runId !== runId) return;
+
+    let sourceHistories = [];
+    let effectiveFilterTextForHighlight = filterText;
 
     if (isCountFilter) {
-      sourceHistories = allHistoriesMeta.filter(history => 
+      sourceHistories = allHistoriesMeta.filter(history =>
         compareCount(history.messageCount, countOperator, countThreshold)
       );
-      effectiveFilterTextForHighlight = ''; // 数量筛选时不高亮文本
+      effectiveFilterTextForHighlight = '';
     } else if (filterText) {
       const lowerFilter = filterText.toLowerCase();
       const filteredResults = [];
-      
+
       // 在列表容器顶部插入搜索进度指示器
       const searchProgressIndicator = document.createElement('div');
       searchProgressIndicator.className = 'search-loading-indicator';
-      // 尝试将进度条放在筛选框下方，如果结构允许
+
       const filterBoxContainer = panel.querySelector('.filter-container');
       if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
-          filterBoxContainer.insertAdjacentElement('afterend', searchProgressIndicator);
+        filterBoxContainer.insertAdjacentElement('afterend', searchProgressIndicator);
       } else {
-          listContainer.insertBefore(searchProgressIndicator, listContainer.firstChild);
+        listContainer.insertBefore(searchProgressIndicator, listContainer.firstChild);
       }
 
-      const BATCH_PROCESS_SIZE = 25; // 每次处理的对话元数据数量
+      const BATCH_PROCESS_SIZE = 25;
 
       for (let i = 0; i < allHistoriesMeta.length; i++) {
-        // 检查在异步处理过程中筛选条件是否已更改
-        if (panel.dataset.currentFilter !== filterText) {
+        // 若当前任务已过期，立刻终止
+        if (panel.dataset.runId !== runId) {
           if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-          return; // 终止处理
+          return;
         }
 
         const historyMeta = allHistoriesMeta[i];
         const url = (historyMeta.url || '').toLowerCase();
         const summary = (historyMeta.summary || '').toLowerCase();
-        
+
         let foundInMeta = false;
         if (url.includes(lowerFilter) || summary.includes(lowerFilter)) {
           filteredResults.push(historyMeta);
           foundInMeta = true;
         }
-        
-        // 仅当元数据中未找到时，才搜索完整内容
-        if (!foundInMeta) { 
+
+        if (!foundInMeta) {
           try {
-            // getConversationById 可能是耗时操作
             const fullConversation = await getConversationById(historyMeta.id);
-            // 再次检查筛选条件 (await 之后)
-            if (panel.dataset.currentFilter !== filterText) {
+            // await 之后再次核对任务是否仍然有效
+            if (panel.dataset.runId !== runId) {
               if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-              return; 
+              return;
             }
 
             if (fullConversation) {
@@ -803,11 +924,8 @@ export function createChatHistoryUI(appContext) {
                 : '';
               const lowerMessages = messagesContent.toLowerCase();
               if (lowerMessages.includes(lowerFilter)) {
-                filteredResults.push(fullConversation); 
-                updateConversationInCache(fullConversation); 
-              } else {
-                // 对于未匹配但已加载完整内容的会话，其内存将由缓存淘汰策略管理
-                // 无需在此处显式删除，以避免破坏缓存逻辑的复杂性
+                filteredResults.push(fullConversation);
+                updateConversationInCache(fullConversation);
               }
             }
           } catch (error) {
@@ -815,11 +933,9 @@ export function createChatHistoryUI(appContext) {
           }
         }
 
-        // 定期更新进度并交还控制权给事件循环
+        // 批次更新进度并让出主线程
         if ((i + 1) % BATCH_PROCESS_SIZE === 0 || i === allHistoriesMeta.length - 1) {
           const percentComplete = Math.round(((i + 1) / allHistoriesMeta.length) * 100);
-          
-          // 更新进度条样式
           searchProgressIndicator.innerHTML = `
             <div class="search-progress">
               <div class="search-progress-text">正在搜索聊天记录... (${i+1}/${allHistoriesMeta.length})</div>
@@ -828,19 +944,18 @@ export function createChatHistoryUI(appContext) {
               </div>
             </div>
           `;
-
-          await new Promise(resolve => setTimeout(resolve, 0)); // Yield to event loop
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
       }
-      
-      if (searchProgressIndicator.parentNode) searchProgressIndicator.remove(); // 移除进度指示器
+
+      if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
       sourceHistories = filteredResults;
       // effectiveFilterTextForHighlight 保持为 filterText
     } else {
-      sourceHistories = allHistoriesMeta; // 无筛选或计数筛选，使用所有元数据
-      effectiveFilterTextForHighlight = ''; // 无文本筛选则不高亮
+      sourceHistories = allHistoriesMeta;
+      effectiveFilterTextForHighlight = '';
     }
-    
+
     const pinnedItems = [];
     const unpinnedItems = [];
     const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
@@ -857,13 +972,14 @@ export function createChatHistoryUI(appContext) {
     unpinnedItems.sort((a, b) => b.endTime - a.endTime);
 
     currentDisplayItems = [...pinnedItems, ...unpinnedItems];
-    currentPinnedItemsCountInDisplay = pinnedItems.length; // 存储当前筛选结果中的置顶项数量
+    currentPinnedItemsCountInDisplay = pinnedItems.length;
 
     currentlyRenderedCount = 0;
     currentGroupLabelForBatchRender = null;
     isLoadingMoreItems = false;
 
     if (currentDisplayItems.length === 0) {
+      removeSkeleton(listContainer);
       const emptyMsg = document.createElement('div');
       if (isCountFilter) {
         emptyMsg.textContent = `没有消息数量 ${countOperator} ${countThreshold} 的聊天记录`;
@@ -877,29 +993,21 @@ export function createChatHistoryUI(appContext) {
     }
 
     if (pinnedItems.length > 0) {
+      removeSkeleton(listContainer);
       const pinnedHeader = document.createElement('div');
       pinnedHeader.className = 'chat-history-group-header pinned-header';
       pinnedHeader.textContent = '已置顶';
       listContainer.appendChild(pinnedHeader);
     }
-    
-    // 首次加载批次
-    await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter);
 
-    // 移除旧的滚动监听器（如果存在）
-    if (listContainer._scrollListener) {
-      listContainer.removeEventListener('scroll', listContainer._scrollListener);
-    }
-    // 添加新的滚动监听器
-    listContainer._scrollListener = async () => {
-      if (panel.dataset.currentFilter !== filterText) { // 检查筛选条件是否已更改
-        return;
-      }
-      if (listContainer.scrollTop + listContainer.clientHeight >= listContainer.scrollHeight - 200 && !isLoadingMoreItems) {
-        await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter);
-      }
-    };
-    listContainer.addEventListener('scroll', listContainer._scrollListener);
+    // 首次加载批次
+    await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+
+    // 使用 IntersectionObserver 进行后续批次加载
+    setupEndSentinelObserver(panel, listContainer, async () => {
+      if (panel.dataset.runId !== runId) return;
+      await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+    }, runId);
   }
   
   /**
@@ -1031,15 +1139,14 @@ export function createChatHistoryUI(appContext) {
    * @param {string} originalFilterTextForHighlight - 用于文本高亮的原始过滤文本
    * @param {string} currentPanelFilter - 调用此函数时面板当前的过滤条件，用于一致性检查
    */
-  async function renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter) {
+  async function renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId) {
     if (isLoadingMoreItems || currentlyRenderedCount >= currentDisplayItems.length) {
       return;
     }
     isLoadingMoreItems = true;
 
     const panel = listContainer.closest('#chat-history-panel');
-    if (panel && panel.dataset.currentFilter !== currentPanelFilter) {
-      console.log("Render cycle aborted, panel filter changed from", currentPanelFilter, "to", panel.dataset.currentFilter);
+    if (panel && (panel.dataset.currentFilter !== currentPanelFilter || panel.dataset.runId !== currentRunId)) {
       isLoadingMoreItems = false;
       return;
     }
@@ -1055,9 +1162,7 @@ export function createChatHistoryUI(appContext) {
       if (!isConvPinned) {
         const convDate = new Date(conv.startTime);
         const groupLabel = getGroupLabel(convDate);
-        
-        // 检查是否是当前渲染列表中的第一个未置顶项，或者是新的日期分组
-        // currentPinnedItemsCountInDisplay 是在 loadConversationHistories 中计算的，表示当前过滤条件下置顶项的总数
+
         const isFirstUnpinnedAfterPinnedBlock = (convIndex === currentPinnedItemsCountInDisplay);
 
         if (isFirstUnpinnedAfterPinnedBlock || currentGroupLabelForBatchRender !== groupLabel) {
@@ -1068,10 +1173,14 @@ export function createChatHistoryUI(appContext) {
           currentGroupLabelForBatchRender = groupLabel;
         }
       }
-      
+
       const itemElement = createConversationItemElement(conv, originalFilterTextForHighlight, isConvPinned);
       fragment.appendChild(itemElement);
       itemsRenderedInThisCall++;
+    }
+
+    if (currentlyRenderedCount === 0) {
+      removeSkeleton(listContainer);
     }
 
     listContainer.appendChild(fragment);
@@ -1080,10 +1189,11 @@ export function createChatHistoryUI(appContext) {
 
     if (currentlyRenderedCount < currentDisplayItems.length && itemsRenderedInThisCall > 0) {
       requestAnimationFrame(() => {
+        const panelNow = listContainer.closest('#chat-history-panel');
+        if (!panelNow) return;
+        if (panelNow.dataset.currentFilter !== currentPanelFilter || panelNow.dataset.runId !== currentRunId) return;
         if (listContainer.scrollHeight <= listContainer.clientHeight) {
-          if (panel && panel.dataset.currentFilter === currentPanelFilter) {
-            renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter);
-          }
+          renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId);
         }
       });
     }
@@ -1314,6 +1424,7 @@ export function createChatHistoryUI(appContext) {
    * 显示聊天记录面板
    */
   async function showChatHistoryPanel() {
+    ensurePanelStylesInjected();
     let panel = document.getElementById('chat-history-panel');
     let filterInput; // 在外部声明 filterInput 以便在函数末尾访问
 
@@ -1572,6 +1683,7 @@ export function createChatHistoryUI(appContext) {
         }
         alert(`还原完成，新增 ${countAdded} 条记录。`);
         // 刷新聊天记录面板
+        invalidateMetadataCache();
         refreshChatHistory();
       } catch (error) {
         console.error('读取备份文件失败:', error);
@@ -1738,6 +1850,7 @@ export function createChatHistoryUI(appContext) {
       
       // 保存新会话到数据库
       await putConversation(newConversation);
+      invalidateMetadataCache();
       
       // 清空当前会话并加载新创建的会话
       services.chatHistoryManager.chatHistory.messages = [];
