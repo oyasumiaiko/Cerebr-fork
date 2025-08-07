@@ -525,7 +525,7 @@ export function createMessageSender(appContext) {
       if (data.error) {
         const errorMessage = data.error.message || 'Unknown Gemini error';
         console.error('Gemini API error:', data.error);
-        if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+        // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
         throw new Error(errorMessage); // Propagates to sendMessage's catch block
       }
 
@@ -594,18 +594,18 @@ export function createMessageSender(appContext) {
      */
     function handleOpenAIEvent(data) {
       // 检查API返回的错误信息
-      if (data.error) { 
-          const msg = data.error.message || 'Unknown OpenAI error'; 
+      if (data.error) {
+          const msg = data.error.message || 'Unknown OpenAI error';
           console.error('OpenAI API error:', data.error);
-          if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+          // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
           // 抛出错误，让外层`sendMessage`的try...catch块捕获并处理
           throw new Error(msg);
       }
       // 检查 choices 数组中的错误信息
-      if (data.choices?.[0]?.error) { 
+      if (data.choices?.[0]?.error) {
           const msg = data.choices[0].error.message || 'Unknown OpenAI model error';
           console.error('OpenAI Model error:', data.choices[0].error);
-          if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+          // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
           throw new Error(msg);
       }
 
