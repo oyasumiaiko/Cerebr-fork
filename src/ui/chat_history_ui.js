@@ -155,7 +155,7 @@ export function createChatHistoryUI(appContext) {
       if (!entry || !entry.isIntersecting) return;
       if (panel.dataset.runId !== runId) return;
       onIntersect();
-    }, { root: container, rootMargin: '800px 0px 0px 0px', threshold: 0.0 });
+    }, { root: container, rootMargin: '0px 0px 1000px 0px', threshold: 0.01 });
     observer.observe(sentinel);
     panel._ioObserver = observer;
   }
@@ -1008,6 +1008,30 @@ export function createChatHistoryUI(appContext) {
       if (panel.dataset.runId !== runId) return;
       await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
     }, runId);
+
+    // Fallback：滚动监听，兼容拖动滚动条与键盘 End 场景
+    if (listContainer._scrollListener) {
+      listContainer.removeEventListener('scroll', listContainer._scrollListener);
+    }
+    listContainer._scrollListener = async () => {
+      const panelNow = listContainer.closest('#chat-history-panel');
+      if (!panelNow) return;
+      if (panelNow.dataset.runId !== runId) return;
+      if (!isLoadingMoreItems && (listContainer.scrollTop + listContainer.clientHeight >= listContainer.scrollHeight - 48)) {
+        await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+      }
+    };
+    listContainer.addEventListener('scroll', listContainer._scrollListener);
+
+    // 如果内容高度不足以填满视口，自动继续加载直至填满
+    requestAnimationFrame(async () => {
+      const panelNow = listContainer.closest('#chat-history-panel');
+      if (!panelNow || panelNow.dataset.runId !== runId) return;
+      while (listContainer.scrollHeight <= listContainer.clientHeight && currentlyRenderedCount < currentDisplayItems.length) {
+        await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    });
   }
   
   /**
@@ -1184,6 +1208,13 @@ export function createChatHistoryUI(appContext) {
     }
 
     listContainer.appendChild(fragment);
+    // 确保哨兵始终位于列表末尾，兼容拖动滚动条和键盘 End 触发加载
+    {
+      const sentinel = ensureEndSentinel(listContainer);
+      if (sentinel && sentinel.parentElement === listContainer) {
+        listContainer.appendChild(sentinel);
+      }
+    }
     currentlyRenderedCount += itemsRenderedInThisCall;
     isLoadingMoreItems = false;
 
