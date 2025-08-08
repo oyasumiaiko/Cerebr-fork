@@ -515,9 +515,8 @@ export function createMessageSender(appContext) {
         }
       } catch (e) {
         console.error('解析SSE事件JSON出错:', e, 'Event data:', `'${fullEventData}'`);
-        // Potentially re-throw or handle critical parsing errors if needed
-        // For instance, if the error is not just an 'unexpected end' from a legitimately partial stream
-        // but a more fundamental JSON structure issue from the server.
+        // 将错误抛出到上层，让 sendMessage 的 catch 将错误展示到 UI
+        throw e;
       }
     }
 
