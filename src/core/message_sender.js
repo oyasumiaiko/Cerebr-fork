@@ -46,9 +46,53 @@ export function createMessageSender(appContext) {
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
 
-  // 自动重试的最小间隔控制（毫秒）
+  // 自动重试节流（前沿触发 + 尾随调用）配置
+  /**
+   * 自动重试的最小冷却间隔（毫秒）
+   * @type {number}
+   */
   const MIN_RETRY_INTERVAL_MS = 3000;
-  let lastAutoRegenerateAt = 0;
+
+  /**
+   * 创建“前沿触发 + 尾随调用”的节流函数。
+   * 冷却外立即执行；冷却内只记录一次，冷却结束若有记录则再执行一次并继续冷却。
+   * @param {() => void} fn 要节流的函数
+   * @param {number} wait 冷却时长（毫秒）
+   * @returns {() => void} 节流后的函数
+   * @since 1.0.0
+   */
+  function createTrailingThrottle(fn, wait) {
+    /** @type {number | null} */
+    let timer = null;
+    /** @type {boolean} */
+    let pending = false;
+
+    const fire = () => {
+      try { fn(); } catch (e) { console.error('节流函数执行失败:', e); }
+      timer = setTimeout(() => {
+        if (pending) {
+          pending = false;
+          fire();
+        } else {
+          timer = null;
+        }
+      }, wait);
+    };
+
+    return () => {
+      if (timer === null) fire();
+      else pending = true;
+    };
+  }
+
+  /**
+   * 触发一次自动重新生成（带节流与尾随）
+   * @returns {void}
+   */
+  const requestAutoRegenerate = createTrailingThrottle(() => {
+    const btn = document.getElementById('regenerate-message');
+    if (btn) btn.click();
+  }, MIN_RETRY_INTERVAL_MS);
 
   /**
    * 获取是否应该自动滚动
@@ -354,16 +398,8 @@ export function createMessageSender(appContext) {
         loadingMessage.classList.add('error-message');
       }
 
-      // 如果发送失败，则触发重新生成，但增加最小3秒间隔（简化：只做一次判定，不排队）
-      const regenerateBtn = document.getElementById('regenerate-message');
-      if (regenerateBtn) {
-        const now = Date.now();
-        const elapsed = now - lastAutoRegenerateAt;
-        if (elapsed >= MIN_RETRY_INTERVAL_MS) {
-          regenerateBtn.click();
-          lastAutoRegenerateAt = now;
-        }
-      }
+      // 如果发送失败，按“节流（冷却）+ 尾随调用”策略触发自动重试
+      requestAutoRegenerate();
     } finally {
       // 无论成功还是失败，都重置处理状态
       isProcessingMessage = false;
