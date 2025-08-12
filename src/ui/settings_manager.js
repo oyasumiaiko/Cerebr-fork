@@ -124,6 +124,7 @@ export function createSettingsManager(appContext) {
     },
     // 划词搜索清空聊天
     {
+      uiHidden: true,
       key: 'clearOnSearch',
       type: 'toggle',
       id: 'clear-on-search-switch',
@@ -168,7 +169,7 @@ export function createSettingsManager(appContext) {
       label: '侧栏宽度',
       min: 500,
       max: 1500,
-      step: 10,
+      step: 50,
       unit: 'px',
       defaultValue: DEFAULT_SETTINGS.sidebarWidth,
       apply: (v) => applySidebarWidth(v)
@@ -332,8 +333,12 @@ export function createSettingsManager(appContext) {
       }
     }
 
-    // 为每个注册项生成控件（若页面已存在同ID控件则跳过）
+    // 为每个注册项生成控件（若页面已存在同ID控件则跳过；uiHidden=true 时不渲染控件）
     for (const def of SETTINGS_REGISTRY) {
+      if (def.uiHidden === true) {
+        // 不渲染、不绑定 UI，但该设置仍会被加载/保存/应用（通过 applyAllSettings）
+        continue;
+      }
       const existing = document.getElementById(def.id || `setting-${def.key}`);
       if (existing) {
         dynamicElements.set(def.key, existing);
