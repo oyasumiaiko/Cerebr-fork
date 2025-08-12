@@ -219,6 +219,33 @@ body {
     box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.1);
 }
 
+/* 顶部同心小圆点状态指示（对话框左上角） */
+.status-dot {
+    position: absolute;
+    top: -24px;
+    left: 8px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: transparent; /* 熄灭：未获取网页内容（纯对话） */
+    border: 2px solid color-mix(in srgb, var(--cerebr-text-color) 40%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--cerebr-text-color) 20%, transparent);
+    z-index: 10001;
+    transition: box-shadow .25s ease, background-color .25s ease, transform .2s ease;
+}
+
+/* 亮起：获取网页内容（非纯对话） */
+.status-dot.on {
+    background: color-mix(in srgb, var(--cerebr-icon-color) 70%, transparent);
+    box-shadow:
+      0 0 8px 2px color-mix(in srgb, var(--cerebr-icon-color) 40%, transparent),
+      inset 0 0 0 2px color-mix(in srgb, var(--cerebr-icon-color) 70%, transparent);
+}
+
+.status-dot:hover {
+    transform: scale(1.06);
+}
+
 /* 新增：设置 #message-row 横向排列 */
 #message-row {
     display: flex;

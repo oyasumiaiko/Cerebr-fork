@@ -59,6 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             emptyStateLoadUrl: document.getElementById('empty-state-load-url'),
             emptyStateScreenshot: document.getElementById('empty-state-screenshot'),
             emptyStateExtract: document.getElementById('empty-state-extract'),
+            statusDot: document.getElementById('status-dot'),
             stopAtTopSwitch: document.getElementById('stop-at-top-switch'),
             repomixButton: document.getElementById('empty-state-repomix'),
             apiSettingsPanel: document.getElementById('api-settings'),
@@ -234,6 +235,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     await appContext.services.settingsManager.init();
     appContext.services.apiManager.setupUIEventHandlers(appContext);
     await appContext.services.apiManager.init();
+
+    // 初始化左上状态同心点：亮起=获取网页内容；熄灭=未获取网页内容（纯对话）
+    (function initStatusDot() {
+        const dot = appContext.dom.statusDot;
+        if (!dot) return;
+        const sender = appContext.services.messageSender;
+        function refresh() {
+            const isTemp = sender.getTemporaryModeState?.() === true;
+            // 非临时模式会获取网页内容 => 亮起；临时模式 => 熄灭
+            if (isTemp) {
+                dot.classList.remove('on');
+                dot.title = '未获取网页内容（纯对话）';
+            } else {
+                dot.classList.add('on');
+                dot.title = '获取网页内容';
+            }
+        }
+        // 点击切换（可选，保留单点控制）
+        dot.addEventListener('click', () => {
+            sender.toggleTemporaryMode();
+            refresh();
+        });
+        // 首次渲染
+        refresh();
+        // 外部消息切换
+        window.addEventListener('message', (event) => {
+            if (event?.data?.type === 'TOGGLE_TEMP_MODE_FROM_EXTENSION') {
+                setTimeout(refresh, 0);
+            }
+        });
+        // 内部事件切换
+        document.addEventListener('TEMP_MODE_CHANGED', () => setTimeout(refresh, 0));
+        if (appContext.dom.emptyStateTempMode) {
+            appContext.dom.emptyStateTempMode.addEventListener('click', () => setTimeout(refresh, 0));
+        }
+    })();
 
     function updateApiMenuText() {
         const currentConfig = appContext.services.apiManager.getSelectedConfig();
@@ -540,7 +577,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                 break;
             case 'TOGGLE_TEMP_MODE_FROM_EXTENSION':
                 appContext.services.messageSender.toggleTemporaryMode();
+                // 同步徽标
+                if (appContext.dom.modeIndicator) {
+                    setTimeout(() => {
+                        const isOn = appContext.services.messageSender.getTemporaryModeState?.();
+                        appContext.dom.modeIndicator.style.display = isOn ? 'inline-flex' : 'none';
+                    }, 0);
+                }
                 break;
+        }
+    });
+
+    // 监听内部事件同步徽标状态
+    document.addEventListener('TEMP_MODE_CHANGED', (e) => {
+        const isOn = !!e?.detail?.isOn;
+        if (appContext?.dom?.modeIndicator) {
+            appContext.dom.modeIndicator.style.display = isOn ? 'inline-flex' : 'none';
+            appContext.dom.modeIndicator.title = isOn ? '仅对话模式中，点击退出' : '点击进入仅对话模式';
         }
     });
 
