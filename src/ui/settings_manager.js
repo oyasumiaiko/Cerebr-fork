@@ -90,6 +90,28 @@ export function createSettingsManager(appContext) {
 
   // 当前设置
   let currentSettings = {...DEFAULT_SETTINGS};
+
+  // 动态设置注册表：新增设置仅需在此处登记即可自动渲染与持久化
+  // type: 'toggle' | 'range' | 'select'
+  const SETTINGS_REGISTRY = [
+    // 示例：未在HTML中存在的项将自动生成控件
+    {
+      key: 'lineHeight',
+      type: 'range',
+      label: '行距',
+      min: 1.2,
+      max: 2.0,
+      step: 0.1,
+      unit: 'x',
+      defaultValue: DEFAULT_SETTINGS.lineHeight,
+      apply: (v) => { document.documentElement.style.setProperty('--cerebr-line-height', String(v)); }
+    },
+    // 如需新增设置，只需在此添加定义；若不需要副作用，可省略 apply
+    // { key: 'myNewSetting', type: 'toggle', label: '我的新设置', defaultValue: true }
+  ];
+
+  // 动态生成的元素映射（仅对注册表项）
+  const dynamicElements = new Map(); // key -> HTMLInputElement | HTMLSelectElement
   
   // 订阅者注册表：用于跨模块监听设置变化
   /** @type {Map<string, Set<(value:any)=>void>>} */
@@ -155,6 +177,51 @@ export function createSettingsManager(appContext) {
     }
   };
 
+  // 由注册表构建 schema（仅针对动态生成的元素）
+  let generatedSchema = {};
+  function buildSchemaFromRegistry() {
+    const map = {};
+    for (const def of SETTINGS_REGISTRY) {
+      // 如果页面已有同名控件（通过固定ID），则跳过自动生成schema（避免重复绑定）
+      if (document.getElementById(def.id || `setting-${def.key}`)) {
+        // 将其纳入schema（使用动态元素映射）
+        map[def.key] = createSchemaEntryForDef(def);
+        continue;
+      }
+      // 若未生成UI，稍后renderSettingsFromRegistry会创建元素并填充dynamicElements
+      map[def.key] = createSchemaEntryForDef(def);
+    }
+    generatedSchema = map;
+    return map;
+  }
+
+  function createSchemaEntryForDef(def) {
+    return {
+      element: () => dynamicElements.get(def.key) || null,
+      readFromUI: (el) => {
+        if (!el) return currentSettings[def.key];
+        if (def.type === 'toggle') return !!el.checked;
+        if (def.type === 'range') return def.step && Number(def.step) % 1 !== 0 ? parseFloat(el.value) : parseFloat(el.value);
+        if (def.type === 'select') return el.value;
+        return el.value;
+      },
+      writeToUI: (el, v) => {
+        if (!el) return;
+        if (def.type === 'toggle') el.checked = !!v; else el.value = v;
+        // 同步右侧显示值
+        const valueSpan = el.closest('.menu-item')?.querySelector('.setting-value');
+        if (valueSpan) {
+          valueSpan.textContent = formatDisplayValue(def, v);
+        }
+      },
+      apply: (v) => { if (typeof def.apply === 'function') def.apply(v); }
+    };
+  }
+
+  function getSchemaMap() {
+    return { ...SETTINGS_SCHEMA, ...generatedSchema };
+  }
+
   /**
    * 统一设置更新入口
    * @param {string} key - 设置键
@@ -164,8 +231,9 @@ export function createSettingsManager(appContext) {
     if (!(key in DEFAULT_SETTINGS)) return;
     currentSettings[key] = value;
     // 应用
-    if (SETTINGS_SCHEMA[key]?.apply) {
-      SETTINGS_SCHEMA[key].apply(value);
+    const schema = getSchemaMap();
+    if (schema[key]?.apply) {
+      schema[key].apply(value);
     }
     // 持久化
     saveSetting(key, value);
@@ -182,8 +250,9 @@ export function createSettingsManager(appContext) {
    * 从 schema 绑定 DOM 事件（统一 change 入口）
    */
   function bindSettingsFromSchema() {
-    Object.keys(SETTINGS_SCHEMA).forEach((key) => {
-      const def = SETTINGS_SCHEMA[key];
+    const schema = getSchemaMap();
+    Object.keys(schema).forEach((key) => {
+      const def = schema[key];
       const el = def.element?.();
       if (!el) return;
       // 避免重复绑定：先移除已存在的监听（若实现上无此需求，可忽略）
@@ -194,6 +263,96 @@ export function createSettingsManager(appContext) {
       // 初始 UI 同步
       if (def.writeToUI) def.writeToUI(el, currentSettings[key]);
     });
+  }
+
+  // 渲染注册表定义到设置菜单
+  function renderSettingsFromRegistry() {
+    const container = settingsPanel || document.getElementById('settings-menu');
+    if (!container) return;
+
+    // 创建或获取动态区块容器
+    let autoSection = container.querySelector('.settings-auto-section');
+    if (!autoSection) {
+      autoSection = document.createElement('div');
+      autoSection.className = 'settings-auto-section';
+      // 插入到主题选择器之后
+      const themeSelector = container.querySelector('#theme-selector');
+      if (themeSelector?.nextSibling) {
+        container.insertBefore(autoSection, themeSelector.nextSibling);
+      } else {
+        container.appendChild(autoSection);
+      }
+    }
+
+    // 为每个注册项生成控件（若页面已存在同ID控件则跳过）
+    for (const def of SETTINGS_REGISTRY) {
+      const existing = document.getElementById(def.id || `setting-${def.key}`);
+      if (existing) {
+        dynamicElements.set(def.key, existing);
+        continue;
+      }
+
+      const item = document.createElement('div');
+      item.className = 'menu-item';
+
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = def.label || def.key;
+      item.appendChild(labelSpan);
+
+      if (def.type === 'toggle') {
+        const wrap = document.createElement('label');
+        wrap.className = 'switch';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = def.id || `setting-${def.key}`;
+        const slider = document.createElement('span');
+        slider.className = 'slider';
+        wrap.appendChild(input);
+        wrap.appendChild(slider);
+        item.appendChild(wrap);
+        autoSection.appendChild(item);
+        dynamicElements.set(def.key, input);
+      } else if (def.type === 'range') {
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = String(def.min ?? 0);
+        input.max = String(def.max ?? 100);
+        input.step = String(def.step ?? 1);
+        input.id = def.id || `setting-${def.key}`;
+        const valueSpan = document.createElement('span');
+        valueSpan.className = 'setting-value';
+        valueSpan.textContent = formatDisplayValue(def, currentSettings[def.key] ?? def.defaultValue);
+        input.addEventListener('input', (e) => {
+          valueSpan.textContent = formatDisplayValue(def, parseFloat(input.value));
+        });
+        item.appendChild(input);
+        item.appendChild(valueSpan);
+        autoSection.appendChild(item);
+        dynamicElements.set(def.key, input);
+      } else if (def.type === 'select') {
+        const select = document.createElement('select');
+        select.id = def.id || `setting-${def.key}`;
+        (def.options || []).forEach(opt => {
+          const o = document.createElement('option');
+          if (typeof opt === 'string') {
+            o.value = opt; o.textContent = opt;
+          } else {
+            o.value = opt.value; o.textContent = opt.label;
+          }
+          select.appendChild(o);
+        });
+        item.appendChild(select);
+        autoSection.appendChild(item);
+        dynamicElements.set(def.key, select);
+      }
+    }
+  }
+
+  function formatDisplayValue(def, value) {
+    if (def.unit === 'px') return `${value}px`;
+    if (def.unit === 'x') return `${Number(value).toFixed(1)}x`;
+    if (def.unit) return `${value}${def.unit}`;
+    return String(value);
   }
   
   // 初始化所有设置
@@ -255,6 +414,19 @@ export function createSettingsManager(appContext) {
     
     // 应用侧边栏位置设置
     applySidebarPosition(currentSettings.sidebarPosition);
+
+    // 应用注册表定义的设置（无副作用的定义将跳过）
+    SETTINGS_REGISTRY.forEach(def => {
+      const value = currentSettings[def.key];
+      if (typeof def.apply === 'function') {
+        try { def.apply(value); } catch (e) { console.error('应用设置失败', def.key, e); }
+      }
+      const el = dynamicElements.get(def.key);
+      if (el) {
+        const entry = generatedSchema[def.key];
+        if (entry?.writeToUI) entry.writeToUI(el, value);
+      }
+    });
   }
   
   // 应用主题
@@ -662,6 +834,11 @@ export function createSettingsManager(appContext) {
     // 先初始化主题管理器
     themeManager.init();
     
+    // 先渲染基于注册表的动态设置项
+    renderSettingsFromRegistry();
+    // 基于注册表构建schema
+    buildSchemaFromRegistry();
+
     setupEventListeners();
     setupSystemThemeListener();
     return initSettings();
