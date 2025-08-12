@@ -129,6 +129,7 @@ export function createMessageSender(appContext) {
     isTemporaryMode = true;
     GetInputContainer().classList.add('temporary-mode');
     document.body.classList.add('temporary-mode');
+    messageInput.setAttribute('placeholder', '纯对话模式，输入消息...');
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: true } }));
     } catch (_) {}
@@ -142,6 +143,7 @@ export function createMessageSender(appContext) {
     isTemporaryMode = false;
     GetInputContainer().classList.remove('temporary-mode');
     document.body.classList.remove('temporary-mode');
+    messageInput.setAttribute('placeholder', '输入消息...');
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: false } }));
     } catch (_) {}
