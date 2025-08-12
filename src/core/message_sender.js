@@ -46,6 +46,10 @@ export function createMessageSender(appContext) {
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
 
+  // 自动重试的最小间隔控制（毫秒）
+  const MIN_RETRY_INTERVAL_MS = 3000;
+  let lastAutoRegenerateAt = 0;
+
   /**
    * 获取是否应该自动滚动
    * @returns {boolean} 是否应该自动滚动
@@ -344,8 +348,16 @@ export function createMessageSender(appContext) {
         loadingMessage.classList.add('error-message');
       }
 
-      // 如果发送失败，则点击重新生成按钮
-      // document.getElementById('regenerate-message').click();
+      // 如果发送失败，则触发重新生成，但增加最小3秒间隔（简化：只做一次判定，不排队）
+      const regenerateBtn = document.getElementById('regenerate-message');
+      if (regenerateBtn) {
+        const now = Date.now();
+        const elapsed = now - lastAutoRegenerateAt;
+        if (elapsed >= MIN_RETRY_INTERVAL_MS) {
+          regenerateBtn.click();
+          lastAutoRegenerateAt = now;
+        }
+      }
     } finally {
       // 无论成功还是失败，都重置处理状态
       isProcessingMessage = false;

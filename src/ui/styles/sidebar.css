@@ -825,8 +825,12 @@ input:checked + .slider:before {
     font-size: 1.21em;
 }
 
-.katex-display>.katex {
+.katex-display > .katex {
     white-space: pre-wrap;
+}
+
+.katex-display + br {
+    display: none;
 }
 
 /* 右键菜单样式 */
