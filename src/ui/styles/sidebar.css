@@ -3414,7 +3414,7 @@ body.hide-references .reference-number.superscript {
 
   /* Inline editor for message re-edit */
 .inline-editor-wrapper {
-    margin-top: 8px;
+    margin-top: 4px;
     background: transparent;
   }
   
@@ -3430,7 +3430,7 @@ body.hide-references .reference-number.superscript {
     font-size: var(--cerebr-font-size);
     color: var(--cerebr-text-color);
     background: var(--cerebr-input-bg);
-    line-height: 1.7;
+    line-height: 1.5;
     border-radius: 10px;
     box-shadow: 0 1px 0 0 color-mix(in srgb, var(--cerebr-border-color) 70%, transparent) inset;
   }

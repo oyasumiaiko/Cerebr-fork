@@ -444,6 +444,22 @@ export function createContextMenuManager(appContext) {
     if (!messageId) return;
     isEditing = true;
 
+    // 定义延迟定位函数：在DOM更新后再滚动，避免初算不准
+    const scheduleScrollAfterSetup = () => {
+      try {
+        const container = chatContainer;
+        if (!container || typeof messageElement.offsetTop !== 'number') return;
+        requestAnimationFrame(() => {
+          const topPadding = 12;
+          const messageTop = messageElement.offsetTop;
+          const desiredTop = Math.max(0, messageTop - topPadding);
+          if (messageTop < container.scrollTop + topPadding) {
+            container.scrollTo({ top: desiredTop, behavior: 'smooth' });
+          }
+        });
+      } catch (e) { console.error('滚动消息到可视区域失败:', e); }
+    };
+
     // 定位文本容器
     const textDiv = messageElement.querySelector('.text-content');
     if (!textDiv) { isEditing = false; return; }
@@ -484,6 +500,32 @@ export function createContextMenuManager(appContext) {
     textarea.style.height = '50vh';
     textarea.style.overflow = 'auto';
     textarea.focus();
+    // DOM完成后再定位，确保计算准确，并在顶部留出微小空隙
+    scheduleScrollAfterSetup();
+    // 确保编辑器自身从顶部开始显示，并将光标移动到开头
+    setTimeout(() => {
+      try {
+        textarea.scrollTop = 0;
+        if (typeof textarea.setSelectionRange === 'function') {
+          textarea.setSelectionRange(0, 0);
+        } else {
+          textarea.selectionStart = 0;
+          textarea.selectionEnd = 0;
+        }
+      } catch (_) {}
+    }, 0);
+
+    // 快捷键：Ctrl+S 保存，Esc 取消
+    textarea.addEventListener('keydown', (e) => {
+      const key = (e.key || '').toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
+        e.preventDefault();
+        saveBtn.click();
+      } else if ((e.ctrlKey || e.metaKey) && key === 'q') {
+        e.preventDefault();
+        cancelBtn.click();
+      }
+    });
 
     // 绑定事件
     saveBtn.addEventListener('click', async () => {
