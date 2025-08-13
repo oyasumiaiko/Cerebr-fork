@@ -162,6 +162,21 @@ export async function putConversation(conversation, separateContent = true) {
         messageToStore.contentRef = contentRef.id;
         // 删除原内容以减少内存使用
         delete messageToStore.content;
+      } else {
+        // 不再是大型内容：如存在历史 contentRef，需要清理引用并删除旧的分离内容
+        if (messageToStore.contentRef) {
+          const refId = messageToStore.contentRef;
+          try {
+            await new Promise((resolve, reject) => {
+              const delReq = contentStore.delete(refId);
+              delReq.onsuccess = () => resolve();
+              delReq.onerror = () => reject(delReq.error);
+            });
+          } catch (e) {
+            console.warn('删除过期内容引用失败:', refId, e);
+          }
+          delete messageToStore.contentRef;
+        }
       }
       
       messagesWithRefs.push(messageToStore);
