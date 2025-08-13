@@ -1,3 +1,19 @@
+import { migrateOldPromptSettings, loadAllPromptSettings, savePromptSettingsBulk } from './prompt_store.js';
+import { replacePlaceholders as resolvePlaceholders, getMatchingUrlRule as resolveUrlRule } from './prompt_resolver.js';
+
+/**
+ * 规范化加载到的提示词项，确保包含 prompt 与 model 字段
+ * @param {Object} loaded 加载到的条目
+ * @param {Object} fallback 默认值
+ * @returns {{prompt: string, model: string}}
+ */
+function normalizePromptItem(loaded, fallback) {
+    const item = loaded && typeof loaded === 'object' ? loaded : {};
+    const prompt = (typeof item.prompt === 'string') ? item.prompt : (fallback?.prompt || '');
+    const model = (typeof item.model === 'string') ? item.model : (fallback?.model || 'follow_current');
+    return { prompt, model };
+}
+
 // 默认提示词
 const DEFAULT_PROMPTS = {
     system: {
@@ -133,19 +149,7 @@ const DEFAULT_PROMPTS = {
     }
 };
 
-// 辅助函数：获取字符串的UTF-8字节长度
-/**
- * @param {string} str - 输入字符串
- * @returns {number} 字符串的UTF-8字节长度
- */
-function getStringByteLength(str) {
-    return new TextEncoder().encode(str).length;
-}
-
-// 常量定义
-const MAX_SYNC_ITEM_BYTES = 8000; // chrome.storage.sync.QUOTA_BYTES_PER_ITEM is 8192, leave some buffer
-const PROMPT_CHUNK_KEY_PREFIX_SUFFIX = '_chunk_'; // 用于分块存储的提示词键的后缀部分
-const PROMPT_KEY_PREFIX = 'prompt_'; // 提示词存储键的前缀
+// 注意：存储与分块逻辑已经抽离到 prompt_store.js
 
 class PromptSettings {
     constructor(appContext) {
@@ -188,44 +192,7 @@ class PromptSettings {
         this.renderUrlRules();
     }
 
-    /**
-     * 清除指定类型提示词的所有关联分块数据。
-     * @param {string} type - 提示词类型 (e.g., 'query', 'system').
-     * @returns {Promise<void>}
-     * @private
-     */
-    async _clearChunksForType(type) {
-        try {
-            const allItems = await new Promise(resolve => chrome.storage.sync.get(null, resolve));
-            if (chrome.runtime.lastError) {
-                console.error(`Error getting all items for chunk clearing (type: ${type}):`, chrome.runtime.lastError.message);
-                return;
-            }
-            
-            const chunkKeysToRemove = [];
-            const chunkPrefix = `${PROMPT_KEY_PREFIX}${type}${PROMPT_CHUNK_KEY_PREFIX_SUFFIX}`;
-            for (const key in allItems) {
-                if (key.startsWith(chunkPrefix)) {
-                    chunkKeysToRemove.push(key);
-                }
-            }
-
-            if (chunkKeysToRemove.length > 0) {
-                await new Promise((resolve, reject) => {
-                    chrome.storage.sync.remove(chunkKeysToRemove, () => {
-                        if (chrome.runtime.lastError) {
-                            console.error(`Error removing chunks for type ${type}:`, chrome.runtime.lastError.message);
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve();
-                        }
-                    });
-                });
-            }
-        } catch (error) {
-            console.error(`Exception while clearing chunks for type ${type}:`, error);
-        }
-    }
+    // 分块清理逻辑已迁移到 prompt_store.js，保留空壳占位以避免外部直接调用
 
     // 初始化模型选择下拉框
     initModelSelects() {
@@ -432,129 +399,38 @@ class PromptSettings {
         this.savePromptsButton.addEventListener('click', () => this.savePromptSettings(true));
     }
 
-    // 迁移旧格式的提示词设置到新格式
-    async migrateOldPromptSettings() {
-        try {
-            // 检查是否存在旧格式的数据
-            const oldData = await new Promise(resolve => {
-                chrome.storage.sync.get(['prompts'], result => resolve(result.prompts));
-            });
+    // 迁移逻辑委托至 prompt_store.js
+    async migrateOldPromptSettings() { await migrateOldPromptSettings(); }
 
-            if (!oldData) {
-                return; // 没有旧数据需要迁移
-            }
-
-            console.log('开始迁移旧格式提示词设置...');
-
-            // 将旧数据按类型分别存储
-            const migrationPromises = Object.entries(oldData).map(([type, settings]) => {
-                return new Promise(resolve => {
-                    chrome.storage.sync.set({
-                        [`prompt_${type}`]: settings
-                    }, resolve);
-                });
-            });
-
-            // 等待所有迁移操作完成
-            await Promise.all(migrationPromises);
-
-            // 删除旧格式数据
-            await new Promise(resolve => {
-                chrome.storage.sync.remove(['prompts'], resolve);
-            });
-
-            console.log('提示词设置迁移完成');
-        } catch (error) {
-            console.error('迁移提示词设置时出错:', error);
-        }
-    }
-
-    // 加载提示词设置
+    // 加载提示词设置（委托存储模块）
     async loadPromptSettings() {
         try {
-            // 首先执行迁移
             await this.migrateOldPromptSettings();
-
             const types = Object.keys(DEFAULT_PROMPTS);
-            const promises = types.map(type => {
-                return new Promise(async (resolve) => { // Marked async here
-                    const mainItemKey = `${PROMPT_KEY_PREFIX}${type}`;
-                    chrome.storage.sync.get([mainItemKey], async (result) => { // Marked async here
-                        if (chrome.runtime.lastError) {
-                            console.error(`Error loading prompt ${type}:`, chrome.runtime.lastError.message);
-                            resolve([type, DEFAULT_PROMPTS[type]]); // Fallback to default
-                            return;
-                        }
-
-                        let settings = result[mainItemKey];
-
-                        if (settings && settings.isChunked && typeof settings.chunkCount === 'number' && settings.chunkCount > 0) {
-                            const chunkKeys = [];
-                            const chunkKeyBase = `${PROMPT_KEY_PREFIX}${type}${PROMPT_CHUNK_KEY_PREFIX_SUFFIX}`;
-                            for (let i = 0; i < settings.chunkCount; i++) {
-                                chunkKeys.push(`${chunkKeyBase}${i}`);
-                            }
-                            
-                            try {
-                                const chunkResults = await new Promise((res, rej) => {
-                                    chrome.storage.sync.get(chunkKeys, (chunks) => {
-                                        if (chrome.runtime.lastError) {
-                                            console.error(`Error loading chunks for ${type}:`, chrome.runtime.lastError.message);
-                                            rej(new Error(chrome.runtime.lastError.message));
-                                        } else {
-                                            res(chunks);
-                                        }
-                                    });
-                                });
-
-                                let fullPrompt = '';
-                                for (let i = 0; i < settings.chunkCount; i++) {
-                                    fullPrompt += (chunkResults[`${chunkKeyBase}${i}`] || '');
-                                }
-                                settings = { prompt: fullPrompt, model: settings.model }; // Reconstruct settings
-                            } catch (error) {
-                                console.error(`Failed to load and assemble chunks for ${type}:`, error);
-                                settings = DEFAULT_PROMPTS[type]; // Fallback to default on error
-                            }
-                        } else if (!settings) {
-                            settings = DEFAULT_PROMPTS[type];
-                        }
-                        resolve([type, settings]);
-                    });
-                });
-            });
-
-            const results = await Promise.all(promises);
+            const loaded = await loadAllPromptSettings(types);
 
             this.savedPrompts = {};
-            results.forEach(([type, settings]) => {
-                // Ensure settings is an object with prompt and model, even if default was used
-                const currentSettings = (settings && typeof settings.prompt !== 'undefined' && typeof settings.model !== 'undefined')
-                                        ? settings
-                                        : DEFAULT_PROMPTS[type];
-
-                this.savedPrompts[type] = { prompt: currentSettings.prompt, model: currentSettings.model };
+            types.forEach(type => {
+                const merged = normalizePromptItem(loaded[type], DEFAULT_PROMPTS[type]);
+                this.savedPrompts[type] = { prompt: merged.prompt, model: merged.model };
 
                 const promptElement = this[`${type}Prompt`];
-                if (promptElement) {
-                    promptElement.value = currentSettings.prompt;
-                }
+                if (promptElement) promptElement.value = merged.prompt;
 
                 if (this.modelSelects[type]) {
-                    const modelToSelect = currentSettings.model || 'follow_current';
+                    const modelToSelect = merged.model || 'follow_current';
                     if (this.modelSelects[type].querySelector(`option[value="${modelToSelect}"]`)) {
                         this.modelSelects[type].value = modelToSelect;
                     } else {
-                        // If the saved model is not in the options (e.g., from a previous config), add it
                         const newOption = document.createElement('option');
                         newOption.value = modelToSelect;
-                        newOption.textContent = modelToSelect; // Display the model name
+                        newOption.textContent = modelToSelect;
                         this.modelSelects[type].appendChild(newOption);
                         this.modelSelects[type].value = modelToSelect;
                     }
                 }
             });
-            
+
             this.renderUrlRules();
         } catch (error) {
             console.error('加载提示词设置时出错:', error);
@@ -565,9 +441,7 @@ class PromptSettings {
      * 自动保存提示词设置（不关闭面板），处理分块存储。
      * @returns {Promise<void>}
      */
-    async autoSavePromptSettings() {
-        await this._savePromptSettingsInternal(false);
-    }
+    async autoSavePromptSettings() { await this._savePromptSettingsInternal(false); }
 
     /**
      * 保存提示词设置，处理分块存储。
@@ -587,130 +461,22 @@ class PromptSettings {
     async _savePromptSettingsInternal(shouldClosePanel) {
         try {
             const currentPromptsFromUI = this.collectCurrentPromptSettings();
-            const saveOperations = [];
-            const newSavedPromptsState = {};
+            const newSavedPromptsState = await savePromptSettingsBulk(currentPromptsFromUI, this.savedPrompts || {});
 
-            for (const type in currentPromptsFromUI) {
-                if (currentPromptsFromUI.hasOwnProperty(type)) {
-                    const item = currentPromptsFromUI[type]; // { prompt: string, model: string }
-                    const mainItemKey = `${PROMPT_KEY_PREFIX}${type}`;
-
-                    // 1. 清理该类型可能存在的旧分块
-                    await this._clearChunksForType(type);
-
-                    const itemToStore = { prompt: item.prompt, model: item.model };
-                    const itemByteLength = getStringByteLength(JSON.stringify(itemToStore));
-
-                    if (itemByteLength < MAX_SYNC_ITEM_BYTES) {
-                        // 2a. 直接存储
-                        saveOperations.push(chrome.storage.sync.set({ [mainItemKey]: itemToStore }));
-                        newSavedPromptsState[type] = { prompt: item.prompt, model: item.model };
-                    } else {
-                        // 2b. 分块存储
-                        const chunkKeyBase = `${PROMPT_KEY_PREFIX}${type}${PROMPT_CHUNK_KEY_PREFIX_SUFFIX}`;
-                        const promptToChunk = item.prompt;
-                        let chunkIndex = 0;
-                        let charOffset = 0;
-                        const chunksToSaveForStorage = []; // Stores {key: value} for chrome.storage.set
-                        
-                        // Max bytes per chunk data, leaving room for key name and system overhead.
-                        // A conservative estimate for non-data overhead per chunk item is ~100-200 bytes.
-                        const maxBytesPerChunkData = MAX_SYNC_ITEM_BYTES - 1000; 
-
-                        while (charOffset < promptToChunk.length) {
-                            let currentChunkStr = "";
-                            let currentChunkByteLen = 0;
-                            let currentChunkCharEnd = charOffset;
-
-                            while (currentChunkCharEnd < promptToChunk.length) {
-                                const nextChar = promptToChunk[currentChunkCharEnd];
-                                const nextCharByteLen = getStringByteLength(nextChar);
-                                
-                                if (currentChunkByteLen + nextCharByteLen > maxBytesPerChunkData) {
-                                    if (currentChunkStr === "") { // Single character itself is too large
-                                        console.error(`Character at index ${currentChunkCharEnd} for prompt type "${type}" is too large (${nextCharByteLen} bytes) for a single chunk (max ${maxBytesPerChunkData} bytes). Prompt not saved.`);
-                                        // To prevent saving a partial/corrupt state for this item:
-                                        chunksToSaveForStorage.length = 0; // Discard any prepared chunks for this item
-                                        charOffset = promptToChunk.length; // Exit outer loop for this item
-                                        // Revert to previously saved state for this item if possible, or default
-                                        newSavedPromptsState[type] = this.savedPrompts[type] || DEFAULT_PROMPTS[type];
-                                        break; 
-                                    }
-                                    break; // Current chunk is full
-                                }
-                                
-                                currentChunkStr += nextChar;
-                                currentChunkByteLen += nextCharByteLen;
-                                currentChunkCharEnd++;
-                            }
-
-                            if (chunksToSaveForStorage.length === 0 && charOffset < promptToChunk.length && currentChunkStr === "") {
-                                // This means the single character too large condition was met and handled
-                                break;
-                            }
-                            
-                            if (currentChunkStr !== "") {
-                                chunksToSaveForStorage.push({ key: `${chunkKeyBase}${chunkIndex}`, value: currentChunkStr });
-                                chunkIndex++;
-                            }
-                            charOffset = currentChunkCharEnd;
-                        }
-
-                        if (chunksToSaveForStorage.length > 0) {
-                            // Save all actual chunk data
-                            for (const chunk of chunksToSaveForStorage) {
-                                saveOperations.push(chrome.storage.sync.set({ [chunk.key]: chunk.value }));
-                            }
-                            // Save the main item metadata pointing to the chunks
-                            saveOperations.push(
-                                chrome.storage.sync.set({
-                                    [mainItemKey]: {
-                                        model: item.model,
-                                        isChunked: true,
-                                        chunkCount: chunksToSaveForStorage.length
-                                    }
-                                })
-                            );
-                            newSavedPromptsState[type] = { prompt: item.prompt, model: item.model };
-                        } else if (promptToChunk.length > 0) { // Chunking was needed but failed or resulted in no chunks
-                            console.warn(`Prompt for type "${type}" was too large for chunking or chunking failed. The prompt was not saved.`);
-                            // Keep the old saved state for this specific prompt type
-                            newSavedPromptsState[type] = this.savedPrompts[type] || DEFAULT_PROMPTS[type];
-                             // Optionally, show an error to the user
-                            alert(`提示词 "${this.getPromptTypeName(type)}" 过长未能成功保存。请尝试缩短内容。`);
-                        } else { // Empty prompt, no chunking needed, no old state to preserve other than default
-                             newSavedPromptsState[type] = { prompt: "", model: item.model };
-                        }
-                    }
-                }
-            }
-            
-            await Promise.all(saveOperations.map(op => op.catch(e => {
-                console.error('A save operation failed:', e);
-                // Decide if we need to throw or handle. For now, log and continue.
-                // This could happen if quota is exceeded even with chunking (e.g. too many items, or total quota).
-                throw e; // Re-throw to be caught by outer try-catch for general error message
-            })));
-            
-            this.savedPrompts = newSavedPromptsState; // Update internal state with what was attempted to be saved
+            this.savedPrompts = newSavedPromptsState;
             this.appContext.dom.promptSettingsPanel.dispatchEvent(new CustomEvent('promptSettingsUpdated', { bubbles: true, composed: true }));
-            
-            if (shouldClosePanel) {
-                this.promptSettings.classList.remove('visible');
-            }
-            
+
+            if (shouldClosePanel) this.promptSettings.classList.remove('visible');
+
             const saveButton = this.savePromptsButton;
             const originalText = saveButton.textContent;
             const originalBackground = saveButton.style.background;
-            
             saveButton.textContent = shouldClosePanel ? '已保存' : '已自动保存';
             saveButton.style.background = shouldClosePanel ? '#34C759' : 'rgba(52, 199, 89, 0.4)';
-            
             setTimeout(() => {
                 saveButton.textContent = originalText;
                 saveButton.style.background = originalBackground;
             }, shouldClosePanel ? 2000 : 800);
-
         } catch (error) {
             console.error('保存提示词设置失败:', error);
             alert('保存部分或全部设置失败，可能已超出存储配额，请检查后重试。');
@@ -758,29 +524,7 @@ class PromptSettings {
      * @param {string} text - 包含占位符的文本，如 {{datetime}}, {{date}}, {{time}}
      * @returns {string} 替换后的文本
      */
-    replacePlaceholders(text) {
-        const now = new Date();
-        
-        // 获取本地时间并格式化为 ISO 8601 风格字符串，包含时区偏移
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        
-        const offsetMinutes = now.getTimezoneOffset();
-        const offsetHours = Math.abs(Math.floor(offsetMinutes / 60));
-        const offsetMins = Math.abs(offsetMinutes % 60);
-        const offsetSign = offsetMinutes <= 0 ? '+' : '-';
-        const offsetString = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
-        
-        const isoLocalString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${offsetString}`;
-
-        return text.replace(/{{\s*datetime\s*}}/g, isoLocalString)
-                   .replace(/{{\s*date\s*}}/g, now.toLocaleDateString())
-                   .replace(/{{\s*time\s*}}/g, now.toLocaleTimeString());
-    }
+    replacePlaceholders(text) { return resolvePlaceholders(text); }
     
     /**
      * 获取当前提示词，自动处理URL规则匹配
@@ -836,34 +580,13 @@ class PromptSettings {
      */
     getMatchingUrlRule(url, type) {
         if (!this.urlRulesPrompt) return null;
-        
         try {
             const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
-            // 按添加顺序反向遍历，使后添加的规则优先级更高
-            for (let i = rules.length - 1; i >= 0; i--) {
-                const rule = rules[i];
-                if (rule.type !== type) continue;
-                
-                try {
-                    // 将通配符转换为正则表达式
-                    const pattern = rule.pattern
-                        .replace(/\./g, '\\.')
-                        .replace(/\*/g, '.*')
-                        .replace(/\?/g, '.');
-                    const regex = new RegExp('^' + pattern + '$');
-                    
-                    if (regex.test(url)) {
-                        return rule.prompt;
-                    }
-                } catch (e) {
-                    console.error(`规则 "${rule.pattern}" 转换为正则表达式失败:`, e);
-                    continue;
-                }
-            }
-        } catch (error) {
-            console.error('解析URL规则失败:', error);
+            return resolveUrlRule(url, type, rules);
+        } catch (e) {
+            console.error('解析URL规则失败:', e);
+            return null;
         }
-        return null;
     }
 
     /**
