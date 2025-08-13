@@ -406,6 +406,7 @@ export function createMessageSender(appContext) {
       shouldAutoScroll = false;
       // 当生成结束时，移除 glow 效果
       GetInputContainer().classList.remove('auto-scroll-glow');
+      GetInputContainer().classList.remove('auto-scroll-glow-active');
       // 当生成结束时，移除 loading 效果
       const lastMessage = chatContainer.querySelector('.ai-message:last-child');
       if (lastMessage) {
@@ -614,6 +615,8 @@ export function createMessageSender(appContext) {
         if (!hasStartedResponse) {
           if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
           hasStartedResponse = true;
+          // 流式开始：更醒目的输入容器提示
+          try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
           
           // First event with content: create the message element
           // Pass both accumulated answer and thoughts to appendMessage
@@ -676,12 +679,14 @@ export function createMessageSender(appContext) {
           aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta; // Accumulate thoughts separately
 
           // 【关键逻辑】检查这是否是流式响应的第一个数据块
-          if (!hasStartedResponse) {
+      if (!hasStartedResponse) {
               // 如果是，则移除 "正在等待回复..." 等加载提示信息
               if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
               
               // 标记响应已经开始，后续数据块将走更新逻辑
               hasStartedResponse = true;
+          // 流式开始：更醒目的输入容器提示
+          try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
               
               // 【创建消息】调用 appendMessage 来创建新的AI消息DOM元素
               // 这是获取唯一 messageId 的关键步骤
@@ -832,6 +837,7 @@ export function createMessageSender(appContext) {
 
         // 同步移除输入容器 glow 效果
         GetInputContainer().classList.remove('auto-scroll-glow');
+        GetInputContainer().classList.remove('auto-scroll-glow-active');
       } catch (e) {
         console.error('中止后清理占位消息失败:', e);
       }

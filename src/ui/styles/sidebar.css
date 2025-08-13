@@ -2265,12 +2265,22 @@ body.hide-references .reference-number.superscript {
 /* Added: Glow effect when auto scrolling is enabled */
 @keyframes breathing {
     0%, 100% {
+    filter: opacity(50%);
+    }
+    50% {
+    filter: opacity(30%);
+    }
+}
+
+@keyframes breathingHighOpacity {
+    0%, 100% {
     filter: opacity(100%);
     }
     50% {
-    filter: opacity(60%);
+    filter: opacity(80%);
     }
 }
+
 #input-container::after {
     content: ''; /* 伪元素必须有 content 属性 */
     position: absolute;
@@ -2282,7 +2292,7 @@ body.hide-references .reference-number.superscript {
     pointer-events: none; 
     background: transparent; 
 
-    box-shadow: 0 0 4vh color-mix(in srgb, var(--cerebr-icon-color, #007AFF) 50%, transparent); 
+    box-shadow: 0 0 4vh color-mix(in srgb, var(--cerebr-icon-color) 100%, transparent); 
     animation: breathing 4s ease-in-out infinite;
     opacity: 0;
     transition: opacity 0.5s ease;
@@ -2293,6 +2303,12 @@ body.hide-references .reference-number.superscript {
 }
 
 #input-container.auto-scroll-glow::after {
+    opacity: 1;
+    transition: opacity 0.5s ease;
+}
+
+#input-container.auto-scroll-glow-active::after {
+    animation: breathingHighOpacity 1s ease-in-out infinite;
     opacity: 1;
     transition: opacity 0.5s ease;
 }
