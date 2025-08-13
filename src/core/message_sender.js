@@ -232,12 +232,6 @@ export function createMessageSender(appContext) {
 
     // 获取当前提示词设置
     const promptsConfig = promptSettingsManager.getPrompts();
-    
-    // 如果只有图片没有文本，使用图片专用提示词
-    const shouldUseImagePrompt = imageTags.length > 0 && messageText.trim() === '';
-    if (shouldUseImagePrompt) {
-      messageText = promptsConfig.image.prompt;
-    }
     const currentPromptType = specificPromptType || messageProcessor.getPromptTypeFromContent(messageText, promptsConfig);
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;

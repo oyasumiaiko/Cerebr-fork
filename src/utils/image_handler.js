@@ -66,14 +66,7 @@ export function createImageHandler(appContext) {
 
     if (imageTags.length > 0) {
       const result = [];
-      // 添加文本内容
-      if (content) {
-        result.push({
-          type: "text",
-          text: content
-        });
-      }
-      // 添加图片
+      // 先添加图片
       imageTags.forEach(tag => {
         const base64Data = tag.getAttribute('data-image');
         if (base64Data) {
@@ -85,6 +78,13 @@ export function createImageHandler(appContext) {
           });
         }
       });
+      // 后添加文本内容
+      if (content) {
+        result.push({
+          type: "text",
+          text: content
+        });
+      }
       return result;
     }
     return content;
