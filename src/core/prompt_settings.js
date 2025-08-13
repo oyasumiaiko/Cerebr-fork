@@ -238,44 +238,42 @@ class PromptSettings {
 
             // 动态更新模型选项的函数
             const updateModelOptions = (currentSelectedValue) => {
-                const models = getAvailableModels();
-                // 保存当前选中的值
+                const apiManager = this.appContext.services.apiManager;
+                const configs = apiManager ? apiManager.getAllConfigs() : (window.apiConfigs || []);
                 const valueToKeep = currentSelectedValue || select.value || 'follow_current';
-                select.innerHTML = ''; // 清空现有选项
+                select.innerHTML = '';
 
-                // 添加"跟随当前 API 设置"选项
                 const followOption = document.createElement('option');
                 followOption.value = 'follow_current';
                 followOption.textContent = '跟随当前 API 设置';
                 select.appendChild(followOption);
 
-                // 添加分隔线
                 const separator = document.createElement('option');
                 separator.disabled = true;
                 separator.textContent = '──────────';
                 select.appendChild(separator);
 
-                // 如果可用模型为空且当前选中的值不是默认，则将其保留
-                let availableModels = models.slice();
-                if (availableModels.length === 0 && valueToKeep !== 'follow_current') {
-                    availableModels.push(valueToKeep);
-                } else {
-                    availableModels = models;
-                }
-
-                // 添加已配置的“显示名称/模型名”
-                availableModels.forEach(model => {
+                const availableConfigs = Array.isArray(configs) ? configs : [];
+                availableConfigs.forEach(cfg => {
                     const option = document.createElement('option');
-                    option.value = model;
-                    option.textContent = model;
+                    option.value = cfg.id || `${cfg.baseUrl}|${cfg.modelName}`; // 回退标识
+                    option.textContent = (cfg.displayName && String(cfg.displayName).trim()) || cfg.modelName || cfg.baseUrl || option.value;
                     select.appendChild(option);
                 });
 
-                // 尝试恢复选中的值
-                if (valueToKeep === 'follow_current' || availableModels.includes(valueToKeep)) {
+                // 选择恢复逻辑：优先精确匹配 id；否则尝试名称映射；最后回退
+                const hasExact = Array.from(select.options).some(o => o.value === valueToKeep);
+                if (valueToKeep === 'follow_current' || hasExact) {
                     select.value = valueToKeep;
                 } else {
-                    select.value = 'follow_current';
+                    // 旧数据迁移：尝试按 displayName/modelName 映射到 id
+                    const mapped = availableConfigs.find(c => (c.displayName || '').trim() === valueToKeep) ||
+                                   availableConfigs.find(c => (c.modelName || '').trim() === valueToKeep);
+                    if (mapped) {
+                        select.value = mapped.id || `${mapped.baseUrl}|${mapped.modelName}`;
+                    } else {
+                        select.value = 'follow_current';
+                    }
                 }
             };
 
@@ -284,7 +282,6 @@ class PromptSettings {
 
             // 监听 API 配置变化
             window.addEventListener('apiConfigsUpdated', () => {
-                // 保持当前选中的值
                 updateModelOptions(select.value);
             });
 

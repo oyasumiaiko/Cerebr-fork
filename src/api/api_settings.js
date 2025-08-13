@@ -28,6 +28,17 @@ export function createApiManager(appContext) {
   const apiCardsContainer = dom.apiCardsContainer;
   const closeExclusivePanels = utils.closeExclusivePanels; // Or services.uiManager.closeExclusivePanels if preferred & ready
 
+  // 为每个 API 配置提供稳定 ID
+  function generateUUID() {
+    try {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+    } catch (_) {}
+    const s4 = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
+    return `${s4()}${s4()}-${s4()}-${s4()}-${s4()}-${s4()}${s4()}${s4()}`;
+  }
+
   /**
    * 加载 API 配置
    * @returns {Promise<void>}
@@ -36,15 +47,13 @@ export function createApiManager(appContext) {
     try {
       const result = await chrome.storage.sync.get(['apiConfigs', 'selectedConfigIndex']);
       if (result.apiConfigs && result.apiConfigs.length > 0) {
-        apiConfigs = result.apiConfigs.map(config => ({
-          ...config,
-          // 确保每个配置都有 nextApiKeyIndex，即使是从旧存储加载的
-          // 这里我们不在 config 对象里存储 nextApiKeyIndex，而是使用外部的 apiKeyUsageIndex
-        }));
+        apiConfigs = result.apiConfigs.map(config => ({ ...config }));
         selectedConfigIndex = result.selectedConfigIndex || 0;
 
-        // 兼容旧格式：如果 apiKey 是带逗号的字符串，则转换为数组
+        let needResave = false;
+        // 兼容旧格式：如果 apiKey 是带逗号的字符串，则转换为数组；并确保有 id
         apiConfigs.forEach(config => {
+          if (!config.id) { config.id = generateUUID(); needResave = true; }
           if (typeof config.apiKey === 'string' && config.apiKey.includes(',')) {
             config.apiKey = config.apiKey.split(',').map(k => k.trim()).filter(Boolean);
           }
@@ -54,10 +63,12 @@ export function createApiManager(appContext) {
              apiKeyUsageIndex[configId] = 0;
           }
         });
+        if (needResave) { await saveAPIConfigs(); }
 
       } else {
         // 创建默认配置
         apiConfigs = [{
+          id: generateUUID(),
           apiKey: '', // 初始为空字符串
           baseUrl: 'https://api.openai.com/v1/chat/completions',
           modelName: 'gpt-4o',
@@ -74,6 +85,7 @@ export function createApiManager(appContext) {
       console.error('加载 API 配置失败:', error);
       // 如果加载失败，也创建默认配置
       apiConfigs = [{
+        id: generateUUID(),
         apiKey: '',
         baseUrl: 'https://api.openai.com/v1/chat/completions',
         modelName: 'gpt-4o',
@@ -415,7 +427,7 @@ export function createApiManager(appContext) {
     // 复制配置
     template.querySelector('.duplicate-btn').addEventListener('click', (e) => {
       e.stopPropagation();
-      const newConfig = { ...config };
+      const newConfig = { ...config, id: generateUUID() };
       // 重置 apiKey 轮询状态 (如果复制的是多 key 配置)
       const newConfigId = getConfigIdentifier(newConfig);
       if (Array.isArray(newConfig.apiKey) && newConfig.apiKey.length > 0) {
@@ -485,10 +497,8 @@ export function createApiManager(appContext) {
       const item = document.createElement('div');
       item.className = 'favorite-api-item';
 
-      // --- 检查是否是当前使用的API (仅比较 baseUrl 和 modelName) ---
-      if (currentConfig &&
-          currentConfig.baseUrl === config.baseUrl &&
-          currentConfig.modelName === config.modelName) {
+      // 当前使用的API：按 id 对比
+      if (currentConfig && currentConfig.id && config.id && currentConfig.id === config.id) {
         item.classList.add('current');
       }
       // ----------------------------------------------------------
@@ -501,12 +511,8 @@ export function createApiManager(appContext) {
 
       // 点击切换到该API配置
       item.addEventListener('click', () => {
-        // --- 按 baseUrl 和 modelName 查找索引 ---
-        const configIndex = apiConfigs.findIndex(c =>
-          c.baseUrl === config.baseUrl &&
-          c.modelName === config.modelName
-        );
-        // --------------------------------------
+        // --- 按 id 查找索引 ---
+        const configIndex = apiConfigs.findIndex(c => c.id && c.id === config.id);
 
         if (configIndex !== -1 && configIndex !== selectedConfigIndex) {
           selectedConfigIndex = configIndex;
@@ -751,12 +757,10 @@ export function createApiManager(appContext) {
     if (promptType && promptsConfig && promptsConfig[promptType]?.model) {
       const preferredValue = String(promptsConfig[promptType].model || '').trim();
       if (preferredValue) {
-        // 先按 displayName 精确匹配
-        let config = apiConfigs.find(c => (c.displayName || '').trim() === preferredValue);
-        if (!config) {
-          // 回退：再按 modelName 匹配
-          config = apiConfigs.find(c => (c.modelName || '').trim() === preferredValue);
-        }
+        // 支持 id 优先；回退 displayName；再回退 modelName
+        let config = apiConfigs.find(c => c.id && c.id === preferredValue);
+        if (!config) config = apiConfigs.find(c => (c.displayName || '').trim() === preferredValue);
+        if (!config) config = apiConfigs.find(c => (c.modelName || '').trim() === preferredValue);
         if (config) {
           console.log(`根据 promptType "${promptType}" 使用配置: ${config.displayName || config.modelName}`);
           return config;
@@ -805,8 +809,8 @@ export function createApiManager(appContext) {
 
     // 尝试按 baseUrl 和 modelName 查找现有配置
     let matchedConfig = apiConfigs.find(config =>
-      config.baseUrl === partialConfig.baseUrl &&
-      config.modelName === partialConfig.modelName
+      (partialConfig.id && config.id === partialConfig.id) ||
+      (config.baseUrl === partialConfig.baseUrl && config.modelName === partialConfig.modelName)
     );
 
     // 如果找到完全匹配，返回该配置 (确保包含 apiKey 和轮询状态)
