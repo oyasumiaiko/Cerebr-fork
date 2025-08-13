@@ -468,6 +468,11 @@ export function createContextMenuManager(appContext) {
     const originalHtml = textDiv.innerHTML;
     const originalText = messageElement.getAttribute('data-original-text') || textDiv.textContent || '';
 
+    // 记录变更前的原始消息尺寸（避免后续DOM修改影响测量）
+    const originalMsgRect = messageElement.getBoundingClientRect();
+    const originalMessageWidth = messageElement.clientWidth || Math.round(originalMsgRect.width) || 0;
+    const originalMessageHeight = messageElement.offsetHeight || Math.round(originalMsgRect.height) || 0;
+
     // 构建编辑器容器
     const editorWrapper = document.createElement('div');
     editorWrapper.className = 'inline-editor-wrapper';
@@ -496,9 +501,21 @@ export function createContextMenuManager(appContext) {
     textDiv.style.display = 'none';
     messageElement.insertBefore(editorWrapper, textDiv.nextSibling);
 
-    // 设置默认高度为视口的一半，并启用滚动
-    textarea.style.height = '50vh';
+    // 使用进入编辑前记录的 .message 尺寸设置编辑器大小（高度将被 CSS 的 min/max 约束）
+    const baseWidth = Math.max(0, originalMessageWidth);
+    const baseHeight = Math.max(0, originalMessageHeight);
+
+    if (baseHeight > 0) {
+      textarea.style.height = baseHeight + 'px';
+    }
     textarea.style.overflow = 'auto';
+    // 宽度：以原消息宽度为基准，并设置最小 70vw，上限 100%
+    if (baseWidth > 0) {
+      textarea.style.width = baseWidth + 'px';
+    } else {
+      textarea.style.width = '';
+    }
+    textarea.style.maxWidth = '100%';
     textarea.focus();
     // DOM完成后再定位，确保计算准确，并在顶部留出微小空隙
     scheduleScrollAfterSetup();
@@ -574,9 +591,14 @@ export function createContextMenuManager(appContext) {
       // 更新 DOM 显示
       const textDiv = messageElement.querySelector('.text-content');
       if (textDiv) {
-        // 使用 messageProcessor 的渲染逻辑以保持一致性
-        const processed = appContext.services.messageProcessor.processMathAndMarkdown(newText);
-        textDiv.innerHTML = processed;
+        if (messageElement.classList.contains('user-message')) {
+          // 用户消息：保持原始文本展示，不进行 Markdown 渲染
+          textDiv.innerText = newText;
+        } else {
+          // AI 消息：使用 Markdown 渲染
+          const processed = appContext.services.messageProcessor.processMathAndMarkdown(newText);
+          textDiv.innerHTML = processed;
+        }
       }
       // 存储原始文本以便复制功能
       messageElement.setAttribute('data-original-text', newText);
