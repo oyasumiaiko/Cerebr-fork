@@ -42,6 +42,7 @@ export function createContextMenuManager(appContext) {
   const chatContainer = dom.chatContainer;
   const forkConversationButton = dom.forkConversationButton;
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
+  const editMessageButton = document.getElementById('edit-message');
 
   // Services from appContext.services
   const messageSender = services.messageSender;
@@ -52,6 +53,7 @@ export function createContextMenuManager(appContext) {
   // Private state
   let currentMessageElement = null;
   let currentCodeBlock = null;
+  let isEditing = false;
 
   /**
    * 显示上下文菜单
@@ -386,6 +388,12 @@ export function createContextMenuManager(appContext) {
     // 按钮点击处理
     copyMessageButton.addEventListener('click', copyMessageContent);
     copyCodeButton.addEventListener('click', copyCodeContent);
+    // 重新编辑消息
+    editMessageButton.addEventListener('click', () => {
+      if (!currentMessageElement || isEditing) return;
+      startInlineEdit(currentMessageElement);
+      hideContextMenu();
+    });
     // 修复：使用 messageSender.abortCurrentRequest()，避免未定义的 abortCurrentRequest 引发错误
     stopUpdateButton.addEventListener('click', () => {
       if (messageSender) messageSender.abortCurrentRequest();
@@ -425,6 +433,107 @@ export function createContextMenuManager(appContext) {
 
     // 滚动时隐藏菜单
     chatContainer.addEventListener('scroll', hideContextMenu);
+  }
+
+  /**
+   * 开始就地编辑消息
+   * @param {HTMLElement} messageElement
+   */
+  function startInlineEdit(messageElement) {
+    const messageId = messageElement.getAttribute('data-message-id');
+    if (!messageId) return;
+    isEditing = true;
+
+    // 定位文本容器
+    const textDiv = messageElement.querySelector('.text-content');
+    if (!textDiv) { isEditing = false; return; }
+
+    // 原始HTML和纯文本
+    const originalHtml = textDiv.innerHTML;
+    const originalText = messageElement.getAttribute('data-original-text') || textDiv.textContent || '';
+
+    // 构建编辑器容器
+    const editorWrapper = document.createElement('div');
+    editorWrapper.className = 'inline-editor-wrapper';
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'inline-editor-textarea';
+    textarea.value = originalText;
+
+    const actionBar = document.createElement('div');
+    actionBar.className = 'inline-editor-actions';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'inline-editor-save';
+    saveBtn.textContent = '保存';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'inline-editor-cancel';
+    cancelBtn.textContent = '取消';
+
+    actionBar.appendChild(saveBtn);
+    actionBar.appendChild(cancelBtn);
+    editorWrapper.appendChild(textarea);
+    editorWrapper.appendChild(actionBar);
+
+    // 替换显示
+    textDiv.style.display = 'none';
+    messageElement.insertBefore(editorWrapper, textDiv.nextSibling);
+
+    // 自适应高度
+    autoResize(textarea);
+    textarea.addEventListener('input', () => autoResize(textarea));
+    textarea.focus();
+
+    // 绑定事件
+    saveBtn.addEventListener('click', async () => {
+      const newText = textarea.value;
+      await applyInlineEdit(messageElement, messageId, newText);
+      cleanup();
+    });
+    cancelBtn.addEventListener('click', () => {
+      textDiv.style.display = '';
+      editorWrapper.remove();
+      isEditing = false;
+    });
+
+    function cleanup() {
+      textDiv.style.display = '';
+      editorWrapper.remove();
+      isEditing = false;
+    }
+  }
+
+  function autoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(400, textarea.scrollHeight) + 'px';
+  }
+
+  /**
+   * 应用就地编辑结果：更新UI与历史
+   */
+  async function applyInlineEdit(messageElement, messageId, newText) {
+    try {
+      // 更新历史节点
+      const node = chatHistory.messages.find(m => m.id === messageId);
+      if (!node) { console.error('未找到消息历史节点'); return; }
+      node.content = newText;
+
+      // 更新 DOM 显示
+      const textDiv = messageElement.querySelector('.text-content');
+      if (textDiv) {
+        // 使用 messageProcessor 的渲染逻辑以保持一致性
+        const processed = appContext.services.messageProcessor.processMathAndMarkdown(newText);
+        textDiv.innerHTML = processed;
+      }
+      // 存储原始文本以便复制功能
+      messageElement.setAttribute('data-original-text', newText);
+
+      // 保存会话
+      await chatHistoryUI.saveCurrentConversation(true);
+    } catch (e) {
+      console.error('应用编辑结果失败:', e);
+    }
   }
 
   /**
