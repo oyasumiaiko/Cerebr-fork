@@ -1948,6 +1948,13 @@ body.hide-references .reference-number.superscript {
     justify-content: flex-end;
     margin-top: 12px;
 }
+/* 保存状态提示 */
+.prompt-actions .save-status {
+    margin-right: auto;
+    align-self: center;
+    font-size: 12px;
+    opacity: 0.7;
+}
 
 .prompt-actions button {
     padding: 8px 16px;
@@ -1968,15 +1975,15 @@ body.hide-references .reference-number.superscript {
 }
 
 #save-prompts {
-    background: var(--cerebr-bg-color);
-    border: 0px;
-    color: var(--cerebr-icon-color);
-    box-shadow: 0 0 2px 0px var(--cerebr-icon-color);
+    background: transparent;
+    border: 1px solid var(--cerebr-border-color);
+    color: var(--cerebr-text-color);
+    box-shadow: none;
 }
 
 #save-prompts:hover {
-    background: var(--cerebr-bg-color);
-    box-shadow: 0 0 3px 1px var(--cerebr-icon-color);
+    background: var(--cerebr-message-user-bg);
+    box-shadow: none;
 }
 
 /* 深色模式适配 */

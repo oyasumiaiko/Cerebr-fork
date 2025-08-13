@@ -181,6 +181,9 @@ class PromptSettings {
         
         // 绑定事件处理器
         this.bindEvents();
+
+        // 文本域变更自动保存（防抖）
+        this._setupAutosaveForTextareas();
         
         // 初始化提示词设置
         this.loadPromptSettings();
@@ -394,6 +397,30 @@ class PromptSettings {
         this.savePromptsButton.addEventListener('click', () => this.savePromptSettings(true));
     }
 
+    /**
+     * 为提示词文本域设置统一的自动保存逻辑，使用防抖避免频繁写入。
+     * 会在输入与变更时显示“正在保存…”，保存完成后显示“所有更改已保存”。
+     * @private
+     * @since 1.0.0
+     */
+    _setupAutosaveForTextareas() {
+        const textareas = this.promptSettings.querySelectorAll('textarea');
+        let timer = null;
+        textareas.forEach((ta) => {
+            ['input','change'].forEach(evt => {
+                ta.addEventListener(evt, () => {
+                    const status = document.getElementById('save-status');
+                    if (status) status.textContent = '正在保存...';
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(async () => {
+                        await this.autoSavePromptSettings();
+                        if (status) status.textContent = '所有更改已保存';
+                    }, 300);
+                });
+            });
+        });
+    }
+
     // 迁移逻辑委托至 prompt_store.js
     async migrateOldPromptSettings() { await migrateOldPromptSettings(); }
 
@@ -463,15 +490,10 @@ class PromptSettings {
 
             if (shouldClosePanel) this.promptSettings.classList.remove('visible');
 
-            const saveButton = this.savePromptsButton;
-            const originalText = saveButton.textContent;
-            const originalBackground = saveButton.style.background;
-            saveButton.textContent = shouldClosePanel ? '已保存' : '已自动保存';
-            saveButton.style.background = shouldClosePanel ? '#34C759' : 'rgba(52, 199, 89, 0.4)';
-            setTimeout(() => {
-                saveButton.textContent = originalText;
-                saveButton.style.background = originalBackground;
-            }, shouldClosePanel ? 2000 : 800);
+            const status = document.getElementById('save-status');
+            if (status) {
+                status.textContent = shouldClosePanel ? '已保存' : '所有更改已保存';
+            }
         } catch (error) {
             console.error('保存提示词设置失败:', error);
             alert('保存部分或全部设置失败，可能已超出存储配额，请检查后重试。');
