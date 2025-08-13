@@ -67,6 +67,52 @@ input, textarea, select {
     --cerebr-inline-code-bg: rgba(255, 255, 255, 0.1);
 }
 
+/* 全局滚动条样式（统一定义在 :root/html/body） */
+html, body, :root {
+    scrollbar-width: thin;
+    scrollbar-color: var(--cerebr-border-color) transparent;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+:root::-webkit-scrollbar,
+:root *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+:root::-webkit-scrollbar-thumb,
+:root *::-webkit-scrollbar-thumb {
+    background-color: var(--cerebr-scrollbar-thumb);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover,
+:root::-webkit-scrollbar-thumb:hover,
+:root *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--cerebr-scrollbar-thumb-hover);
+}
+html::-webkit-scrollbar-thumb:active,
+body::-webkit-scrollbar-thumb:active,
+:root::-webkit-scrollbar-thumb:active,
+:root *::-webkit-scrollbar-thumb:active {
+    background-color: var(--cerebr-scrollbar-thumb-active);
+}
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+:root::-webkit-scrollbar-track,
+:root *::-webkit-scrollbar-track {
+    background: transparent;
+}
+html::-webkit-scrollbar-corner,
+body::-webkit-scrollbar-corner,
+:root::-webkit-scrollbar-corner,
+:root *::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
 
 :root.night-theme {
     --cerebr-opacity: 0.8;
@@ -109,8 +155,7 @@ body {
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 15px;
-    /* scrollbar-width: none; */
-    -ms-overflow-style: none;
+    /* 滚动条样式统一至全局 */
     min-height: 0;
     -webkit-overflow-scrolling: touch;
     /* scroll-behavior: smooth; */
@@ -121,33 +166,7 @@ body {
     display: none;
 } */
 
-/* 自定义滚动条样式 */
-#chat-container::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-}
-
-#chat-container::-webkit-scrollbar-thumb {
-    background-color: var(--cerebr-scrollbar-thumb);
-    border: 2px solid transparent;
-    border-radius: 8px;
-}
-
-#chat-container::-webkit-scrollbar-track {
-    background-color: transparent;
-}
-
-#chat-container::-webkit-scrollbar-thumb:hover {
-    background: var(--cerebr-scrollbar-thumb-hover);
-}
-
-#chat-container::-webkit-scrollbar-thumb:active {
-    background: var(--cerebr-scrollbar-thumb-active);
-}
-
-#chat-container::-webkit-scrollbar-corner {
-    background: transparent;
-}
+/* 滚动条样式统一到全局 */
 
 /* 消息样式 */
 .message {
@@ -193,20 +212,7 @@ body {
     max-height: 50vh;
     overflow-y: auto;
 }
-.user-message .text-content::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-.user-message .text-content::-webkit-scrollbar-thumb {
-    background-color: var(--cerebr-border-color);
-    border: 2px solid var(--cerebr-border-color);
-    border-radius: 4px;
-}
-
-.user-message .text-content::-webkit-scrollbar-track {
-    background-color: transparent;
-}
+/* 滚动条样式统一到全局 */
 
 /* 输入区域样式 */
 #input-container {
@@ -265,7 +271,6 @@ body {
     flex-direction: row;
     gap: 4px;
     overflow: scroll;
-    scrollbar-width: none;
 }
 
 #image-container:empty {
@@ -512,9 +517,7 @@ input:checked + .slider:before {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    overflow-y: scroll;
-    scrollbar-width: none;  /* Firefox */
-    -ms-overflow-style: none;  /* IE and Edge */
+    overflow-y: auto;
     backdrop-filter: blur(var(--cerebr-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
@@ -524,9 +527,7 @@ input:checked + .slider:before {
     user-select: none;  /* 防止文字被选中 */
 }
 
-#api-settings::-webkit-scrollbar {
-    display: none;  /* Chrome, Safari and Opera */
-}
+/* 统一滚动条至全局，移除隐藏规则 */
 
 #api-settings.visible {
     opacity: 1;
@@ -729,16 +730,7 @@ input:checked + .slider:before {
     overflow: auto;
 }
 
-.custom-params-group textarea.custom-params::-webkit-scrollbar {
-    width: 8px;
-}
-.custom-params-group textarea.custom-params::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.2);
-    border-radius: 6px;
-}
-.custom-params-group textarea.custom-params::-webkit-scrollbar-track {
-    background: transparent;
-}
+/* 滚动条样式统一到全局 */
 
 /* 移除 headers 相关样式（已不需要） */
 
@@ -1842,8 +1834,6 @@ body.hide-references .reference-number.superscript {
     flex-direction: column;
     padding: 20px;
     overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
     backdrop-filter: blur(var(--cerebr-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
@@ -1853,9 +1843,7 @@ body.hide-references .reference-number.superscript {
     user-select: none;
 }
 
-#prompt-settings::-webkit-scrollbar {
-    display: none;
-}
+/* 统一滚动条至全局，移除隐藏规则 */
 
 #prompt-settings.visible {
     opacity: 1;
@@ -1928,14 +1916,10 @@ body.hide-references .reference-number.superscript {
     line-height: 1.5;
     resize: vertical;
     transition: all 0.2s ease;
-    scrollbar-width: none;  /* Firefox */
-    -ms-overflow-style: none;  /* IE and Edge */
+    /* 滚动条样式统一至全局 */
 }
 
-/* Hide scrollbar for Chrome, Safari and Opera */
-.prompt-group textarea::-webkit-scrollbar {
-    display: none;
-}
+/* 滚动条样式统一至全局 */
 
 .prompt-group textarea:focus {
     outline: none;
@@ -2348,23 +2332,10 @@ body.hide-references .reference-number.superscript {
     flex: 1 1 auto;
     overflow-y: auto;
     overflow-x: hidden;
-    /* Firefox 下的滚动条 */
-    scrollbar-width: thin;
-    scrollbar-color: var(--cerebr-border-color) transparent;
+    /* 滚动条样式统一至全局 */
 }
 
-/* 以下是 WebKit 浏览器下定制滚动条的样式 */
-#chat-history-list::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-#chat-history-list::-webkit-scrollbar-track {
-    background: transparent;
-}
-#chat-history-list::-webkit-scrollbar-thumb {
-    background-color: var(--cerebr-border-color);
-    border-radius: 3px;
-}
+/* 滚动条样式统一至全局 */
 
 /* 调整聊天记录面板标题栏关闭按钮的样式，使其与整体风格一致 */
 #chat-history-panel .panel-header button {
@@ -2585,8 +2556,7 @@ body.hide-references .reference-number.superscript {
     height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
-    scrollbar-width: thin;
-    scrollbar-color: var(--cerebr-border-color) transparent;
+    /* 滚动条样式统一至全局 */
 }
 
 .history-tab-content.active {
@@ -2594,19 +2564,7 @@ body.hide-references .reference-number.superscript {
     flex-direction: column;
 }
 
-.history-tab-content::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-
-.history-tab-content::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.history-tab-content::-webkit-scrollbar-thumb {
-    background-color: var(--cerebr-border-color);
-    border-radius: 3px;
-}
+/* 滚动条样式统一至全局 */
 
 /* 数据库统计面板样式 */
 .db-stats-panel {
@@ -2878,7 +2836,6 @@ body.hide-references .reference-number.superscript {
     max-height: 0;
     overflow: hidden;
     transition: 0.3s ease;
-    scrollbar-width: none;
     overflow-x: hidden;
     position: relative;
     padding-bottom: 0; /* 初始状态没有padding */
@@ -3624,19 +3581,4 @@ body.hide-references .reference-number.superscript {
     border-color: color-mix(in srgb, var(--cerebr-red) 50%, var(--cerebr-border-color));
   }
   
-  /* Subtle custom scrollbar for the inline editor */
-  .inline-editor-textarea::-webkit-scrollbar {
-    width: 10px;
-  }
-  .inline-editor-textarea::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .inline-editor-textarea::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--cerebr-text-color) 20%, transparent);
-    border-radius: 8px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-  }
-  .inline-editor-textarea::-webkit-scrollbar-thumb:hover {
-    background-color: color-mix(in srgb, var(--cerebr-text-color) 35%, transparent);
-  }
+  /* 滚动条样式统一至全局 */
