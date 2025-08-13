@@ -104,6 +104,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     function initializeAppContextUtils() {
+        // 写入输入容器高度到 CSS 变量，供设置面板预留空间
+        function updateInputContainerHeightVar() {
+            const input = appContext.dom.inputContainer || document.getElementById('input-container');
+            const root = document.documentElement;
+            if (input && root) {
+                const rect = input.getBoundingClientRect();
+                root.style.setProperty('--input-container-height', `${Math.ceil(rect.height)}px`);
+            }
+        }
+        appContext.utils.updateInputContainerHeightVar = updateInputContainerHeightVar;
         appContext.utils.scrollToBottom = () => {
             const settingsManager = appContext.services.settingsManager;
             const messageSender = appContext.services.messageSender;
@@ -200,6 +210,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
     initializeAppContextUtils();
+    // 初次与后续窗口/内容变化时更新高度变量
+    appContext.utils.updateInputContainerHeightVar();
+    window.addEventListener('resize', appContext.utils.updateInputContainerHeightVar);
+    const resizeObserver = new ResizeObserver(() => appContext.utils.updateInputContainerHeightVar());
+    const inputEl = document.getElementById('input-container');
+    if (inputEl) resizeObserver.observe(inputEl);
 
     window.cerebr = window.cerebr || {};
     window.cerebr.settings = {

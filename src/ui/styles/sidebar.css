@@ -218,6 +218,7 @@ body {
     position: relative;
     flex-shrink: 0;
     box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.1);
+    z-index: 10002; /* 始终浮于设置面板之上 */
 }
 
 /* 顶部同心小圆点状态指示（对话框左上角） */
@@ -506,7 +507,7 @@ input:checked + .slider:before {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--input-container-height, 0px); /* 预留输入区高度 */
     background: var(--cerebr-bg-color);
     display: flex;
     flex-direction: column;
@@ -1835,7 +1836,7 @@ body.hide-references .reference-number.superscript {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--input-container-height, 0px); /* 预留输入区高度 */
     background: var(--cerebr-bg-color);
     display: flex;
     flex-direction: column;
