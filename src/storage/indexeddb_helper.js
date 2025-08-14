@@ -370,9 +370,20 @@ export async function getDatabaseStats() {
     let largestMessage = 0;
     let oldestMessageDate = Date.now();
     let newestMessageDate = 0;
+    let conversationCount = 0;
+    const domainCounts = new Map();
     
     // 分析会话数据
     conversations.forEach(conv => {
+      conversationCount++;
+      // 统计域名
+      if (conv.url) {
+        try {
+          const u = new URL(conv.url);
+          const host = u.hostname || 'unknown';
+          domainCounts.set(host, (domainCounts.get(host) || 0) + 1);
+        } catch {}
+      }
       if (conv.messages) {
         totalMessages += conv.messages.length;
         
@@ -430,6 +441,12 @@ export async function getDatabaseStats() {
       }
     });
     
+    // 生成域名 Top 10
+    const topDomains = Array.from(domainCounts.entries())
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0, 10)
+      .map(([domain, count]) => ({ domain, count }));
+
     // 格式化大小为人类可读格式
     const formatSize = (bytes) => {
       if (bytes === 0) return '0 B';
@@ -441,8 +458,12 @@ export async function getDatabaseStats() {
     // 计算时间跨度
     const timeSpanDays = (newestMessageDate - oldestMessageDate) / (1000 * 60 * 60 * 24);
     
+    const conversationsCount = conversations.length;
+    const avgMessagesPerConversation = conversationsCount > 0 ? (totalMessages / conversationsCount) : 0;
+    const avgTextBytesPerMessage = totalMessages > 0 ? (totalTextSize / totalMessages) : 0;
+
     return {
-      conversationsCount: conversations.length,
+      conversationsCount,
       messagesCount: totalMessages,
       imageMessagesCount: totalImageMessages,
       messageContentRefsCount: contentRefs.length,
@@ -456,7 +477,11 @@ export async function getDatabaseStats() {
       largestMessageSizeFormatted: formatSize(largestMessage),
       oldestMessageDate: oldestMessageDate !== Date.now() ? new Date(oldestMessageDate) : null,
       newestMessageDate: newestMessageDate !== 0 ? new Date(newestMessageDate) : null,
-      timeSpanDays: timeSpanDays > 0 ? Math.round(timeSpanDays) : 0
+      timeSpanDays: timeSpanDays > 0 ? Math.round(timeSpanDays) : 0,
+      avgMessagesPerConversation,
+      avgTextBytesPerMessage,
+      avgTextBytesPerMessageFormatted: formatSize(Math.round(avgTextBytesPerMessage)),
+      topDomains
     };
   } catch (error) {
     console.error('获取数据库统计信息失败:', error);

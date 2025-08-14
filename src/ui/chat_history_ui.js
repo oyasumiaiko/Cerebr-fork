@@ -1332,6 +1332,23 @@ export function createChatHistoryUI(appContext) {
         </div>
       </div>
     `;
+
+    // 新增卡片：均值统计
+    const avgStatsCard = document.createElement('div');
+    avgStatsCard.className = 'db-stats-card avg-stats-card';
+    avgStatsCard.innerHTML = `
+      <div class="db-stats-card-header">均值统计</div>
+      <div class="db-stats-metrics">
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${(stats.avgMessagesPerConversation || 0).toFixed(2)}</div>
+          <div class="db-stats-metric-label">平均每会话消息数</div>
+        </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.avgTextBytesPerMessageFormatted || '0 B'}</div>
+          <div class="db-stats-metric-label">平均每条文本大小</div>
+        </div>
+      </div>
+    `;
     
     // 第三行卡片：时间跨度
     const timeCard = document.createElement('div');
@@ -1370,6 +1387,18 @@ export function createChatHistoryUI(appContext) {
     
     timeCard.innerHTML = timeContent;
     
+    // 新增卡片：Top 域名（最多 10 个）
+    const domainsCard = document.createElement('div');
+    domainsCard.className = 'db-stats-card domains-card';
+    const topDomains = Array.isArray(stats.topDomains) ? stats.topDomains : [];
+    const domainsListHtml = topDomains.length
+      ? `<ul class="domain-list">${topDomains.map(d => `<li><span class="domain">${d.domain}</span><span class="count">${d.count}</span></li>`).join('')}</ul>`
+      : '<div class="db-stats-empty"><div class="db-stats-empty-text">暂无域名统计</div></div>';
+    domainsCard.innerHTML = `
+      <div class="db-stats-card-header">来源域名 Top 10</div>
+      ${domainsListHtml}
+    `;
+
     // 第四行卡片：技术信息
     const techCard = document.createElement('div');
     techCard.className = 'db-stats-card tech-card';
@@ -1394,6 +1423,8 @@ export function createChatHistoryUI(appContext) {
     // 添加所有卡片到内容区域
     statsContent.appendChild(overviewCard);
     statsContent.appendChild(chatStatsCard);
+    statsContent.appendChild(avgStatsCard);
+    statsContent.appendChild(domainsCard);
     statsContent.appendChild(timeCard);
     statsContent.appendChild(techCard);
     
@@ -1532,16 +1563,20 @@ export function createChatHistoryUI(appContext) {
       filterContainer.className = 'filter-container';
       filterInput = document.createElement('input');
       filterInput.type = 'text';
-      filterInput.placeholder = '筛选文本 或 >10, <5, =20... (按 Enter 搜索)';
+      filterInput.placeholder = '筛选文本 或 >10, <5, =20...';
       
-      // --- 修改开始：监听 keydown 事件 ---
-      filterInput.addEventListener('keydown', (e) => {
-        // 检查是否按下了 Enter 键
-        if (e.key === 'Enter') {
-          e.preventDefault(); // 阻止默认的回车行为（如表单提交）
-          loadConversationHistories(panel, filterInput.value);
-        }
-      });
+      // 改为输入防抖实时搜索，且输入法构词期间不触发
+      let filterDebounceTimer = null;
+      let isComposingFilter = false;
+      const triggerSearch = () => loadConversationHistories(panel, filterInput.value);
+      const onFilterInput = () => {
+        if (isComposingFilter) return;
+        if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+        filterDebounceTimer = setTimeout(triggerSearch, 200);
+      };
+      filterInput.addEventListener('input', onFilterInput);
+      filterInput.addEventListener('compositionstart', () => { isComposingFilter = true; });
+      filterInput.addEventListener('compositionend', () => { isComposingFilter = false; triggerSearch(); });
       filterContainer.appendChild(filterInput);
       
       // 新增清除按钮，放在搜索框右边

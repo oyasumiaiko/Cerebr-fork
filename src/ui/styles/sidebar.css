@@ -270,7 +270,7 @@ body {
     display: flex;
     flex-direction: row;
     gap: 4px;
-    overflow: scroll;
+    overflow: hidden;
 }
 
 #image-container:empty {
@@ -598,6 +598,116 @@ input:checked + .slider:before {
 }
 
 /* 添加紧凑模式的头部样式 */
+
+/* --- 数据统计与索引状态专业化样式 --- */
+.db-stats-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.db-stats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.db-stats-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.db-stats-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.db-stats-refresh:hover { opacity: 1; }
+
+.db-stats-content {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 420px) {
+  .db-stats-content {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.db-stats-card {
+  background: var(--cerebr-message-ai-bg);
+  border: 1px solid var(--cerebr-border-color);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.06);
+}
+
+.db-stats-card-header {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  opacity: .85;
+}
+
+.db-stats-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.db-stats-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--cerebr-message-user-bg) 60%, transparent);
+  border-radius: 8px;
+}
+
+.db-stats-metric-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.db-stats-metric-value.highlight { color: var(--cerebr-highlight); }
+
+.db-stats-metric-label {
+  font-size: 11px;
+  opacity: .7;
+}
+
+.db-stats-chart-container { grid-column: 1 / -1; }
+.db-stats-chart { display: flex; align-items: center; gap: 12px; }
+.circular-chart { width: 120px; height: 120px; }
+.circle-bg { fill: none; stroke: #eee; stroke-width: 3.8; opacity: .2; }
+.circle { fill: none; stroke-width: 2.8; stroke-linecap: round; }
+.text-data { stroke: var(--cerebr-teal); }
+.image-data { stroke: var(--cerebr-purple); }
+.percentage { font-size: 8px; text-anchor: middle; fill: var(--cerebr-text-color); }
+.chart-legend { display: grid; gap: 6px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.legend-color { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.text-color { background: var(--cerebr-teal); }
+.image-color { background: var(--cerebr-purple); }
+
+.domains-card .domain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.domains-card .domain-list li { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 8px; background: color-mix(in srgb, var(--cerebr-message-user-bg) 50%, transparent); border-radius: 6px; }
+.domains-card .domain { opacity: .9; }
+.domains-card .count { opacity: .7; }
+
+.db-stats-footer { margin-top: 8px; font-size: 11px; opacity: .6; }
+
+/* 索引状态专用布局 */
+.db-stats-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 420px) {
+  .db-stats-grid { grid-template-columns: 1.2fr .8fr; }
+}
+.index-metrics { grid-template-columns: 1fr 1fr; }
 .api-card-header {
     display: flex;
     align-items: center;
