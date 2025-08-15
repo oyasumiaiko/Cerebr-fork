@@ -56,7 +56,7 @@ function handleGlobalSelectionChange() {
         // 3. 只有在文本内容确实发生变化时才更新状态并打印日志
         if (activeSelectionText !== currentSelection) {
             currentSelection = activeSelectionText;
-            console.log(`[Cerebr Selection] Updated from "${activeSelectionSource}":`, `"${currentSelection}"`);
+            // console.log(`[Cerebr Selection] Updated from "${activeSelectionSource}":`, `"${currentSelection}"`);
             
             // 在这里可以触发您插件的其他逻辑，例如：
             // if (currentSelection) {

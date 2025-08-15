@@ -54,7 +54,7 @@ async function handleTabCommand(commandType) {
 
 // 简化后的命令监听器
 chrome.commands.onCommand.addListener(async (command) => {
-  console.log('onCommand:', command);
+  // console.log('onCommand:', command);
 
   if (command === 'open_sidebar') {
     await handleTabCommand('OPEN_SIDEBAR');
@@ -101,20 +101,20 @@ chrome.action.onClicked.addListener(async (tab) => {
 // 创建一个持久连接
 let port = null;
 chrome.runtime.onConnect.addListener((p) => {
-  console.log('建立持久连接');
+  // console.log('建立持久连接');
   port = p;
   port.onDisconnect.addListener(() => {
-    console.log('连接断开，尝试重新连接');
+    // console.log('连接断开，尝试重新连接');
     port = null;
   });
 });
 
 // 监听来自 content script 的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('收到消息:', message, '来自:', sender.tab?.id);
+  // console.log('收到消息:', message, '来自:', sender.tab?.id);
 
   if (message.type === 'CONTENT_LOADED') {
-    console.log('内容脚本已加载:', message.url);
+    // console.log('内容脚本已加载:', message.url);
     sendResponse({ status: 'ok', timestamp: new Date().toISOString() });
     return false;
   }
