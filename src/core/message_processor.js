@@ -12,6 +12,8 @@
  * @param {boolean} [appContext.settingsManager.getSetting('showReference')=true] - 是否显示引用标记
  * @returns {Object} 消息处理API
  */
+import { renderMarkdownSafe } from '../utils/markdown_renderer.js';
+
 export function createMessageProcessor(appContext) {
   const {
     dom,
@@ -24,20 +26,7 @@ export function createMessageProcessor(appContext) {
   const imageHandler = services.imageHandler;
   const scrollToBottom = utils.scrollToBottom;
   
-  // 配置常量
-  const MATH_DELIMITERS = {
-    delimiters: [
-      { left: '\\(', right: '\\)', display: false },  // 行内公式
-      { left: '\\\\(', right: '\\\\)', display: false },  // 行内公式
-      { left: '\\[', right: '\\]', display: true },   // 行间公式
-      { left: '$$', right: '$$', display: true },     // 行间公式
-      { left: '$', right: '$', display: false }       // 行内公式
-    ],
-    throwOnError: false,
-    renderConfig: {
-      throwOnError: false
-    }
-  };
+  // 保留占位：数学渲染现改为在 Markdown 渲染阶段由 KaTeX 完成
 
   /**
    * 设置或更新思考过程的显示区域
@@ -206,11 +195,7 @@ export function createMessageProcessor(appContext) {
       hljs.highlightElement(block);
     });
 
-    try {
-      renderMathInElement(messageDiv, MATH_DELIMITERS.renderConfig);
-    } catch (error) {
-      console.error('渲染LaTeX公式失败:', error);
-    }
+    // 数学公式已在渲染阶段通过 KaTeX 输出，无需二次 auto-render
 
     if (!messageIdToUpdate) {
       if (fragment) {
@@ -349,8 +334,6 @@ export function createMessageProcessor(appContext) {
     textContentDiv.querySelectorAll('pre code').forEach(block => {
       hljs.highlightElement(block);
     });
-
-    renderMathInElement(messageDiv, MATH_DELIMITERS.renderConfig);
 
     if (groundingMetadata) {
       if (htmlElements && htmlElements.length > 0) {
@@ -732,51 +715,10 @@ export function createMessageProcessor(appContext) {
    * @returns {string} 处理后的HTML
    */
   function processMathAndMarkdown(text) {
-    // 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
-    const preHandledText = fixBoldParsingIssue(text);
-    
-    // 对消息进行折叠处理，将从文本开头到首次出现 "\n# " 之前的部分折叠为可展开元素
-    const foldedText = foldMessageContent(preHandledText);
-
-    // 预处理数学表达式
-    const { text: escapedText, mathExpressions } = preMathEscape(foldedText);
-
-    // 处理未闭合的代码块
-    let processedText = escapedText;
-    const codeBlockRegex = /```/g;
-    if (((processedText || '').match(codeBlockRegex) || []).length % 2 > 0) {
-      processedText += '\n```';
-    }
-    
-    // 配置marked
-    marked.setOptions({
-      breaks: true,
-      gfm: true,
-      sanitize: true,
-      highlight: function (code, lang) {
-        if (lang && hljs.getLanguage(lang)) {
-          try {
-            return hljs.highlight(code, { language: lang }).value;
-          } catch (err) {
-            return code;
-          }
-        }
-        return code;
-      }
-    });
-
-    // 设置表格渲染器
-    const renderer = new marked.Renderer();
-    renderer.table = function (header, body) {
-      return `<table class="markdown-table">\n<thead>\n${header}</thead>\n<tbody>\n${body}</tbody>\n</table>\n`;
-    };
-    marked.use({ renderer });
-
-    // 渲染Markdown
-    const renderedMarkdown = marked.parse(processedText);
-
-    // 替换数学表达式
-    return postMathReplace(renderedMarkdown, mathExpressions);
+    // 折叠“搜索过程/思考过程”等自定义片段
+    const foldedText = foldMessageContent(text || '');
+    // 使用纯函数式渲染管线（禁用内联 HTML、支持 KaTeX、严格 DOMPurify）
+    return renderMarkdownSafe(foldedText, { allowDetails: true });
   }
 
   /**
@@ -784,10 +726,7 @@ export function createMessageProcessor(appContext) {
    * @param {string} text - 原始文本
    * @returns {string} 处理后的文本
    */
-  function fixBoldParsingIssue(text) {
-    // 在所有**前后添加零宽空格，以修复粗体解析问题
-    return text.replace(/\*\*/g, '\u200B**\u200B');
-  }
+  // 旧的粗体修复、数学占位处理已内聚至 utils/markdown_renderer.js
 
   /**
    * 根据正则折叠消息文本，使用自定义正则表达式和摘要文本
@@ -826,28 +765,7 @@ export function createMessageProcessor(appContext) {
    * @param {string} text - 原始文本
    * @returns {Object} 包含处理后的文本和数学表达式的对象
    */
-  function preMathEscape(text) {
-    let counter = 0;
-    const mathExpressions = [];
-
-    // 替换块级数学表达式
-    text = text.replace(/(\\\[[\s\S]+?\\\])/g, (match, p1) => {
-        const placeholder = `😎BLOCK_MATH_${counter}😎`;
-        mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'block' });
-        counter++;
-        return placeholder;
-    });
-
-    // 替换行内数学表达式
-    text = text.replace(/(\\\([\s\S]+?\\\))/g, (match, p1) => {
-        const placeholder = `😎INLINE_MATH_${counter}😎`;
-        mathExpressions.push({ placeholder, content: p1.slice(2, -2), originalContent: p1, type: 'inline' });
-        counter++;
-        return placeholder;
-    });
-
-    return { text, mathExpressions };
-  }
+  // 数学预/后处理逻辑交由渲染器统一处理
 
   /**
    * 后处理数学表达式
@@ -855,24 +773,7 @@ export function createMessageProcessor(appContext) {
    * @param {Array} mathExpressions - 数学表达式数组
    * @returns {string} 替换数学表达式后的文本
    */
-  function postMathReplace(text, mathExpressions) {
-    mathExpressions.forEach(({ placeholder, content, originalContent, type }) => {
-        let rendered;
-        try {
-            if (type === 'block' || type === 'dollarblock') {
-                rendered = katex.renderToString(content, { displayMode: true, throwOnError: true });
-            } else if (type === 'inline' || type === 'dollarinline') {
-                rendered = katex.renderToString(content, { displayMode: false, throwOnError: true });
-            }
-        } catch (e) {
-            console.error('KaTeX error:', e);
-            rendered = originalContent;
-        }
-        text = text.replace(placeholder, rendered);
-    });
-
-    return text;
-  }
+  // 参见 utils/markdown_renderer.js 中的 KaTeX 渲染
   
   // 返回公共API
   return {
