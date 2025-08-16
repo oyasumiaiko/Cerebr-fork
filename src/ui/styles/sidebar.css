@@ -15,7 +15,8 @@ input, textarea, select {
     --cerebr-opacity: 0.6;
     --cerebr-blur-radius: 100px;
     --cerebr-sidebar-width: 430px;
-    --cerebr-font-size: 14px;
+    --cerebr-font-size: 14px; /* 消息内容字体 */
+    --cerebr-ui-font-size: 15px; /* UI 默认字体（不影响消息内容） */
     
     --cerebr-bg-color: rgba(255, 255, 255, var(--cerebr-opacity));
     --cerebr-text-color: #222;
@@ -140,6 +141,7 @@ body {
     flex-direction: column;
     background-color: var(--cerebr-bg-color);
     color: var(--cerebr-text-color);
+    font-size: var(--cerebr-ui-font-size);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     overflow: hidden;
     transform-origin: top left;
@@ -396,6 +398,7 @@ body {
     color: var(--cerebr-text-color);
     border-radius: 6px;
     margin: 2px 0;
+    font-size: var(--cerebr-ui-font-size);
 }
 
 .menu-item:hover {
@@ -422,7 +425,7 @@ body {
     padding: 6px 8px;
     background: var(--cerebr-message-ai-bg);
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(var(--cerebr-ui-font-size) - 1px);
     transition: all 0.2s ease;
     cursor: pointer;
     border: 1px solid transparent;
@@ -567,7 +570,7 @@ input:checked + .slider:before {
 }
 
 .settings-title {
-    font-size: 16px;
+    font-size: calc(var(--cerebr-ui-font-size) + 1px);
     font-weight: 500;
 }
 
@@ -2166,7 +2169,7 @@ body.hide-references .reference-number.superscript {
     margin-top: 6px;
 }
 .model-select-container label {
-    font-size: 12px;
+    font-size: calc(var(--cerebr-ui-font-size) - 3px);
     opacity: 0.7;
 }
 .model-select-container .model-select {
@@ -2362,16 +2365,16 @@ body.hide-references .reference-number.superscript {
 
 /* 聊天记录面板样式 */
 #chat-history-panel {
-    font-size: 1.5em;
+    font-size: 1.2em;
     position: fixed;
     top: 0;
-    bottom: 0;
+    bottom: 60px;
     left: 0;
     right: 0;
     margin: auto; /* 自动计算上下左右的空隙，从而居中 */
     width: 50rem;          /* 或者指定具体宽度 */
     max-width: 80%;
-    height: 80%;        /* 明确高度 */
+    height: 85%;        /* 明确高度 */
     background-color: var(--cerebr-bg-color);
     border: 1px solid var(--cerebr-border-color);
     border-radius: 8px;
