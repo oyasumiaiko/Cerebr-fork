@@ -4,6 +4,7 @@
  * 负责管理消息的构建、发送和处理响应的整个生命周期。
  * 这个模块是应用程序的核心部分，处理从用户输入到AI响应显示的完整流程。
  */
+import { composeMessages } from './message_composer.js';
 
 /**
  * 创建消息发送器
@@ -314,17 +315,22 @@ export function createMessageSender(appContext) {
       // 更新加载状态：正在构建消息
       loadingMessage.textContent = '正在构建消息...';
 
-      // 构建消息数组
-      const messages = await buildMessages(
-        promptsConfig,
+      // 构建消息数组（改为纯函数 composer）
+      const conversationChain = getCurrentConversationChain();
+      const configForMaxHistory = apiManager.getSelectedConfig();
+      const sendChatHistoryFlag = (shouldSendChatHistory && currentPromptType !== 'image') || forceSendFullHistory;
+      const messages = composeMessages({
+        prompts: promptsConfig,
         injectedSystemMessages,
-        pageContentResponse,
-        imageContainsScreenshot,
+        pageContent: pageContentResponse,
+        imageContainsScreenshot: !!imageContainsScreenshot,
         currentPromptType,
         regenerateMode,
         messageId,
-        forceSendFullHistory
-      );
+        conversationChain,
+        sendChatHistory: sendChatHistoryFlag,
+        maxHistory: configForMaxHistory?.maxChatHistory || 500
+      });
 
       const messagesCount = messages.length;
 
@@ -417,84 +423,7 @@ export function createMessageSender(appContext) {
     }
   }
 
-  /**
-   * 构建消息数组
-   * @private
-   * @param {Object} prompts - 提示词设置
-   * @param {Array<string>} injectedSystemMessages - 注入的系统消息
-   * @param {Object|null} pageContent - 页面内容
-   * @param {boolean} imageContainsScreenshot - 是否包含截图
-   * @param {string} currentPromptType - 当前提示词类型
-   * @param {boolean} regenerateMode - 是否为重新生成模式
-   * @param {string} messageId - 重新生成模式下的消息ID
-   * @returns {Array<Object>} 消息数组
-   */
-  async function buildMessages(prompts, injectedSystemMessages, pageContent, imageContainsScreenshot, currentPromptType, regenerateMode = false, messageId = null, forceSendFullHistory = false) {
-    const messages = [];
-
-    const pageContentPrompt = pageContent
-      ? `\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}`
-      : '';
-
-    // 组合系统消息+注入的系统消息+网页内容
-    let systemMessageContent = prompts.system.prompt;
-
-    if (imageContainsScreenshot) {
-      systemMessageContent += "\n用户附加了当前页面的屏幕截图";
-    }
-    systemMessageContent += "\n" + injectedSystemMessages.join('\n');
-    systemMessageContent += pageContentPrompt;
-
-    // 构建系统消息对象
-    const systemMessage = {
-      role: "system",
-      content: systemMessageContent
-    };
-    
-    // 将系统消息添加到消息数组
-    messages.push(systemMessage);
-
-    // 获取当前会话链
-    const conversationChain = getCurrentConversationChain();
-
-    // 如果是重新生成模式，我们需要找到目标消息之前的所有消息
-    if (regenerateMode && messageId) {
-      const targetIndex = conversationChain.findIndex(msg => msg.id === messageId);
-      if (targetIndex !== -1) {
-        // 只取到目标消息为止的对话历史
-        conversationChain.splice(targetIndex + 1);
-      }
-    }
-
-    // 根据设置决定是否发送聊天历史
-    // 放开 selection：仅在图片模式下不发送历史
-    // 当 forceSendFullHistory=true 时，无论 prompt 类型如何都发送完整历史
-    const sendChatHistory = (shouldSendChatHistory && currentPromptType !== 'image') || forceSendFullHistory;
-      
-    if (sendChatHistory) {
-      // 获取当前 API 配置的最大历史消息条数设置
-      const config = apiManager.getSelectedConfig();
-      const maxHistory = config?.maxChatHistory || 500;
-      // 如果历史消息超过限制，只取最近的消息
-      const historyToSend = conversationChain.slice(-maxHistory);
-      
-      messages.push(...historyToSend.map(node => ({
-        role: node.role,
-        content: node.content
-      })));
-    } else {
-      // 只发送最后一条消息
-      if (conversationChain.length > 0) {
-        const lastMessage = conversationChain[conversationChain.length - 1];
-        messages.push({
-          role: lastMessage.role,
-          content: lastMessage.content
-        });
-      }
-    }
-
-    return messages;
-  }
+  // 消息构造逻辑已迁移到 message_composer.js 的纯函数 composeMessages
 
   /**
    * 处理API的流式响应

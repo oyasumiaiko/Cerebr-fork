@@ -351,13 +351,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (appContext.dom.emptyStateTempMode) {
         appContext.dom.emptyStateTempMode.addEventListener('click', () => {
             appContext.services.messageSender.toggleTemporaryMode();
-            appContext.dom.messageInput.focus();
-            const range = document.createRange();
-            range.selectNodeContents(appContext.dom.messageInput);
-            range.collapse(false);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
+            appContext.services.inputController.focusToEnd();
         });
     }
 
@@ -591,17 +585,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 break;
             case 'FOCUS_INPUT':
-                appContext.dom.messageInput.focus();
-                setTimeout(() => {
-            const range = document.createRange();
-                    range.selectNodeContents(appContext.dom.messageInput);
-            range.collapse(false);
-            const selection = window.getSelection();
-                    if (selection) {
-            selection.removeAllRanges();
-            selection.addRange(range);
-                    }
-                }, 0);
+                appContext.services.inputController.focusToEnd();
                 break;
             case 'URL_CHANGED':
                 appContext.state.pageInfo = data;
