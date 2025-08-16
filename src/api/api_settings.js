@@ -1008,6 +1008,55 @@ export function createApiManager(appContext) {
   }
 
   /**
+   * 解析外部传入的 apiParam 为可用的完整 API 配置
+   * 支持以下形式：
+   * - 字符串：'selected' | 配置 id | displayName | modelName
+   * - 对象：
+   *   - { id?: string, displayName?: string }
+   *   - { favoriteIndex?: number } 选择收藏列表中的第 N 个
+   *   - { baseUrl, modelName, ... } 作为部分配置，自动补全为完整配置
+   * @param {string|Object|null|undefined} apiParam
+   * @returns {Object|null} 匹配/构造的配置，未解析成功返回 null
+   */
+  function resolveApiParam(apiParam) {
+    if (apiParam == null) return apiConfigs[selectedConfigIndex] || apiConfigs[0] || null;
+
+    // 字符串：特殊值或 id/displayName/modelName
+    if (typeof apiParam === 'string') {
+      const key = apiParam.trim();
+      if (key.toLowerCase() === 'selected') {
+        return apiConfigs[selectedConfigIndex] || apiConfigs[0] || null;
+      }
+      let config = apiConfigs.find(c => c.id && c.id === key);
+      if (!config) config = apiConfigs.find(c => (c.displayName || '').trim() === key);
+      if (!config) config = apiConfigs.find(c => (c.modelName || '').trim() === key);
+      return config || null;
+    }
+
+    // 对象：优先 id/displayName；favoriteIndex；否则按部分配置补全
+    if (typeof apiParam === 'object') {
+      if (apiParam.id) {
+        const cfg = apiConfigs.find(c => c.id === apiParam.id);
+        if (cfg) return cfg;
+      }
+      if (apiParam.displayName) {
+        const cfg = apiConfigs.find(c => (c.displayName || '').trim() === String(apiParam.displayName).trim());
+        if (cfg) return cfg;
+      }
+      if (typeof apiParam.favoriteIndex === 'number') {
+        const favorites = apiConfigs.filter(c => c.isFavorite);
+        const idx = apiParam.favoriteIndex;
+        if (idx >= 0 && idx < favorites.length) return favorites[idx];
+        return null;
+      }
+      // 作为部分配置尝试补全
+      return getApiConfigFromPartial(apiParam);
+    }
+
+    return null;
+  }
+
+  /**
    * 公共API接口
    */
   return {
@@ -1021,6 +1070,7 @@ export function createApiManager(appContext) {
     setupUIEventHandlers,
     getModelConfig,
     getApiConfigFromPartial,
+    resolveApiParam,
 
     // 获取和设置配置
     getSelectedConfig: () => {

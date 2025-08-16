@@ -47,6 +47,10 @@ export function createMessageSender(appContext) {
   let currentConversationId = null;
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
+  /** @type {Object|null} 最近一次请求使用的 API 配置 */
+  let lastUsedApiConfig = null;
+  /** @type {boolean} 失败自动重试时，下一次 regenerate 强制使用 lastUsedApiConfig */
+  let shouldForceLastApiOnNextRegenerate = false;
 
   // 自动重试节流（前沿触发 + 尾随调用）配置
   /**
@@ -198,14 +202,17 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 准备和发送消息
+   * 准备和发送消息（带可选 API 选择参数）
    * @public
-   * @param {Object} [options] - 可选参数对象，用于重新生成消息时传递上下文
+   * @param {Object} [options] - 可选参数对象
    * @param {Array<string>} [options.injectedSystemMessages] - 重新生成时保留的系统消息
    * @param {string} [options.specificPromptType] - 指定使用的提示词类型
    * @param {string} [options.originalMessageText] - 原始消息文本，用于恢复输入框内容
    * @param {boolean} [options.regenerateMode] - 是否为重新生成模式
    * @param {string} [options.messageId] - 重新生成模式下的消息ID
+   * @param {Object|string} [options.api] - API 选择参数：可为完整配置对象、配置 id/displayName/modelName、'selected'、或 {favoriteIndex}
+   * @param {Object} [options.resolvedApiConfig] - 已解析好的 API 配置（优先于 api 参数，完全绕过内部选择策略）
+   * @param {boolean} [options.forceSendFullHistory] - 是否强制发送完整历史
    * @returns {Promise<void>}
    */
   async function sendMessage(options = {}) {
@@ -223,7 +230,9 @@ export function createMessageSender(appContext) {
       originalMessageText = null,
       regenerateMode = false,
       messageId = null,
-      forceSendFullHistory = false
+      forceSendFullHistory = false,
+      api = null,
+      resolvedApiConfig = null
     } = options;
 
     const hasImagesInInput = inputController ? inputController.hasImages() : !!imageContainer.querySelector('.image-tag');
@@ -317,7 +326,13 @@ export function createMessageSender(appContext) {
 
       // 构建消息数组（改为纯函数 composer）
       const conversationChain = getCurrentConversationChain();
-      const configForMaxHistory = apiManager.getSelectedConfig();
+      // 解析 api 参数（若提供）
+      let preferredApiConfig = null;
+      if (api != null && typeof apiManager.resolveApiParam === 'function') {
+        try { preferredApiConfig = apiManager.resolveApiParam(api); } catch (_) { preferredApiConfig = null; }
+      }
+
+      const configForMaxHistory = preferredApiConfig || ((regenerateMode && shouldForceLastApiOnNextRegenerate && lastUsedApiConfig) ? lastUsedApiConfig : apiManager.getSelectedConfig());
       const sendChatHistoryFlag = (shouldSendChatHistory && currentPromptType !== 'image') || forceSendFullHistory;
       const messages = composeMessages({
         prompts: promptsConfig,
@@ -335,8 +350,21 @@ export function createMessageSender(appContext) {
       const messagesCount = messages.length;
 
       // 获取API配置
-      // 优先使用指定的配置，其次使用提示词类型对应的模型配置，最后使用当前选中的配置
-      const config = apiManager.getModelConfig(currentPromptType, promptsConfig, messagesCount);
+      // 优先使用外部提供的 resolvedApiConfig；其后使用 preferredApiConfig；
+      // 再在自动重试的首次 regenerate 使用 lastUsedApiConfig；随后按提示词类型选择；最后跟随当前选中
+      let config;
+      if (resolvedApiConfig) {
+        config = resolvedApiConfig;
+      } else if (preferredApiConfig) {
+        config = preferredApiConfig;
+      } else if (regenerateMode && shouldForceLastApiOnNextRegenerate && lastUsedApiConfig) {
+        config = lastUsedApiConfig;
+        shouldForceLastApiOnNextRegenerate = false; // consume once
+      } else {
+        config = apiManager.getModelConfig(currentPromptType, promptsConfig, messagesCount);
+      }
+      // 记录本次使用的配置，供失败自动重试时复用
+      lastUsedApiConfig = config;
 
       // 添加字数统计元素
       if (!regenerateMode) {
@@ -407,6 +435,8 @@ export function createMessageSender(appContext) {
       }
 
       // 如果发送失败，按“节流（冷却）+ 尾随调用”策略触发自动重试
+      // 标记下次 regenerate 强制沿用本次使用的 API 配置
+      shouldForceLastApiOnNextRegenerate = !!lastUsedApiConfig;
       requestAutoRegenerate();
     } finally {
       // 无论成功还是失败，都重置处理状态
@@ -421,6 +451,27 @@ export function createMessageSender(appContext) {
         lastMessage.classList.remove('updating');
       }
     }
+  }
+
+  /**
+   * 使用外部解析好的 API 配置发送（完全绕过内部 API 选择策略）
+   * @param {Object} params
+   * @param {Object} params.apiConfig - 已解析好的 API 配置
+   * @param {Array<string>} [params.injectedSystemMessages]
+   * @param {string} [params.specificPromptType]
+   * @param {string} [params.originalMessageText]
+   * @param {boolean} [params.regenerateMode]
+   * @param {string} [params.messageId]
+   * @param {boolean} [params.forceSendFullHistory]
+   * @returns {Promise<void>}
+   */
+  async function sendWithApiConfig(params) {
+    if (!params || !params.apiConfig) {
+      console.error('sendWithApiConfig: 缺少 apiConfig');
+      return;
+    }
+    const { apiConfig, ...rest } = params;
+    return sendMessage({ ...rest, resolvedApiConfig: apiConfig });
   }
 
   // 消息构造逻辑已迁移到 message_composer.js 的纯函数 composeMessages
@@ -829,6 +880,7 @@ export function createMessageSender(appContext) {
   // 公开的API
   return {
     sendMessage,
+    sendWithApiConfig,
     performQuickSummary,
     abortCurrentRequest,
     enterTemporaryMode,
