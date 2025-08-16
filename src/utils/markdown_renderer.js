@@ -106,15 +106,15 @@ function extractMathPlaceholders(text) {
   });
 
   // 4) $...$ 行内（避免空白紧邻与纯数字场景，尽量减少误判）
-  work = work.replace(/(^|[^$])\$([^\s$][\s\S]*?[^\s$])\$(?!\$)/g, (m, pre, inner) => {
-    // 排除明显货币格式：以数字或空格紧邻 $ 的情形
-    const invalidPre = /[\d\s]$/.test(pre);
-    const looksLikeMath = /[A-Za-z\\^_{}\\\\]/.test(inner);
-    if (invalidPre || !looksLikeMath) return m; // 放弃替换
-    const placeholder = `\u2063MATH_${counter++}\u2063`;
-    mathTokens.push({ placeholder, content: inner.trim(), display: false });
-    return `${pre}${placeholder}`;
-  });
+//   work = work.replace(/(^|[^$])\$([^\s$][\s\S]*?[^\s$])\$(?!\$)/g, (m, pre, inner) => {
+//     // 排除明显货币格式：以数字或空格紧邻 $ 的情形
+//     const invalidPre = /[\d\s]$/.test(pre);
+//     const looksLikeMath = /[A-Za-z\\^_{}\\\\]/.test(inner);
+//     if (invalidPre || !looksLikeMath) return m; // 放弃替换
+//     const placeholder = `\u2063MATH_${counter++}\u2063`;
+//     mathTokens.push({ placeholder, content: inner.trim(), display: false });
+//     return `${pre}${placeholder}`;
+//   });
 
   return { text: work, mathTokens };
 }
