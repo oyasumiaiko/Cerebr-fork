@@ -652,6 +652,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             const text = this.textContent.trim();
+            const hasImagesInInput = !!appContext.dom.imageContainer?.querySelector('.image-tag');
+
+            // 空输入：仅在最后一条为用户消息时，直接以当前完整历史触发生成（不新增用户消息）
+            if (!text && !hasImagesInInput) {
+                try {
+                    const lastMessage = appContext.dom.chatContainer.querySelector('.message:last-child');
+                    if (!lastMessage) {
+                        appContext.utils.showNotification('没有可用的历史用户消息');
+                        return;
+                    }
+                    if (!lastMessage.classList?.contains('user-message')) {
+                        appContext.utils.showNotification('最后一条消息不是用户消息，未发送');
+                        return;
+                    }
+                    appContext.services.messageSender.sendMessage({
+                        originalMessageText: '',
+                        forceSendFullHistory: true
+                    });
+                } catch (err) {
+                    console.error('空输入触发生成失败:', err);
+                }
+                return;
+            }
             if (e.ctrlKey) {
                 const prompts = appContext.services.promptSettingsManager.getPrompts();
                 const selectionPromptText = prompts.selection.prompt;

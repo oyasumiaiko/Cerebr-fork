@@ -218,7 +218,8 @@ export function createMessageSender(appContext) {
       specificPromptType = null,
       originalMessageText = null,
       regenerateMode = false,
-      messageId = null
+      messageId = null,
+      forceSendFullHistory = false
     } = options;
 
     const imageTags = imageContainer.querySelectorAll('.image-tag');
@@ -228,7 +229,8 @@ export function createMessageSender(appContext) {
 
     // 如果消息为空且没有图片标签，则不发送消息
     const isEmptyMessage = !messageText && imageTags.length === 0;
-    if (isEmptyMessage) return;
+    // 允许在“强制发送完整历史”或“重新生成模式”下继续执行（不新增用户消息）
+    if (isEmptyMessage && !regenerateMode && !forceSendFullHistory) return;
 
     // 获取当前提示词设置
     const promptsConfig = promptSettingsManager.getPrompts();
@@ -315,7 +317,8 @@ export function createMessageSender(appContext) {
         imageContainsScreenshot,
         currentPromptType,
         regenerateMode,
-        messageId
+        messageId,
+        forceSendFullHistory
       );
 
       const messagesCount = messages.length;
@@ -421,7 +424,7 @@ export function createMessageSender(appContext) {
    * @param {string} messageId - 重新生成模式下的消息ID
    * @returns {Array<Object>} 消息数组
    */
-  async function buildMessages(prompts, injectedSystemMessages, pageContent, imageContainsScreenshot, currentPromptType, regenerateMode = false, messageId = null) {
+  async function buildMessages(prompts, injectedSystemMessages, pageContent, imageContainsScreenshot, currentPromptType, regenerateMode = false, messageId = null, forceSendFullHistory = false) {
     const messages = [];
 
     const pageContentPrompt = pageContent
@@ -460,7 +463,8 @@ export function createMessageSender(appContext) {
 
     // 根据设置决定是否发送聊天历史
     // 放开 selection：仅在图片模式下不发送历史
-    const sendChatHistory = shouldSendChatHistory && currentPromptType !== 'image';
+    // 当 forceSendFullHistory=true 时，无论 prompt 类型如何都发送完整历史
+    const sendChatHistory = (shouldSendChatHistory && currentPromptType !== 'image') || forceSendFullHistory;
       
     if (sendChatHistory) {
       // 获取当前 API 配置的最大历史消息条数设置
