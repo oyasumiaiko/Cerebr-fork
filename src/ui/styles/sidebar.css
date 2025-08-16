@@ -226,7 +226,7 @@ body {
     position: relative;
     flex-shrink: 0;
     box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.1);
-    z-index: 10002; /* 始终浮于设置面板之上 */
+    z-index: 1000; /* 始终浮于设置面板之上 */
 }
 
 /* 顶部同心小圆点状态指示（对话框左上角） */
@@ -240,7 +240,7 @@ body {
     background: transparent; /* 熄灭：未获取网页内容（纯对话） */
     border: 2px solid color-mix(in srgb, var(--cerebr-text-color) 40%, transparent);
     box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--cerebr-text-color) 20%, transparent);
-    z-index: 10001;
+    z-index: 1000;
     transition: box-shadow .25s ease, background-color .25s ease, transform .2s ease;
 }
 
@@ -379,7 +379,7 @@ body {
     transform: translateY(4px);
     transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    z-index: 10000;
+    z-index: 2000;
     user-select: none;
 }
 
@@ -1032,7 +1032,7 @@ input:checked + .slider:before {
     padding: 6px;
     min-width: 140px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    z-index: 1000;
+    z-index: 2000;
     display: none;
     backdrop-filter: blur(var(--cerebr-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1062,6 +1062,16 @@ input:checked + .slider:before {
     stroke: currentColor;
     stroke-width: 2;
     flex-shrink: 0;
+}
+
+/* 创建分支对话按钮样式 */
+.context-menu-item#fork-conversation {
+  display: flex;
+}
+
+.context-menu-item#fork-conversation.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 链接样式 */
@@ -3316,7 +3326,7 @@ body.hide-references .reference-number.superscript {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 10010; /* 高于面板 */
+  z-index: 1010; /* 高于面板 */
   pointer-events: none; /* 默认让点击穿透容器 */
 }
 
@@ -3392,16 +3402,6 @@ body.hide-references .reference-number.superscript {
 @keyframes notificationFadeOut {
   from { opacity: 1; transform: translateY(0); }
   to   { opacity: 0; transform: translateY(8px); }
-}
-
-/* 创建分支对话按钮样式 */
-.context-menu-item#fork-conversation {
-  display: flex;
-}
-
-.context-menu-item#fork-conversation.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* 深色适配由上方 .dark-theme .notification 覆盖 */
@@ -3574,11 +3574,6 @@ body.hide-references .reference-number.superscript {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
-
-.context-menu-item:hover {
-    background-color: var(--menu-item-hover-bg, rgba(0, 0, 0, 0.05));
-}
-
 
 /* --- Styles for Thinking Process --- */
 
