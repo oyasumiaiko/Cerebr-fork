@@ -362,8 +362,8 @@ export function createMessageSender(appContext) {
         throw new Error(`API错误 (${response.status}): ${error}`);
       }
 
-      // 处理流式响应
-      await handleStreamResponse(response, loadingMessage);
+      // 处理流式响应（传入本次使用的 API 配置以便记录与渲染footer）
+      await handleStreamResponse(response, loadingMessage, effectiveApiConfig);
 
       // 消息处理完成后，自动保存会话
       if (currentConversationId) {
@@ -453,7 +453,45 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement} loadingMessage - 加载状态消息元素
    * @returns {Promise<void>}
    */
-  async function handleStreamResponse(response, loadingMessage) {
+  async function handleStreamResponse(response, loadingMessage, usedApiConfig) {
+    function applyApiMetaToMessage(messageId, apiConfig, messageDiv) {
+      try {
+        if (!messageId) return;
+        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+        if (node) {
+          node.apiUuid = apiConfig?.id || null;
+          node.apiDisplayName = apiConfig?.displayName || '';
+          node.apiModelId = apiConfig?.modelName || '';
+        }
+        renderApiFooter(messageDiv || chatContainer.querySelector(`[data-message-id="${messageId}"]`), node);
+      } catch (e) {
+        console.warn('记录/渲染API信息失败:', e);
+      }
+    }
+
+    function renderApiFooter(messageElement, nodeLike) {
+      try {
+        if (!messageElement || !nodeLike) return;
+        let footer = messageElement.querySelector('.api-footer');
+        if (!footer) {
+          footer = document.createElement('div');
+          footer.classList.add('api-footer');
+          messageElement.appendChild(footer);
+        }
+        const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
+        let label = '';
+        if (nodeLike.apiUuid) {
+          const cfg = allConfigs.find(c => c.id === nodeLike.apiUuid);
+          if (cfg && cfg.modelName) label = cfg.modelName;
+        }
+        if (!label) label = (nodeLike.apiDisplayName || '').trim();
+        if (!label) label = (nodeLike.apiModelId || '').trim();
+        footer.textContent = label || '';
+        footer.title = `API uuid: ${nodeLike.apiUuid || '-'} | displayName: ${nodeLike.apiDisplayName || '-'} | model: ${nodeLike.apiModelId || '-'}`;
+      } catch (e) {
+        console.warn('渲染API footer失败:', e);
+      }
+    }
     const reader = response.body.getReader();
     let hasStartedResponse = false;
     let aiResponse = ''; // Accumulates the AI's textual response over multiple events
@@ -583,6 +621,8 @@ export function createMessageSender(appContext) {
           );
           if (newAiMessageDiv) {
             currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+            // 记录 API 元信息并渲染 footer
+            applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
           }
           scrollToBottom();
         } else if (currentAiMessageId) {
@@ -655,6 +695,8 @@ export function createMessageSender(appContext) {
               // 从新创建的DOM元素中获取并保存 messageId
               if (newAiMessageDiv) {
                   currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+                  // 记录 API 元信息并渲染 footer
+                  applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
               }
               
               // 自动滚动到聊天底部

@@ -260,6 +260,12 @@ export function createMessageProcessor(appContext) {
           node.thoughtsRaw = initialThoughtsRaw;
         }
         messageDiv.setAttribute('data-message-id', node.id);
+        // 初次创建 AI 消息时插入一个空的 API footer，占位以便样式稳定
+        if (sender === 'ai') {
+          const apiFooter = document.createElement('div');
+          apiFooter.className = 'api-footer';
+          messageDiv.appendChild(apiFooter);
+        }
       }
 
       if (sender === 'ai' && !messageIdToUpdate) {

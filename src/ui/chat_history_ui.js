@@ -478,6 +478,20 @@ export function createChatHistoryUI(appContext) {
       }
       
       messageElem.setAttribute('data-message-id', msg.id);
+      // 渲染 API footer（按优先级：uuid->displayName->modelId）
+      try {
+        const footer = messageElem.querySelector('.api-footer') || (() => { const f = document.createElement('div'); f.className = 'api-footer'; messageElem.appendChild(f); return f; })();
+        const allConfigs = appContext.services.apiManager.getAllConfigs?.() || [];
+        let label = '';
+        if (msg.apiUuid) {
+          const cfg = allConfigs.find(c => c.id === msg.apiUuid);
+          if (cfg && cfg.modelName) label = cfg.modelName;
+        }
+        if (!label) label = (msg.apiDisplayName || '').trim();
+        if (!label) label = (msg.apiModelId || '').trim();
+        footer.textContent = (role === 'ai') ? (label || '') : footer.textContent;
+        footer.title = (role === 'ai') ? `API uuid: ${msg.apiUuid || '-'} | displayName: ${msg.apiDisplayName || '-'} | model: ${msg.apiModelId || '-'}` : footer.title;
+      } catch (_) {}
     });
     // 恢复加载的对话历史到聊天管理器
     // 修改: 使用 services.chatHistoryManager.chatHistory 访问数据对象

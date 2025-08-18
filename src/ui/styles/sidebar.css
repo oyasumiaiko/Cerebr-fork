@@ -1412,6 +1412,17 @@ input:checked + .slider:before {
     }
 }
 
+/* API 信息 footer：淡色、小号、靠右 */
+.api-footer {
+    margin-top: 6px;
+    font-size: calc(var(--cerebr-font-size) - 4px);
+    opacity: 0.55;
+    color: var(--cerebr-text-color);
+    text-align: right;
+    user-select: text;
+}
+.dark-theme .api-footer { opacity: 0.6; }
+
 /* 确保设置按钮是相对定位，这样菜单才能正确定位 */
 #settings-button {
     position: relative;
