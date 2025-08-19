@@ -59,6 +59,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // 检测滚动条并动态调整padding
+    function checkScrollbar() {
+        const hasScrollbar = chatContainer.scrollHeight > chatContainer.clientHeight;
+        if (hasScrollbar) {
+            // 计算滚动条实际宽度
+            const scrollbarWidth = chatContainer.offsetWidth - chatContainer.clientWidth;
+            // 设置CSS自定义属性，让CSS处理padding调整
+            chatContainer.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+            chatContainer.classList.add('has-scrollbar');
+        } else {
+            // 没有滚动条时移除类
+            chatContainer.classList.remove('has-scrollbar');
+        }
+    }
+
     // 监听聊天容器的变化，检测新的用户消息
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
@@ -74,16 +89,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
+        
+        // 每次DOM变化后检查滚动条状态
+        setTimeout(checkScrollbar, 0);
     });
 
     // 开始观察聊天容器的变化
     observer.observe(chatContainer, { childList: true });
+
+    // 初始化时检查滚动条状态
+    checkScrollbar();
+
+    // 监听窗口大小变化，重新检查滚动条状态
+    window.addEventListener('resize', checkScrollbar);
 
     // 清空聊天记录时也清空问题历史
     if (clearChat) {
         clearChat.addEventListener('click', () => {
             userQuestions = userQuestions.slice(-1);
             console.log('清空问题历史');
+            // 清空后重新检查滚动条状态
+            setTimeout(checkScrollbar, 0);
         });
     }
 });

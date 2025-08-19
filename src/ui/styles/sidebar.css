@@ -156,11 +156,18 @@ body {
     height: 100%;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 15px;
+    padding: 15px 15px 15px 15px;
     /* 滚动条样式统一至全局 */
     min-height: 0;
     -webkit-overflow-scrolling: touch;
     /* scroll-behavior: smooth; */
+    /* 使用 scrollbar-gutter 确保滚动条不会影响内容布局 */
+    scrollbar-gutter: stable;
+}
+
+/* 当有滚动条时，动态调整右侧padding */
+#chat-container.has-scrollbar {
+    padding-right: calc(15px - var(--scrollbar-width, 0px));
 }
 
 /* 移除隐藏滚动条的样式 */
