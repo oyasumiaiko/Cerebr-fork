@@ -182,6 +182,7 @@ body {
     padding: 12px;
     border-radius: 8px;
     width: fit-content;
+    max-width: -webkit-fill-available;
     word-wrap: break-word;
     font-size: var(--cerebr-font-size);
     line-height: 1.5;
