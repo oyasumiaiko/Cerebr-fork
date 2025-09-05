@@ -3786,7 +3786,7 @@ body.hide-references .reference-number.superscript {
 
 /* 全屏模式下的内容宽度限制 */
 html.fullscreen-mode {
-  --cerebr-opacity: 1 !important;
+  /* --cerebr-opacity: 1 !important; */
   /* 不在 html 上限制宽度，避免两侧区域无法接收滚轮事件 */
   /* --cerebr-bg-color: rgba(255, 255, 255, 1) !important;
   --cerebr-message-user-bg: rgba(227, 242, 253, 1) !important;
