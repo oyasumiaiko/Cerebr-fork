@@ -654,7 +654,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     appContext.dom.messageInput.addEventListener('compositionstart', () => { appContext.state.isComposing = true; });
     appContext.dom.messageInput.addEventListener('compositionend', () => { appContext.state.isComposing = false; });
 
-    appContext.dom.messageInput.addEventListener('keydown', function (e) {
+    appContext.dom.messageInput.addEventListener('keydown', async function (e) {
         if (e.key === 'Enter') {
             if (e.shiftKey) return;
             if (appContext.state.isComposing) return;
@@ -681,8 +681,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 try { appContext.dom.imageContainer.innerHTML = ''; } catch (_) {}
                 try { appContext.services.uiManager.resetInputHeight(); } catch (_) {}
 
-                // 立即保存当前会话
-                try { appContext.services.chatHistoryUI.saveCurrentConversation(true); } catch (_) {}
+                // 立即保存当前会话并同步当前会话 ID
+                try {
+                    await appContext.services.chatHistoryUI.saveCurrentConversation(true);
+                    appContext.services.messageSender.setCurrentConversationId(
+                        appContext.services.chatHistoryUI.getCurrentConversationId()
+                    );
+                } catch (_) {}
 
                 // 反馈提示并滚动
                 appContext.utils.showNotification('已添加到历史（未发送）');
