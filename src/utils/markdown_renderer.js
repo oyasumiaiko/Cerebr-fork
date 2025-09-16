@@ -174,7 +174,7 @@ const DEFAULT_PURIFY_CONFIG = {
 //     'id', 'class', 'aria-hidden', 'aria-label', 'role', 'tabindex',
 //     'colspan', 'rowspan', 'align'
 //   ],
-  FORBID_TAGS: [ 'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'input', 'button', 'textarea', 'select' ],
+  FORBID_TAGS: [ 'script', 'style', 'iframe', 'object', 'embed', 'link', 'video', 'meta', 'form', 'input', 'button', 'textarea', 'select' ],
   FORBID_ATTR: [/^on/i],
   // 仅允许 http/https 相对/绝对链接（禁止 javascript: 等）
   ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[\/\?#])/i

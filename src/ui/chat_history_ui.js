@@ -1801,7 +1801,7 @@ export function createChatHistoryUI(appContext) {
       conversationUsageTimestamp.set(activeId, Date.now());
     }
     
-    console.log('内存缓存已清理');
+    // console.log('内存缓存已清理');
   }
 
   // 添加URL处理函数

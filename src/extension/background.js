@@ -77,7 +77,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 // 监听扩展图标点击
 chrome.action.onClicked.addListener(async (tab) => {
-  console.log('扩展图标被点击');
+  // console.log('扩展图标被点击');
   try {
     // 检查标签页是否已连接
     const isConnected = await isTabConnected(tab.id);
