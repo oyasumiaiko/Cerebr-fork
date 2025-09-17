@@ -35,6 +35,7 @@ export function createImageHandler(appContext) {
   let naturalWidth = 0;
   let naturalHeight = 0;
   let lastOpenTimestampMs = 0;
+  let canDragImage = false;
 
   /**
    * 应用图像的平移和缩放变换
@@ -46,12 +47,35 @@ export function createImageHandler(appContext) {
    */
   function updateImageLayout() {
     if (!previewModal || !previewImage) return;
+    const containerRect = previewModal.getBoundingClientRect();
+    const containerWidth = Math.max(1, containerRect.width);
+    const containerHeight = Math.max(1, containerRect.height);
     const displayWidth = Math.max(1, Math.round(naturalWidth * currentScale));
     const displayHeight = Math.max(1, Math.round(naturalHeight * currentScale));
+    const allowHorizontalDrag = displayWidth > containerWidth;
+    const allowVerticalDrag = displayHeight > containerHeight;
+
+    if (!allowHorizontalDrag) {
+      offsetX = Math.round((containerWidth - displayWidth) / 2);
+    } else {
+      const minOffsetX = containerWidth - displayWidth;
+      offsetX = Math.min(0, Math.max(minOffsetX, offsetX));
+    }
+
+    if (!allowVerticalDrag) {
+      offsetY = Math.round((containerHeight - displayHeight) / 2);
+    } else {
+      const minOffsetY = containerHeight - displayHeight;
+      offsetY = Math.min(0, Math.max(minOffsetY, offsetY));
+    }
+
+    canDragImage = allowHorizontalDrag || allowVerticalDrag;
+
     previewImage.style.width = `${displayWidth}px`;
     previewImage.style.height = `${displayHeight}px`;
     previewImage.style.left = `${Math.round(offsetX)}px`;
     previewImage.style.top = `${Math.round(offsetY)}px`;
+    previewImage.style.cursor = canDragImage ? (isDragging ? 'grabbing' : 'grab') : 'default';
   }
 
   /**
@@ -176,6 +200,7 @@ export function createImageHandler(appContext) {
     if (previewModal && previewImage) {
       previewModal.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return; // 仅左键
+        if (!canDragImage) return;
         e.preventDefault();
         isDragging = true;
         dragStartX = e.clientX;
@@ -207,7 +232,7 @@ export function createImageHandler(appContext) {
       window.addEventListener('mouseup', () => {
         if (!isDragging) return;
         isDragging = false;
-        previewImage.style.cursor = 'grab';
+        previewImage.style.cursor = canDragImage ? 'grab' : 'default';
         // 恢复为轻微过渡，后续滚轮/轻微拖动有平滑，但不影响下次打开
         previewImage.style.transition = 'left 100ms ease-out, top 100ms ease-out, width 100ms ease-out, height 100ms ease-out';
       });
