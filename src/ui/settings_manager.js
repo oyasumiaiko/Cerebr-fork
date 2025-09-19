@@ -168,7 +168,7 @@ export function createSettingsManager(appContext) {
       id: 'sidebar-width',
       label: '侧栏宽度',
       min: 500,
-      max: 1500,
+      max: 2000,
       step: 50,
       unit: 'px',
       defaultValue: DEFAULT_SETTINGS.sidebarWidth,

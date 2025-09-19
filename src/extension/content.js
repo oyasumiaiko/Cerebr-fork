@@ -440,7 +440,7 @@ class CerebrSidebar {
           startX - e.clientX;  // 右侧模式：拖动距离为负时增加宽度
         
         const scale = this.scaleFactor / window.devicePixelRatio;
-        const newWidth = Math.min(Math.max(500, startWidth - diff / scale), 1500);
+        const newWidth = Math.min(Math.max(500, startWidth - diff / scale), 2000);
         this.updateWidth(newWidth);
       };
 
