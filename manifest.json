@@ -49,6 +49,9 @@
     },
     "toggle_fullscreen": {
       "description": "切换全屏模式"
+    },
+    "add_page_content_to_context": {
+      "description": "获取当前网页内容并添加到对话（不发送）"
     }
   },
   "background": {

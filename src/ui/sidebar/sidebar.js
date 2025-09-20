@@ -584,6 +584,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.addEventListener('message', (event) => {
         const { data } = event;
         switch (data.type) {
+            case 'ADD_TEXT_TO_CONTEXT':
+                (async () => {
+                    try {
+                        const text = (data.text || '').trim();
+                        if (!text) return;
+
+                        // 添加为用户消息到历史，但不发送
+                        appContext.services.messageProcessor.appendMessage(
+                            text,
+                            'user',
+                            false,
+                            null,
+                            ''
+                        );
+
+                        // 立即保存当前会话并同步当前会话 ID
+                        try {
+                            await appContext.services.chatHistoryUI.saveCurrentConversation(true);
+                            appContext.services.messageSender.setCurrentConversationId(
+                                appContext.services.chatHistoryUI.getCurrentConversationId()
+                            );
+                        } catch (_) {}
+
+                        appContext.utils.showNotification('已添加网页内容到历史（未发送）');
+                    } catch (err) {
+                        console.error('添加文本到上下文失败:', err);
+                    }
+                })();
+                break;
             case 'DROP_IMAGE':
                 if (data.imageData?.data) {
                     appContext.utils.addImageToContainer(data.imageData.data, data.imageData.name);

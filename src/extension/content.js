@@ -875,6 +875,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'CAPTURE_SCREENSHOT':
         captureAndDropScreenshot();
         break;
+      case 'ADD_PAGE_CONTENT_TO_CONTEXT':
+        try {
+          // 确保侧边栏已打开
+          sidebar.toggle(true);
+
+          // 显示占位提示
+          try { sendPlaceholderUpdate('正在获取网页内容...'); } catch (_) {}
+
+          // 复用现有提取函数
+          extractPageContent()
+            .then(content => {
+              if (!content || !content.title || !content.url || !content.content) return;
+
+              const composed = `已附加网页内容：\n标题：${content.title}\nURL：${content.url}\n内容：${content.content}`;
+
+              const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
+              if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({
+                  type: 'ADD_TEXT_TO_CONTEXT',
+                  text: composed
+                }, '*');
+              }
+
+              // 恢复占位
+              try { sendPlaceholderUpdate('已添加网页内容到历史（未发送）', 2000); } catch (_) {}
+            })
+            .catch(err => {
+              console.error('通过快捷键添加网页内容失败:', err);
+              try { sendPlaceholderUpdate('提取网页内容失败', 2000); } catch (_) {}
+            });
+        } catch (e) {
+          console.error('处理 ADD_PAGE_CONTENT_TO_CONTEXT 失败:', e);
+        }
+        break;
     }
 
     sendResponse({ success: true, status: sidebar.isVisible });
