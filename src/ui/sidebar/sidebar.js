@@ -14,6 +14,28 @@ import { packRemoteRepoViaApiExtension } from '../../utils/repomix.js';
 import { createInputController } from '../input_controller.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
+    const currentUrl = new URL(window.location.href);
+    const hashQuery = currentUrl.hash.startsWith('#') ? currentUrl.hash.substring(1) : '';
+    const hashParams = new URLSearchParams(hashQuery);
+    const standaloneParam = (
+        currentUrl.searchParams.get('mode') === 'standalone' ||
+        currentUrl.searchParams.get('standalone') === '1' ||
+        hashParams.get('mode') === 'standalone' ||
+        hashParams.get('standalone') === '1' ||
+        currentUrl.hash.includes('standalone')
+    );
+    let isStandalone = standaloneParam;
+    try {
+        if (!isStandalone) {
+            isStandalone = window.parent === window;
+        }
+    } catch (_) {
+        // 在跨域场景下访问 window.parent 可能抛异常，此处忽略并视为嵌入模式
+    }
+    if (document?.body) {
+        document.body.classList.toggle('standalone-mode', isStandalone);
+    }
+
     const appContext = {
         dom: {
             chatContainer: document.getElementById('chat-container'),
@@ -86,13 +108,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             urlRulesList: document.getElementById('url-rules-list'),
             showThoughtProcessSwitch: document.getElementById('show-thought-process-switch'),
             resetSettingsButton: document.getElementById('reset-settings-button'),
-            settingsBackButton: document.querySelector('#settings-menu .back-button')
+            settingsBackButton: document.querySelector('#settings-menu .back-button'),
+            openStandalonePage: document.getElementById('open-standalone-page')
         },
         services: {},
         state: {
+            isStandalone,
             isFullscreen: false,
             isComposing: false,
-            pageInfo: null,
+            pageInfo: isStandalone ? { url: '', title: '独立聊天', standalone: true } : null,
             memoryManagement: {
                 IDLE_CLEANUP_INTERVAL: 5 * 60 * 1000,
                 FORCED_CLEANUP_INTERVAL: 30 * 60 * 1000,
@@ -215,6 +239,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
 
         appContext.utils.requestScreenshot = () => {
+            if (appContext.state.isStandalone) {
+                appContext.utils.showNotification('独立聊天页面不支持网页截图');
+                return;
+            }
             window.parent.postMessage({ type: 'CAPTURE_SCREENSHOT' }, '*');
         };
 
@@ -251,6 +279,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (inputEl) resizeObserver.observe(inputEl);
 
     window.cerebr = window.cerebr || {};
+    window.cerebr.environment = isStandalone ? 'standalone' : 'embedded';
     window.cerebr.settings = {
         prompts: () => appContext.services.promptSettingsManager?.getPrompts()
     };
@@ -260,6 +289,50 @@ document.addEventListener('DOMContentLoaded', async () => {
             window.cerebr.settings.prompts = appContext.services.promptSettingsManager.getPrompts();
         }
     });
+
+    function applyStandaloneAdjustments() {
+        if (!appContext.state.isStandalone) {
+            return;
+        }
+
+        // 让独立页面默认使用接近全屏的宽度
+        document.documentElement.style.setProperty('--cerebr-sidebar-width', 'calc(100vw - 40px)');
+
+        const standaloneInfo = { url: '', title: '独立聊天', standalone: true };
+        appContext.state.pageInfo = standaloneInfo;
+        window.cerebr.pageInfo = standaloneInfo;
+
+        const elementsToHide = [
+            appContext.dom.collapseButton,
+            appContext.dom.statusDot,
+            appContext.dom.screenshotButton,
+            appContext.dom.fullscreenToggle,
+            appContext.dom.quickSummary,
+            appContext.dom.emptyStateSummary,
+            appContext.dom.emptyStateLoadUrl,
+            appContext.dom.emptyStateScreenshot,
+            appContext.dom.emptyStateExtract,
+            appContext.dom.emptyStateTempMode,
+            appContext.dom.repomixButton
+        ];
+
+        elementsToHide.forEach((el) => {
+            if (el) {
+                el.style.display = 'none';
+            }
+        });
+
+        if (appContext.dom.openStandalonePage) {
+            appContext.dom.openStandalonePage.style.display = 'none';
+        }
+
+        // 动态设置中隐藏仅针对侧边栏的控制项
+        const widthSlider = document.getElementById('sidebar-width');
+        widthSlider?.closest('.menu-item')?.classList.add('standalone-hidden');
+
+        const positionToggle = document.getElementById('sidebar-position-switch');
+        positionToggle?.closest('.menu-item')?.classList.add('standalone-hidden');
+    }
 
     const { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage } = createChatHistoryManager(appContext);
     appContext.services.chatHistoryManager = { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage };
@@ -277,6 +350,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     appContext.services.messageSender = createMessageSender(appContext);
     appContext.services.messageSender.setCurrentConversationId(appContext.services.chatHistoryUI.getCurrentConversationId());
+    if (appContext.state.isStandalone) {
+        try {
+            appContext.services.messageSender.enterTemporaryMode();
+        } catch (error) {
+            console.error('独立聊天页面初始化临时模式失败:', error);
+        }
+    }
     window.cerebr.messageSender = appContext.services.messageSender;
     appContext.services.uiManager = createUIManager(appContext);
 
@@ -284,7 +364,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     appContext.services.contextMenuManager.init();
     appContext.services.uiManager.init();
+    if (appContext.dom.openStandalonePage && !appContext.state.isStandalone) {
+        appContext.dom.openStandalonePage.addEventListener('click', async () => {
+            try {
+                await new Promise((resolve, reject) => {
+                    try {
+                        chrome.runtime.sendMessage({ type: 'OPEN_STANDALONE_CHAT' }, (response) => {
+                            const runtimeError = chrome.runtime.lastError;
+                            if (runtimeError) {
+                                reject(new Error(runtimeError.message));
+                                return;
+                            }
+                            if (response?.status === 'error') {
+                                reject(new Error(response.message || 'unknown error'));
+                                return;
+                            }
+                            resolve(response);
+                        });
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+                appContext.utils.showNotification('已在新标签页打开独立聊天');
+            } catch (error) {
+                console.error('打开独立聊天页面失败:', error);
+                appContext.utils.showNotification('无法打开独立聊天页面');
+            }
+            appContext.services.uiManager.toggleSettingsMenu(false);
+        });
+    }
     await appContext.services.settingsManager.init();
+    applyStandaloneAdjustments();
     appContext.services.apiManager.setupUIEventHandlers(appContext);
     await appContext.services.apiManager.init();
 
@@ -292,6 +402,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     (function initStatusDot() {
         const dot = appContext.dom.statusDot;
         if (!dot) return;
+        if (appContext.state.isStandalone) {
+            dot.style.display = 'none';
+            return;
+        }
         const sender = appContext.services.messageSender;
         function refresh() {
             const isTemp = sender.getTemporaryModeState?.() === true;
@@ -319,7 +433,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         // 内部事件切换
         document.addEventListener('TEMP_MODE_CHANGED', () => setTimeout(refresh, 0));
-        if (appContext.dom.emptyStateTempMode) {
+        if (appContext.dom.emptyStateTempMode && !appContext.state.isStandalone) {
             appContext.dom.emptyStateTempMode.addEventListener('click', () => setTimeout(refresh, 0));
         }
     })();
@@ -342,20 +456,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    if (appContext.dom.emptyStateSummary) {
+    if (appContext.dom.emptyStateSummary && !appContext.state.isStandalone) {
         appContext.dom.emptyStateSummary.addEventListener('click', () => {
             appContext.services.messageSender.performQuickSummary();
         });
     }
 
-    if (appContext.dom.emptyStateTempMode) {
+    if (appContext.dom.emptyStateTempMode && !appContext.state.isStandalone) {
         appContext.dom.emptyStateTempMode.addEventListener('click', () => {
             appContext.services.messageSender.toggleTemporaryMode();
             appContext.services.inputController.focusToEnd();
         });
     }
 
-    if (appContext.dom.emptyStateLoadUrl) {
+    if (appContext.dom.emptyStateLoadUrl && !appContext.state.isStandalone) {
         appContext.dom.emptyStateLoadUrl.addEventListener('click', async () => {
             const currentUrl = appContext.state.pageInfo?.url;
             if (!currentUrl) {
@@ -447,7 +561,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
 
-    if (appContext.dom.emptyStateScreenshot) {
+    if (appContext.dom.emptyStateScreenshot && !appContext.state.isStandalone) {
         appContext.dom.emptyStateScreenshot.addEventListener('click', () => {
             const prompts = appContext.services.promptSettingsManager.getPrompts();
             appContext.utils.requestScreenshot();
@@ -458,7 +572,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    if (appContext.dom.emptyStateExtract) {
+    if (appContext.dom.emptyStateExtract && !appContext.state.isStandalone) {
         appContext.dom.emptyStateExtract.addEventListener('click', async () => {
             const prompts = appContext.services.promptSettingsManager.getPrompts();
             appContext.dom.messageInput.textContent = prompts.extract.prompt;
@@ -466,7 +580,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    if (appContext.dom.repomixButton) {
+    if (appContext.dom.repomixButton && !appContext.state.isStandalone) {
         appContext.dom.repomixButton.addEventListener('click', async () => {
             const isGithubRepo = appContext.state.pageInfo?.url?.includes('github.com');
             if (isGithubRepo) {
@@ -563,6 +677,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     appContext.dom.fullscreenToggle.addEventListener('click', async () => {
+        if (appContext.state.isStandalone) {
+            appContext.utils.showNotification('独立聊天页面始终为全屏布局');
+            return;
+        }
         appContext.state.isFullscreen = !appContext.state.isFullscreen;
         
         // 根据全屏状态添加或移除CSS类
@@ -583,8 +701,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     window.addEventListener('message', (event) => {
         const { data } = event;
+        if (!data?.type) {
+            return;
+        }
+
         switch (data.type) {
             case 'ADD_TEXT_TO_CONTEXT':
+                if (appContext.state.isStandalone) {
+                    break;
+                }
                 (async () => {
                     try {
                         const text = (data.text || '').trim();
@@ -625,6 +750,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 appContext.services.inputController.focusToEnd();
                 break;
             case 'URL_CHANGED':
+                if (appContext.state.isStandalone) {
+                    break;
+                }
                 appContext.state.pageInfo = data;
                 window.cerebr.pageInfo = data;
                 appContext.services.chatHistoryUI.updatePageInfo(data);
@@ -642,12 +770,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 break;
             case 'QUICK_SUMMARY_COMMAND':
+                if (appContext.state.isStandalone) {
+                    appContext.utils.showNotification('独立聊天页面不支持网页总结');
+                    break;
+                }
                 appContext.services.messageSender.performQuickSummary(data.selectedContent);
                 break;
             case 'QUICK_SUMMARY_COMMAND_QUERY':
+                if (appContext.state.isStandalone) {
+                    appContext.utils.showNotification('独立聊天页面不支持网页总结');
+                    break;
+                }
                 appContext.services.messageSender.performQuickSummary(data.selectedContent, true);
                 break;
             case 'TOGGLE_TEMP_MODE_FROM_EXTENSION':
+                if (appContext.state.isStandalone) {
+                    break;
+                }
                 appContext.services.messageSender.toggleTemporaryMode();
                 // 同步徽标
                 if (appContext.dom.modeIndicator) {
@@ -658,6 +797,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 break;
             case 'FULLSCREEN_STATE_CHANGED':
+                if (appContext.state.isStandalone) {
+                    break;
+                }
                 // 同步全屏状态
                 appContext.state.isFullscreen = data.isFullscreen;
                 
@@ -837,7 +979,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     setTimeout(() => {
         //console.log('初始化完成，主动请求当前页面信息');
-        window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
+        if (!appContext.state.isStandalone) {
+            window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
+        }
         
         // 检查是否已经在全屏模式
         if (appContext.state.isFullscreen) {

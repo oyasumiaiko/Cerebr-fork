@@ -52,6 +52,9 @@
     },
     "add_page_content_to_context": {
       "description": "获取当前网页内容并添加到对话（不发送）"
+    },
+    "open_standalone_chat": {
+      "description": "打开独立聊天页面"
     }
   },
   "background": {

@@ -52,6 +52,15 @@ async function handleTabCommand(commandType) {
   }
 }
 
+async function openStandaloneChatPage() {
+  try {
+    const url = chrome.runtime.getURL('src/ui/sidebar/sidebar.html#standalone');
+    await chrome.tabs.create({ url });
+  } catch (error) {
+    console.error('打开独立聊天页面失败:', error);
+  }
+}
+
 // 简化后的命令监听器
 chrome.commands.onCommand.addListener(async (command) => {
   // console.log('onCommand:', command);
@@ -74,6 +83,8 @@ chrome.commands.onCommand.addListener(async (command) => {
     await handleTabCommand('TOGGLE_FULLSCREEN_FROM_BACKGROUND');
   } else if (command === 'add_page_content_to_context') {
     await handleTabCommand('ADD_PAGE_CONTENT_TO_CONTEXT');
+  } else if (command === 'open_standalone_chat') {
+    await openStandaloneChatPage();
   }
 });
 
@@ -119,6 +130,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // console.log('内容脚本已加载:', message.url);
     sendResponse({ status: 'ok', timestamp: new Date().toISOString() });
     return false;
+  }
+
+  if (message.type === 'OPEN_STANDALONE_CHAT') {
+    (async () => {
+      try {
+        await openStandaloneChatPage();
+        sendResponse({ status: 'ok' });
+      } catch (error) {
+        sendResponse({ status: 'error', message: error.message });
+      }
+    })();
+    return true;
   }
 
   // 处理来自 sidebar 的网页内容请求

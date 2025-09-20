@@ -71,6 +71,7 @@ export function createSettingsManager(appContext) {
 
   // 创建主题管理器 (could be a service in appContext too)
   const themeManager = createThemeManager();
+  const isStandalone = !!appContext?.state?.isStandalone;
 
   // 默认设置
   const DEFAULT_SETTINGS = {
@@ -159,7 +160,8 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.sidebarPosition,
       readFromUI: (el) => el?.checked ? 'right' : 'left',
       writeToUI: (el, v) => { if (el) el.checked = (v === 'right'); },
-      apply: (v) => applySidebarPosition(v)
+      apply: (v) => applySidebarPosition(v),
+      standaloneHidden: true
     },
     // 侧边栏宽度
     {
@@ -172,7 +174,8 @@ export function createSettingsManager(appContext) {
       step: 50,
       unit: 'px',
       defaultValue: DEFAULT_SETTINGS.sidebarWidth,
-      apply: (v) => applySidebarWidth(v)
+      apply: (v) => applySidebarWidth(v),
+      standaloneHidden: true
     },
     // 字体大小
     {
@@ -214,6 +217,10 @@ export function createSettingsManager(appContext) {
     // }
   ];
 
+  function getActiveRegistry() {
+    return SETTINGS_REGISTRY.filter(def => !(isStandalone && def.standaloneHidden));
+  }
+
   // 动态生成的元素映射（仅对注册表项）
   const dynamicElements = new Map(); // key -> HTMLInputElement | HTMLSelectElement
   
@@ -228,7 +235,7 @@ export function createSettingsManager(appContext) {
   let generatedSchema = {};
   function buildSchemaFromRegistry() {
     const map = {};
-    for (const def of SETTINGS_REGISTRY) {
+    for (const def of getActiveRegistry()) {
       // 如果页面已有同名控件（通过固定ID），则跳过自动生成schema（避免重复绑定）
       if (document.getElementById(def.id || `setting-${def.key}`)) {
         // 将其纳入schema（使用动态元素映射）
@@ -334,7 +341,7 @@ export function createSettingsManager(appContext) {
     }
 
     // 为每个注册项生成控件（若页面已存在同ID控件则跳过；uiHidden=true 时不渲染控件）
-    for (const def of SETTINGS_REGISTRY) {
+    for (const def of getActiveRegistry()) {
       if (def.uiHidden === true) {
         // 不渲染、不绑定 UI，但该设置仍会被加载/保存/应用（通过 applyAllSettings）
         continue;
@@ -440,7 +447,7 @@ export function createSettingsManager(appContext) {
   // 应用所有设置到UI
   function applyAllSettings() {
     // 应用所有注册项设置（有 apply 的会被调用），并同步 UI
-    SETTINGS_REGISTRY.forEach(def => {
+    getActiveRegistry().forEach(def => {
       const value = currentSettings[def.key] ?? def.defaultValue;
       if (typeof def.apply === 'function') {
         try { def.apply(value); } catch (e) { console.error('应用设置失败', def.key, e); }
