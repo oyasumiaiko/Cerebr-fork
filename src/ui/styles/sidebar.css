@@ -3628,6 +3628,10 @@ body.hide-references .reference-number.superscript {
 /* 深色适配由上方 .dark-theme .notification 覆盖 */
 /* 空状态样式 - 轻盈空灵的设计 */
 .empty-state-content {
+    mix-blend-mode: plus-lighter;
+    /* opacity: 1 !important; */
+    /* text-shadow: 0 0 4px black, 0 0 4px black; */
+
     position: absolute;
     top: 48%;
     left: 50%;

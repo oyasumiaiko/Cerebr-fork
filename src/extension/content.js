@@ -259,19 +259,23 @@ class CerebrSidebar {
           border-radius: calc(12px * var(--scale-ratio, 1));
           overflow: hidden;
           visibility: hidden;
+          opacity: 0;
           transform: var(--transform-hidden);
           pointer-events: none;
           isolation: isolate;
           /* border: 1px solid rgba(255, 255, 255, 0.1); */
           contain: layout style;
-          transition: transform 0.3s ease, visibility 0.3s ease, box-shadow 0.3s ease;
+          /* Delay visibility toggle so content stays rendered throughout the slide animation */
+          transition: transform 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease, visibility 0s linear 0.3s;
         }
 
         .cerebr-sidebar.visible {
           pointer-events: auto;
           visibility: visible;
+          opacity: 1;
           transform: translateX(0) !important;
           box-shadow: var(--box-shadow-visible);
+          transition: transform 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease, visibility 0s linear 0s;
         }
 
         .cerebr-sidebar__content {
