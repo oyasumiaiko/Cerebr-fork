@@ -112,10 +112,19 @@ export function createSettingsManager(appContext) {
       key: 'backgroundImageUrl',
       type: 'text',
       id: 'background-image-url',
-      label: '背景图片链接',
+      label: '背景图片',
       placeholder: '输入图片 URL 或 data URI',
       defaultValue: DEFAULT_SETTINGS.backgroundImageUrl,
-      apply: (v) => applyBackgroundImage(v)
+      apply: (v) => applyBackgroundImage(v),
+      readFromUI: (el) => (el.value || '').trim(),
+      writeToUI: (el, value) => {
+        const val = (value || '').trim();
+        el.value = val;
+        const container = el.closest('.background-image-setting');
+        if (container) {
+          container.classList.toggle('has-background-image', !!val);
+        }
+      }
     },
     {
       key: 'backgroundImageIntensity',
@@ -426,31 +435,105 @@ export function createSettingsManager(appContext) {
         autoSection.appendChild(item);
         dynamicElements.set(def.key, input);
       } else if (def.type === 'text') {
-        item.classList.add('menu-item--stack');
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.id = def.id || `setting-${def.key}`;
-        input.placeholder = def.placeholder || '';
-        input.className = 'settings-text-input';
-        item.appendChild(input);
+        if (def.id === 'background-image-url') {
+          item.classList.add('background-image-setting');
+          labelSpan.classList.add('background-image-label');
 
-        const actionBar = document.createElement('div');
-        actionBar.className = 'settings-input-actions';
-        const clearBtn = document.createElement('button');
-        clearBtn.type = 'button';
-        clearBtn.className = 'settings-input-clear';
-        clearBtn.textContent = '清除';
-        clearBtn.addEventListener('click', (evt) => {
-          evt.preventDefault();
-          evt.stopPropagation();
-          input.value = '';
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        actionBar.appendChild(clearBtn);
-        item.appendChild(actionBar);
+          const actions = document.createElement('div');
+          actions.className = 'background-image-actions';
 
-        autoSection.appendChild(item);
-        dynamicElements.set(def.key, input);
+          const setWrapper = document.createElement('div');
+          setWrapper.className = 'background-image-set-wrapper';
+
+          const setButton = document.createElement('button');
+          setButton.type = 'button';
+          setButton.className = 'background-image-button background-image-button--set';
+          setButton.textContent = '设置';
+          setWrapper.appendChild(setButton);
+
+          const popover = document.createElement('div');
+          popover.className = 'background-image-popover';
+
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.id = def.id || `setting-${def.key}`;
+          input.placeholder = def.placeholder || '';
+          input.className = 'background-image-input';
+          popover.appendChild(input);
+          setWrapper.appendChild(popover);
+
+          actions.appendChild(setWrapper);
+
+          const clearBtn = document.createElement('button');
+          clearBtn.type = 'button';
+          clearBtn.className = 'background-image-button background-image-button--clear';
+          clearBtn.textContent = '清除';
+          clearBtn.addEventListener('click', (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            input.value = '';
+            item.classList.remove('has-background-image');
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.focus();
+          });
+          actions.appendChild(clearBtn);
+
+          item.appendChild(actions);
+          autoSection.appendChild(item);
+
+          dynamicElements.set(def.key, input);
+
+          if (typeof def.writeToUI === 'function') {
+            try { def.writeToUI(input, currentSettings[def.key]); } catch (_) {}
+          }
+
+          setButton.addEventListener('click', (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            input.focus();
+            input.select();
+          });
+
+          popover.addEventListener('click', (evt) => evt.stopPropagation());
+
+          input.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Escape') {
+              evt.stopPropagation();
+              input.blur();
+            }
+          });
+
+          input.addEventListener('input', () => {
+            item.classList.toggle('has-background-image', !!input.value.trim());
+          });
+
+        } else {
+          item.classList.add('menu-item--stack');
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.id = def.id || `setting-${def.key}`;
+          input.placeholder = def.placeholder || '';
+          input.className = 'settings-text-input';
+          item.appendChild(input);
+
+          const actionBar = document.createElement('div');
+          actionBar.className = 'settings-input-actions';
+          const clearBtn = document.createElement('button');
+          clearBtn.type = 'button';
+          clearBtn.className = 'settings-input-clear';
+          clearBtn.textContent = '清除';
+          clearBtn.addEventListener('click', (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            input.value = '';
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          });
+          actionBar.appendChild(clearBtn);
+          item.appendChild(actionBar);
+
+          autoSection.appendChild(item);
+          dynamicElements.set(def.key, input);
+        }
       } else if (def.type === 'select') {
         const select = document.createElement('select');
         select.id = def.id || `setting-${def.key}`;

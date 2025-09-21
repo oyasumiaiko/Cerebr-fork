@@ -483,6 +483,103 @@ body.standalone-mode #empty-state-repomix {
     font-weight: 500;
 }
 
+.background-image-setting {
+    cursor: default;
+    gap: 12px;
+}
+
+.background-image-setting:hover {
+    background-color: transparent;
+}
+
+.background-image-setting > span {
+    flex: 1;
+    font-weight: 500;
+}
+
+.background-image-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.background-image-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    background: transparent;
+    color: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.background-image-button:hover {
+    background-color: color-mix(in srgb, var(--cerebr-message-user-bg) 70%, transparent);
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 45%, transparent);
+}
+
+.background-image-button--set {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 40%, transparent);
+}
+
+.background-image-button--set:hover {
+    background-color: color-mix(in srgb, var(--cerebr-highlight) 15%, transparent);
+}
+
+.background-image-setting:not(.has-background-image) .background-image-button--clear {
+    display: none;
+}
+
+.background-image-set-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.background-image-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    min-width: 220px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 95%, transparent);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(calc(var(--cerebr-blur-radius) / 4));
+    z-index: 30;
+}
+
+.background-image-set-wrapper:hover .background-image-popover,
+.background-image-set-wrapper:focus-within .background-image-popover,
+.background-image-popover:focus-within,
+.background-image-popover:hover {
+    display: flex;
+}
+
+.background-image-input {
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 80%, transparent);
+    background-color: color-mix(in srgb, var(--cerebr-input-bg) 92%, transparent);
+    color: inherit;
+    font-size: 0.9em;
+}
+
+.background-image-input:focus {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 55%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-highlight) 20%, transparent);
+}
+
 .settings-text-input {
     width: 100%;
     padding: 6px 8px;
