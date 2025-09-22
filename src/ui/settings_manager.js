@@ -96,6 +96,7 @@ export function createSettingsManager(appContext) {
 
   // 当前设置
   let currentSettings = {...DEFAULT_SETTINGS};
+  let backgroundImageLoadToken = 0;
 
   // 动态设置注册表：新增设置仅需在此处登记即可自动渲染与持久化
   // type: 'toggle' | 'range' | 'select'
@@ -115,7 +116,7 @@ export function createSettingsManager(appContext) {
       type: 'text',
       id: 'background-image-url',
       label: '背景图片',
-      placeholder: '输入图片 URL 或 data URI',
+      placeholder: '输入图片 URL、data URI 或 txt 文件路径',
       defaultValue: DEFAULT_SETTINGS.backgroundImageUrl,
       apply: (v) => applyBackgroundImage(v),
       readFromUI: (el) => (el.value || '').trim(),
@@ -706,27 +707,198 @@ export function createSettingsManager(appContext) {
   }
 
   function applyBackgroundImage(url) {
-    const normalized = typeof url === 'string' ? url.trim() : '';
-    let cssValue = 'none';
-    if (normalized) {
-      if (/^\s*url\(/i.test(normalized)) {
-        cssValue = normalized;
-      } else {
-        const escaped = normalized.replace(/['"\\]/g, '\\$&');
-        cssValue = `url("${escaped}")`;
+    const normalizedInput = typeof url === 'string' ? url.trim() : '';
+    const token = ++backgroundImageLoadToken;
+
+    if (!normalizedInput) {
+      updateBackgroundImageCss('none', false, token);
+      return;
+    }
+
+    if (/^\s*url\(/i.test(normalizedInput)) {
+      const extracted = extractUrlFromCss(normalizedInput);
+      updateBackgroundImageCss(normalizedInput, true, token, extracted || undefined);
+      return;
+    }
+
+    const normalizedSource = normalizeBackgroundSource(normalizedInput);
+
+    if (normalizedSource.kind === 'list') {
+      loadBackgroundImageFromList(normalizedSource.url, token);
+      return;
+    }
+
+    if (normalizedSource.kind === 'direct') {
+      const cssValue = createCssUrlValue(normalizedSource.url);
+      updateBackgroundImageCss(cssValue, true, token, normalizedSource.url);
+      return;
+    }
+
+    updateBackgroundImageCss('none', false, token);
+  }
+
+  function normalizeBackgroundSource(input) {
+    const converted = convertPotentialWindowsPath(input);
+    if (isTxtListSource(converted)) {
+      return { kind: 'list', url: converted };
+    }
+    return { kind: 'direct', url: converted };
+  }
+
+  function convertPotentialWindowsPath(input) {
+    if (!input) return input;
+    if (/^file:\/\//i.test(input)) return input;
+    if (/^https?:\/\//i.test(input)) return input;
+    if (/^data:/i.test(input)) return input;
+
+    if (/^[a-zA-Z]:[\\/]/.test(input)) {
+      const replaced = input.replace(/\\/g, '/');
+      return `file:///${replaced}`;
+    }
+
+    if (/^\\\\/.test(input)) {
+      const cleaned = input.replace(/\\/g, '/').replace(/^\/+/, '');
+      return `file:////${cleaned}`;
+    }
+
+    return input;
+  }
+
+  function isTxtListSource(value) {
+    if (!value) return false;
+    const stripped = stripQueryAndHash(value).toLowerCase();
+    return stripped.endsWith('.txt');
+  }
+
+  function stripQueryAndHash(value) {
+    const idx = value.search(/[?#]/);
+    return idx === -1 ? value : value.slice(0, idx);
+  }
+
+  async function loadBackgroundImageFromList(listUrl, token) {
+    try {
+      const response = await fetch(listUrl);
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status}`);
+      }
+      const text = await response.text();
+      if (token !== backgroundImageLoadToken) return;
+
+      const candidates = parseBackgroundList(text).map((c) => resolveAgainstBase(c, listUrl));
+      if (!candidates.length) {
+        console.warn('背景图片列表为空:', listUrl);
+        updateBackgroundImageCss('none', false, token);
+        return;
+      }
+
+      await tryLoadRandomBackground(candidates, token);
+    } catch (error) {
+      if (token !== backgroundImageLoadToken) return;
+      console.error('加载背景图片列表失败:', listUrl, error);
+      updateBackgroundImageCss('none', false, token);
+    }
+  }
+
+  async function tryLoadRandomBackground(candidates, token) {
+    const pool = [...candidates];
+    while (pool.length && token === backgroundImageLoadToken) {
+      const index = Math.floor(Math.random() * pool.length);
+      const candidate = pool.splice(index, 1)[0];
+      const normalized = convertPotentialWindowsPath(candidate);
+      if (!normalized) continue;
+      try {
+        await ensureImageLoad(normalized);
+        if (token !== backgroundImageLoadToken) return;
+        const cssValue = createCssUrlValue(normalized);
+        updateBackgroundImageCss(cssValue, true, token, normalized);
+        return;
+      } catch (error) {
+        console.warn('背景图片加载失败，尝试下一张:', candidate, error);
       }
     }
-    document.documentElement.style.setProperty('--cerebr-background-image', cssValue);
+
+    if (token === backgroundImageLoadToken) {
+      console.warn('列表中的背景图片均无法加载');
+      updateBackgroundImageCss('none', false, token);
+    }
+  }
+
+  function parseBackgroundList(text) {
+    if (!text) return [];
+    return text
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line && !/^\s*(#|\/\/)/.test(line))
+      .map(entry => sanitizeListEntry(entry))
+      .filter(Boolean);
+  }
+
+  function sanitizeListEntry(entry) {
+    if (!entry) return '';
+    if (/^\s*url\(/i.test(entry)) {
+      return extractUrlFromCss(entry) || '';
+    }
+    return entry;
+  }
+
+  function resolveAgainstBase(candidate, baseUrl) {
+    if (!candidate) return candidate;
+    // Already absolute
+    if (/^(https?:|file:|data:)/i.test(candidate)) return candidate;
+    try {
+      return new URL(candidate, baseUrl).href;
+    } catch (_) {
+      return candidate;
+    }
+  }
+
+  function ensureImageLoad(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const cleanup = () => {
+        img.onload = null;
+        img.onerror = null;
+      };
+      img.onload = () => {
+        cleanup();
+        resolve(url);
+      };
+      img.onerror = (event) => {
+        cleanup();
+        reject(new Error(`无法加载图片: ${url}`));
+      };
+      img.src = url;
+    });
+  }
+
+  function createCssUrlValue(resourceUrl) {
+    const escaped = String(resourceUrl).replace(/['"\\]/g, '\\$&');
+    return `url("${escaped}")`;
+  }
+
+  function extractUrlFromCss(cssValue) {
+    if (!cssValue) return '';
+    const match = cssValue.match(/url\(\s*(['"]?)(.*?)\1\s*\)/i);
+    return match ? match[2] : '';
+  }
+
+  function updateBackgroundImageCss(cssValue, hasImage, token, debugUrl) {
+    if (token !== backgroundImageLoadToken) return;
+    document.documentElement.style.setProperty('--cerebr-background-image', cssValue || 'none');
 
     const targets = [document.documentElement, document.body];
     targets.forEach((node) => {
       if (!node) return;
-      if (normalized) {
+      if (hasImage) {
         node.classList.add('has-custom-background-image');
       } else {
         node.classList.remove('has-custom-background-image');
       }
     });
+
+    if (hasImage && debugUrl) {
+      console.log('[Cerebr] 已加载背景图片:', debugUrl);
+    }
   }
 
   function applyBackgroundImageIntensity(value) {
