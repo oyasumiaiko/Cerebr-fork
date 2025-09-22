@@ -44,6 +44,9 @@ export function createMessageSender(appContext) {
   let isTemporaryMode = false;
   let pageContent = null;
   let shouldSendChatHistory = true;
+  let autoRetryEnabled = false;
+  const MAX_AUTO_RETRY_ATTEMPTS = 3;
+  const AUTO_RETRY_DELAY_MS = 1000;
   let currentConversationId = null;
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
@@ -188,6 +191,10 @@ export function createMessageSender(appContext) {
       pageContentSnapshot = null,
       conversationSnapshot = null
     } = options;
+
+    const autoRetryAttempt = (typeof options.__autoRetryAttempt === 'number' && options.__autoRetryAttempt >= 0)
+      ? options.__autoRetryAttempt
+      : 0;
 
     const hasImagesInInput = inputController ? inputController.hasImages() : !!imageContainer.querySelector('.image-tag');
     // 如果是重新生成，使用原始消息文本；否则从输入框获取
@@ -380,11 +387,6 @@ export function createMessageSender(appContext) {
         return;
       }
       console.error('发送消息失败:', error);
-      // 更新加载状态消息显示错误
-      if (loadingMessage) {
-        loadingMessage.textContent = '发送失败: ' + error.message;
-        loadingMessage.classList.add('error-message');
-      }
 
       // 返回一个可供外部使用的“无状态重试提示”对象
       const retryHint = {
@@ -405,6 +407,29 @@ export function createMessageSender(appContext) {
           resolve(await sendMessage({ ...retryHint, ...override }));
         }, Math.max(0, delayMs));
       });
+
+      const canAutoRetry = autoRetryEnabled && autoRetryAttempt < (MAX_AUTO_RETRY_ATTEMPTS - 1);
+      if (canAutoRetry) {
+        if (loadingMessage && loadingMessage.parentNode) {
+          loadingMessage.remove();
+        }
+        if (typeof showNotification === 'function') {
+          const displayAttempt = autoRetryAttempt + 1;
+          showNotification(`发送失败，正在自动重试 (${displayAttempt}/${MAX_AUTO_RETRY_ATTEMPTS})`);
+        }
+        return retry(AUTO_RETRY_DELAY_MS, { __autoRetryAttempt: autoRetryAttempt + 1 });
+      }
+
+      if (loadingMessage) {
+        const prefix = autoRetryEnabled ? `自动重试失败 (${MAX_AUTO_RETRY_ATTEMPTS} 次): ` : '发送失败: ';
+        loadingMessage.textContent = `${prefix}${error.message}`;
+        loadingMessage.classList.add('error-message');
+      }
+
+      if (autoRetryEnabled && typeof showNotification === 'function') {
+        showNotification('自动重试失败，已达到最大尝试次数');
+      }
+
       return { ok: false, error, apiConfig: (resolvedApiConfig || preferredApiConfig || apiManager.getSelectedConfig()), retryHint, retry };
     } finally {
       // 无论成功还是失败，都重置处理状态
@@ -848,6 +873,10 @@ export function createMessageSender(appContext) {
     shouldSendChatHistory = value;
   }
 
+  function setAutoRetry(value) {
+    autoRetryEnabled = !!value;
+  }
+
   /**
    * 设置当前会话ID
    * @public
@@ -899,6 +928,7 @@ export function createMessageSender(appContext) {
     toggleTemporaryMode,
     getTemporaryModeState,
     setSendChatHistory,
+    setAutoRetry,
     setCurrentConversationId,
     getCurrentConversationId,
     getShouldAutoScroll,

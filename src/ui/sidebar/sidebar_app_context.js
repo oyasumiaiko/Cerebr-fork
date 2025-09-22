@@ -39,6 +39,7 @@ export function createSidebarAppContext(isStandalone) {
     inputContainer: document.getElementById('input-container'),
     regenerateButton: document.getElementById('regenerate-message'),
     autoScrollSwitch: document.getElementById('auto-scroll-switch'),
+    autoRetrySwitch: document.getElementById('auto-retry-switch'),
     clearOnSearchSwitch: document.getElementById('clear-on-search-switch'),
     scaleFactor: document.getElementById('scale-factor'),
     scaleValue: document.getElementById('scale-value'),

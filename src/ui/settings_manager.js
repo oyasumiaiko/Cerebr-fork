@@ -51,6 +51,7 @@ export function createSettingsManager(appContext) {
   const autoScrollSwitch = dom.autoScrollSwitch;
   const clearOnSearchSwitch = dom.clearOnSearchSwitch;
   const sendChatHistorySwitch = dom.sendChatHistorySwitch;
+  const autoRetrySwitch = dom.autoRetrySwitch;
   const showReferenceSwitch = dom.showReferenceSwitch;
   const sidebarPositionSwitch = dom.sidebarPositionSwitch;
   const stopAtTopSwitch = dom.stopAtTopSwitch;
@@ -83,6 +84,7 @@ export function createSettingsManager(appContext) {
     autoScroll: true,
     clearOnSearch: true, // This might be specific to a search feature, not a general setting
     shouldSendChatHistory: true,
+    autoRetry: false,
     showReference: true,
     sidebarPosition: 'right', // 'left' 或 'right'
     stopAtTop: true, // 滚动到顶部时停止
@@ -186,6 +188,14 @@ export function createSettingsManager(appContext) {
       label: '发送聊天历史',
       defaultValue: DEFAULT_SETTINGS.shouldSendChatHistory,
       apply: (v) => applySendChatHistory(v)
+    },
+    {
+      key: 'autoRetry',
+      type: 'toggle',
+      id: 'auto-retry-switch',
+      label: '自动重试',
+      defaultValue: DEFAULT_SETTINGS.autoRetry,
+      apply: (v) => applyAutoRetry(v)
     },
     // 显示引用标记
     {
@@ -772,6 +782,17 @@ export function createSettingsManager(appContext) {
     }
   }
   
+  function applyAutoRetry(enabled) {
+    const normalized = !!enabled;
+    if (autoRetrySwitch) {
+      autoRetrySwitch.checked = normalized;
+    }
+
+    if (messageSender && typeof messageSender.setAutoRetry === 'function') {
+      messageSender.setAutoRetry(normalized);
+    }
+  }
+  
   // 应用显示引用标记设置
   function applyShowReference(enabled) {
     updateReferenceVisibility(enabled);
@@ -1020,6 +1041,8 @@ export function createSettingsManager(appContext) {
   
   // 设置发送聊天历史
   function setSendChatHistory(enabled) { setSetting('shouldSendChatHistory', enabled); }
+
+  function setAutoRetry(enabled) { setSetting('autoRetry', enabled); }
   
   // 设置显示引用标记
   function setShowReference(enabled) { setSetting('showReference', enabled); }
@@ -1081,6 +1104,7 @@ export function createSettingsManager(appContext) {
     setStopAtTop,
     setClearOnSearch,
     setSendChatHistory,
+    setAutoRetry,
     setShowReference,
     setSidebarPosition,
     updateReferenceVisibility,
