@@ -1,0 +1,56 @@
+import { PromptSettings } from '../../core/prompt_settings.js';
+import { createChatHistoryManager } from '../../core/chat_history_manager.js';
+import { createMessageProcessor } from '../../core/message_processor.js';
+import { createImageHandler } from '../../utils/image_handler.js';
+import { createChatHistoryUI } from '../chat_history_ui.js';
+import { createApiManager } from '../../api/api_settings.js';
+import { createMessageSender } from '../../core/message_sender.js';
+import { createSettingsManager } from '../settings_manager.js';
+import { createContextMenuManager } from '../context_menu_manager.js';
+import { createUIManager } from '../ui_manager.js';
+import { createInputController } from '../input_controller.js';
+import { applyStandaloneAdjustments } from './sidebar_app_context.js';
+
+/**
+ * 初始化侧边栏依赖的各类服务，并将实例挂载到 appContext。
+ * @param {Object} appContext - 侧边栏上下文对象。
+ * @returns {Promise<void>} 初始化完成。
+ */
+export async function initializeSidebarServices(appContext) {
+  const { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage } = createChatHistoryManager(appContext);
+  appContext.services.chatHistoryManager = { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage };
+
+  appContext.services.promptSettingsManager = new PromptSettings(appContext);
+  appContext.services.settingsManager = createSettingsManager(appContext);
+  appContext.services.imageHandler = createImageHandler(appContext);
+  appContext.services.apiManager = createApiManager(appContext);
+
+  appContext.services.messageProcessor = createMessageProcessor(appContext);
+  appContext.services.chatHistoryUI = createChatHistoryUI(appContext);
+  appContext.services.inputController = createInputController(appContext);
+
+  appContext.services.messageSender = createMessageSender(appContext);
+  appContext.services.messageSender.setCurrentConversationId(appContext.services.chatHistoryUI.getCurrentConversationId());
+  if (appContext.state.isStandalone) {
+    try {
+      appContext.services.messageSender.enterTemporaryMode();
+    } catch (error) {
+      console.error('独立聊天页面初始化临时模式失败:', error);
+    }
+  }
+
+  window.cerebr.messageSender = appContext.services.messageSender;
+
+  appContext.services.uiManager = createUIManager(appContext);
+  appContext.services.contextMenuManager = createContextMenuManager(appContext);
+
+  appContext.services.contextMenuManager.init();
+  appContext.services.uiManager.init();
+
+  await appContext.services.settingsManager.init();
+  applyStandaloneAdjustments(appContext);
+
+  appContext.services.apiManager.setupUIEventHandlers(appContext);
+  await appContext.services.apiManager.init();
+}
+
