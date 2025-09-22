@@ -706,7 +706,8 @@ export function createSettingsManager(appContext) {
     notifyScaleFactorChange(value);
   }
 
-  function applyBackgroundImage(url) {
+  function applyBackgroundImage(url, options = {}) {
+    const { cacheBustToken = null } = options || {};
     const normalizedInput = typeof url === 'string' ? url.trim() : '';
     const token = ++backgroundImageLoadToken;
 
@@ -729,8 +730,9 @@ export function createSettingsManager(appContext) {
     }
 
     if (normalizedSource.kind === 'direct') {
-      const cssValue = createCssUrlValue(normalizedSource.url);
-      updateBackgroundImageCss(cssValue, true, token, normalizedSource.url);
+      const targetUrl = maybeAppendCacheBuster(normalizedSource.url, cacheBustToken);
+      const cssValue = createCssUrlValue(targetUrl);
+      updateBackgroundImageCss(cssValue, true, token, targetUrl);
       return;
     }
 
@@ -773,6 +775,13 @@ export function createSettingsManager(appContext) {
   function stripQueryAndHash(value) {
     const idx = value.search(/[?#]/);
     return idx === -1 ? value : value.slice(0, idx);
+  }
+
+  function maybeAppendCacheBuster(resourceUrl, cacheBustToken) {
+    if (!cacheBustToken) return resourceUrl;
+    if (!/^(https?:)/i.test(resourceUrl)) return resourceUrl;
+    const separator = resourceUrl.includes('?') ? '&' : '?';
+    return `${resourceUrl}${separator}__cerebr_bg=${encodeURIComponent(String(cacheBustToken))}`;
   }
 
   async function loadBackgroundImageFromList(listUrl, token) {
@@ -926,7 +935,14 @@ export function createSettingsManager(appContext) {
       return;
     }
 
-    applyBackgroundImage(source);
+    const normalizedForCheck = convertPotentialWindowsPath(source);
+    if (isTxtListSource(normalizedForCheck)) {
+      applyBackgroundImage(source);
+      return;
+    }
+
+    const cacheBustToken = Date.now().toString(36);
+    applyBackgroundImage(source, { cacheBustToken });
   }
 
   function clamp01(input, fallback = 0) {
