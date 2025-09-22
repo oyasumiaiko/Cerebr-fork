@@ -40,14 +40,13 @@ export function createMessageSender(appContext) {
   // 私有状态
   let isProcessingMessage = false;
   let shouldAutoScroll = true;
-  let currentController = null;
+  let activeAttempt = null;
   let isTemporaryMode = false;
   let pageContent = null;
   let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
   const MAX_AUTO_RETRY_ATTEMPTS = 3;
   const AUTO_RETRY_DELAY_MS = 1000;
-  const manuallyAbortedControllers = new WeakSet();
   let currentConversationId = null;
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
@@ -197,9 +196,6 @@ export function createMessageSender(appContext) {
       ? options.__autoRetryAttempt
       : 0;
 
-    let attemptController = null;
-    let attemptSignal = null;
-
     const hasImagesInInput = inputController ? inputController.hasImages() : !!imageContainer.querySelector('.image-tag');
     // 如果是重新生成，使用原始消息文本；否则从输入框获取
     let messageText = (originalMessageText !== null && originalMessageText !== undefined)
@@ -221,22 +217,50 @@ export function createMessageSender(appContext) {
     let pageContentLength = 0;
     let conversationChain = null;
 
+    const beginAttempt = () => {
+      if (activeAttempt) {
+        activeAttempt.manualAbort = true;
+        try { activeAttempt.controller.abort(); } catch (_) {}
+      }
+      const attemptState = {
+        controller: new AbortController(),
+        manualAbort: false,
+        finished: false,
+        loadingMessage: null
+      };
+      activeAttempt = attemptState;
+      return attemptState;
+    };
+
+    const finalizeAttempt = (attemptState) => {
+      if (!attemptState || attemptState.finished) return;
+      attemptState.finished = true;
+
+      const isStillActive = activeAttempt === attemptState;
+      if (isStillActive) {
+        activeAttempt = null;
+        isProcessingMessage = false;
+        shouldAutoScroll = false;
+        GetInputContainer().classList.remove('auto-scroll-glow');
+        GetInputContainer().classList.remove('auto-scroll-glow-active');
+        const lastMessage = chatContainer.querySelector('.ai-message:last-child');
+        if (lastMessage) {
+          lastMessage.classList.remove('updating');
+        }
+      } else if (attemptState.loadingMessage && attemptState.loadingMessage.parentNode) {
+        attemptState.loadingMessage.remove();
+      }
+    };
+
+    let attempt = null;
+
     try {
       // 开始处理消息
       isProcessingMessage = true;
       shouldAutoScroll = true;
 
-      // 如果存在之前的请求，先中止它
-      if (currentController) {
-        manuallyAbortedControllers.add(currentController);
-        currentController.abort();
-        currentController = null;
-      }
-
-      // 创建新的 AbortController
-      attemptController = new AbortController();
-      currentController = attemptController;
-      attemptSignal = attemptController.signal;
+      attempt = beginAttempt();
+      const signal = attempt.controller.signal;
 
       // 当开始生成时，给聊天容器添加 glow 效果
       GetInputContainer().classList.add('auto-scroll-glow');
@@ -274,6 +298,7 @@ export function createMessageSender(appContext) {
       
       // 添加加载状态消息
       loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true);
+      attempt.loadingMessage = loadingMessage;
       loadingMessage.classList.add('loading-message');
       // 让“等待回复”占位消息也带有 updating 状态，便于右键菜单显示“停止更新”
       loadingMessage.classList.add('updating');
@@ -365,7 +390,7 @@ export function createMessageSender(appContext) {
       const response = await apiManager.sendRequest({
         requestBody: requestBody,
         config: effectiveApiConfig,
-        signal: attemptSignal
+        signal: signal
       });
       
       // 更新加载状态：等待AI响应
@@ -390,7 +415,7 @@ export function createMessageSender(appContext) {
 
     } catch (error) {
       const isAbortError = error?.name === 'AbortError';
-      const wasManualAbort = isAbortError && attemptController && manuallyAbortedControllers.has(attemptController);
+      const wasManualAbort = isAbortError && attempt?.manualAbort;
 
       if (wasManualAbort) {
         if (loadingMessage && loadingMessage.parentNode) {
@@ -465,23 +490,7 @@ export function createMessageSender(appContext) {
 
       return { ok: false, error, apiConfig: (resolvedApiConfig || preferredApiConfig || apiManager.getSelectedConfig()), retryHint, retry };
     } finally {
-      const shouldCleanupUi = currentController === attemptController || currentController === null;
-      if (shouldCleanupUi) {
-        if (currentController === attemptController) {
-          currentController = null;
-        }
-        // 无论成功还是失败，都重置处理状态
-        isProcessingMessage = false;
-        shouldAutoScroll = false;
-        // 当生成结束时，移除 glow 效果
-        GetInputContainer().classList.remove('auto-scroll-glow');
-        GetInputContainer().classList.remove('auto-scroll-glow-active');
-        // 当生成结束时，移除 loading 效果
-        const lastMessage = chatContainer.querySelector('.ai-message:last-child');
-        if (lastMessage) {
-          lastMessage.classList.remove('updating');
-        }
-      }
+      finalizeAttempt(attempt);
     }
     // 成功：返回 ok 与实际使用的 api 配置（供外部记录/重试）
     return { ok: true, apiConfig: (resolvedApiConfig || preferredApiConfig || apiManager.getSelectedConfig()) };
@@ -879,10 +888,12 @@ export function createMessageSender(appContext) {
    * @public
    */
   function abortCurrentRequest() {
-    if (currentController) {
-      manuallyAbortedControllers.add(currentController);
-      currentController.abort();
-      currentController = null;
+    if (activeAttempt?.controller) {
+      activeAttempt.manualAbort = true;
+      try { activeAttempt.controller.abort(); } catch (e) { console.error('中止当前请求失败:', e); }
+      activeAttempt = null;
+      isProcessingMessage = false;
+      shouldAutoScroll = false;
       // UI 清理：移除“正在更新”的占位消息与状态
       try {
         // 移除所有 loading 占位消息（尚未开始输出首字时存在）

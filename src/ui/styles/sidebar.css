@@ -1748,18 +1748,24 @@ body.temporary-mode::after {
     }
 }
 
-.loading-message.error-message {
+.loading-message.error-message,
+.message.error-message {
     color: #ff3b30;
-    opacity: 0.9;
+    opacity: 0.95;
 }
 
 .loading-message.error-message::after {
     display: none;
 }
 
+.message.error-message::after {
+    display: none;
+}
+
 /* 深色模式下的错误消息颜色 */
 @media (prefers-color-scheme: dark) {
-    .loading-message.error-message {
+    .loading-message.error-message,
+    .message.error-message {
         color: #ff453a;
     }
 }
