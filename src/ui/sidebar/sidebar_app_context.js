@@ -58,6 +58,7 @@ export function createSidebarAppContext(isStandalone) {
     emptyStateLoadUrl: document.getElementById('empty-state-load-url'),
     emptyStateScreenshot: document.getElementById('empty-state-screenshot'),
     emptyStateExtract: document.getElementById('empty-state-extract'),
+    emptyStateRandomBackground: document.getElementById('empty-state-random-background'),
     statusDot: document.getElementById('status-dot'),
     stopAtTopSwitch: document.getElementById('stop-at-top-switch'),
     repomixButton: document.getElementById('empty-state-repomix'),

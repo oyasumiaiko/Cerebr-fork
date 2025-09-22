@@ -911,6 +911,24 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-background-total-opacity', numeric);
   }
 
+  function refreshBackgroundImage(options = {}) {
+    const { silent = false } = options || {};
+    const source = (currentSettings.backgroundImageUrl || '').trim();
+
+    if (!source) {
+      if (!silent && typeof showNotification === 'function') {
+        showNotification({
+          message: '请先在设置中配置背景图片来源',
+          type: 'warning',
+          duration: 2400
+        });
+      }
+      return;
+    }
+
+    applyBackgroundImage(source);
+  }
+
   function clamp01(input, fallback = 0) {
     const n = Number(input);
     if (Number.isNaN(n)) return fallback;
@@ -1279,7 +1297,8 @@ export function createSettingsManager(appContext) {
     setAutoRetry,
     setShowReference,
     setSidebarPosition,
+    refreshBackgroundImage,
     updateReferenceVisibility,
     applyTheme
   };
-} 
+}

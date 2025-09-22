@@ -233,6 +233,17 @@ function setupEmptyStateHandlers(appContext) {
       appContext.services.messageSender.sendMessage({ api: prompts.extract?.model });
     });
   }
+
+  if (appContext.dom.emptyStateRandomBackground) {
+    appContext.dom.emptyStateRandomBackground.addEventListener('click', () => {
+      const settingsManager = appContext.services.settingsManager;
+      if (!settingsManager?.refreshBackgroundImage) {
+        console.warn('随机背景图片按钮点击时缺少 refreshBackgroundImage 方法');
+        return;
+      }
+      settingsManager.refreshBackgroundImage();
+    });
+  }
 }
 
 /**
