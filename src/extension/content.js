@@ -225,6 +225,7 @@ class CerebrSidebar {
       // console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
       const container = document.createElement('cerebr-root');
+      container.style.display = 'contents'; // 让容器内元素透出
 
       // 防止外部JavaScript访问和修改我们的元素
       Object.defineProperty(container, 'remove', {
@@ -381,13 +382,27 @@ class CerebrSidebar {
       scaleObserver.observe(content);
 
       // 使用MutationObserver确保我们的元素不会被移除
+      let restoreTimeoutId = null;
+
+      const scheduleRestore = () => {
+        if (restoreTimeoutId) return;
+
+        restoreTimeoutId = setTimeout(() => {
+          restoreTimeoutId = null;
+
+          if (!root.contains(container)) {
+            console.log('检测到侧边栏被移除，正在恢复...');
+            root.appendChild(container);
+          }
+        }, 500);
+      };
+
       const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
           if (mutation.type === 'childList') {
             const removedNodes = Array.from(mutation.removedNodes);
             if (removedNodes.includes(container)) {
-              console.log('检测到侧边栏被移除，正在恢复...');
-              root.appendChild(container);
+              scheduleRestore();
             }
           }
         }
