@@ -2796,7 +2796,7 @@ body.hide-references .reference-number.superscript {
 }
 
 .message:nth-last-child(1) {
-    margin-bottom: calc(100vh - 48px - 30px - 2em);
+    margin-bottom: calc(90vh - 48px);
 }
 
 #input-container.auto-scroll-glow::after {
