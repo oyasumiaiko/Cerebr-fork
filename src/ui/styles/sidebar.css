@@ -154,6 +154,24 @@ body {
     box-sizing: border-box;
 }
 
+html::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: var(--cerebr-background-image);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0;
+    z-index: -2;
+    filter: blur(120px);
+    transform: scale(1.1);
+    transform-origin: center;
+    will-change: opacity, filter, transform;
+    transition: opacity 0.3s ease;
+}
+
 body::before {
     content: '';
     position: fixed;
@@ -169,6 +187,10 @@ body::before {
 }
 
 body:not(.has-custom-background-image)::before {
+    display: none;
+}
+
+html:not(.has-custom-background-image)::before {
     display: none;
 }
 
@@ -4016,6 +4038,16 @@ html.fullscreen-mode {
   --cerebr-message-user-bg: rgba(227, 242, 253, 1) !important;
   --cerebr-message-ai-bg: rgba(245, 245, 245, 1) !important;
   --cerebr-input-bg: rgba(248, 248, 248, 1) !important; */
+}
+
+html.fullscreen-mode body::before {
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+html.fullscreen-mode::before {
+  opacity: calc(var(--cerebr-background-image-intensity) * var(--cerebr-background-total-opacity));
 }
 
 /* 全屏下：让容器占满宽度，但用内边距把视觉内容限制在中心列。
