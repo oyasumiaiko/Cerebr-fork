@@ -407,8 +407,17 @@ export function createMessageSender(appContext) {
         throw new Error(`API错误 (${response.status}): ${error}`);
       }
 
-      // 处理流式响应（传入本次使用的 API 配置以便记录与渲染footer）
-      await handleStreamResponse(response, loadingMessage, effectiveApiConfig);
+      // 根据配置选择流式/非流式处理
+      const isGeminiApi = effectiveApiConfig?.baseUrl === 'genai';
+      const useStreaming = isGeminiApi
+        ? (effectiveApiConfig.useStreaming !== false)
+        : !!(requestBody && requestBody.stream);
+
+      if (useStreaming) {
+        await handleStreamResponse(response, loadingMessage, effectiveApiConfig);
+      } else {
+        await handleNonStreamResponse(response, loadingMessage, effectiveApiConfig);
+      }
 
       // 消息处理完成后，自动保存会话
       if (currentConversationId) {
@@ -794,6 +803,109 @@ export function createMessageSender(appContext) {
           }
       }
     }
+  }
+
+  /**
+   * 处理API的非流式响应
+   * @private
+   * @param {Response} response - Fetch API 响应对象
+   * @param {HTMLElement} loadingMessage - 加载状态消息元素
+   * @param {Object} usedApiConfig - 本次使用的 API 配置
+   * @returns {Promise<void>}
+   */
+  async function handleNonStreamResponse(response, loadingMessage, usedApiConfig) {
+    function applyApiMetaToMessage(messageId, apiConfig, messageDiv) {
+      try {
+        if (!messageId) return;
+        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+        if (node) {
+          node.apiUuid = apiConfig?.id || null;
+          node.apiDisplayName = apiConfig?.displayName || '';
+          node.apiModelId = apiConfig?.modelName || '';
+        }
+        renderApiFooter(messageDiv || chatContainer.querySelector(`[data-message-id="${messageId}"]`), node);
+      } catch (e) {
+        console.warn('记录/渲染API信息失败:', e);
+      }
+    }
+
+    function renderApiFooter(messageElement, nodeLike) {
+      try {
+        if (!messageElement || !nodeLike) return;
+        let footer = messageElement.querySelector('.api-footer');
+        if (!footer) {
+          footer = document.createElement('div');
+          footer.classList.add('api-footer');
+          messageElement.appendChild(footer);
+        }
+        const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
+        let label = '';
+        if (nodeLike.apiUuid) {
+          const cfg = allConfigs.find(c => c.id === nodeLike.apiUuid);
+          if (cfg && cfg.modelName) label = cfg.modelName;
+        }
+        if (!label) label = (nodeLike.apiDisplayName || '').trim();
+        if (!label) label = (nodeLike.apiModelId || '').trim();
+        footer.textContent = label || '';
+        footer.title = `API uuid: ${nodeLike.apiUuid || '-'} | displayName: ${nodeLike.apiDisplayName || '-'} | model: ${nodeLike.apiModelId || '-'}`;
+      } catch (e) {
+        console.warn('渲染API footer失败:', e);
+      }
+    }
+
+    let answer = '';
+    let thoughts = '';
+    let json = null;
+    try {
+      json = await response.json();
+    } catch (e) {
+      const text = await response.text().catch(() => '');
+      throw new Error(text || '解析响应失败');
+    }
+
+    // 错误处理（通用）
+    if (json && json.error) {
+      const msg = json.error.message || 'API 返回错误';
+      throw new Error(msg);
+    }
+
+    const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
+    if (isGeminiApi) {
+      // Google GenAI 非流式格式
+      const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
+      const candidate = candidates[0] || null;
+      const parts = candidate?.content?.parts || [];
+      parts.forEach(part => {
+        if (typeof part?.text === 'string') {
+          if (part.thought) thoughts += part.text; else answer += part.text;
+        }
+      });
+    } else {
+      // OpenAI 兼容 非流式
+      const choice = Array.isArray(json?.choices) ? json.choices[0] : null;
+      const message = choice?.message || {};
+      if (typeof message?.content === 'string') answer = message.content;
+      if (typeof message?.reasoning_content === 'string') thoughts = message.reasoning_content;
+      else if (typeof message?.reasoning === 'string') thoughts = message.reasoning;
+    }
+
+    // 移除 loading 并渲染最终消息
+    if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+    try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
+    const newAiMessageDiv = messageProcessor.appendMessage(
+      answer || '',
+      'ai',
+      false,
+      null,
+      null,
+      thoughts || '',
+      null
+    );
+    if (newAiMessageDiv) {
+      const messageId = newAiMessageDiv.getAttribute('data-message-id');
+      applyApiMetaToMessage(messageId, usedApiConfig, newAiMessageDiv);
+    }
+    scrollToBottom();
   }
 
   /**

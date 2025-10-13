@@ -61,6 +61,7 @@ export function createApiManager(appContext) {
       modelName: c.modelName,
       displayName: c.displayName,
       temperature: c.temperature,
+      useStreaming: (c.useStreaming !== false),
       isFavorite: !!c.isFavorite,
       maxChatHistory: c.maxChatHistory ?? 500,
       customParams: minifyJsonIfPossible(c.customParams || ''),
@@ -152,6 +153,11 @@ export function createApiManager(appContext) {
           if (typeof config.apiKey === 'string' && config.apiKey.includes(',')) {
             config.apiKey = config.apiKey.split(',').map(k => k.trim()).filter(Boolean);
           }
+          // 默认开启流式传输（向后兼容）
+          if (typeof config.useStreaming === 'undefined') {
+            config.useStreaming = true;
+            needResave = true;
+          }
           // 初始化 apiKeyUsageIndex
           if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
              const configId = getConfigIdentifier(config); // 使用唯一标识符
@@ -169,6 +175,7 @@ export function createApiManager(appContext) {
           modelName: 'gpt-4o',
           displayName: '',
           temperature: 1,
+          useStreaming: true,
           isFavorite: false, // 添加收藏状态字段
           customParams: '',
           customSystemPrompt: '',
@@ -187,6 +194,7 @@ export function createApiManager(appContext) {
         modelName: 'gpt-4o',
         displayName: '',
         temperature: 1,
+        useStreaming: true,
         isFavorite: false,
         customParams: '',
         customSystemPrompt: '',
@@ -338,7 +346,7 @@ export function createApiManager(appContext) {
     
     maxHistoryGroup.appendChild(maxHistoryHeader);
     maxHistoryGroup.appendChild(maxHistoryInput);
-    
+
     // 在自定义参数之前插入最大聊天历史设置
     // 将“最大聊天历史”放在左侧（api-form-left 的末尾）
     const formLeft = apiForm.querySelector('.api-form-left');
@@ -366,6 +374,45 @@ export function createApiManager(appContext) {
       apiConfigs[index].maxChatHistory = (v >= 500) ? 2147483647 : v;
       saveAPIConfigs();
     });
+
+    // 传输模式：流式/非流式 开关
+    const streamingGroup = document.createElement('div');
+    streamingGroup.className = 'form-group';
+    const streamingHeader = document.createElement('div');
+    streamingHeader.className = 'form-group-header';
+    const streamingLabel = document.createElement('label');
+    streamingLabel.textContent = '传输模式';
+    const streamingHint = document.createElement('span');
+    streamingHint.className = 'temperature-value';
+    streamingHint.textContent = (config.useStreaming !== false) ? '流式 (SSE)' : '非流式 (JSON)';
+    streamingHeader.appendChild(streamingLabel);
+    streamingHeader.appendChild(streamingHint);
+    const streamingToggleWrap = document.createElement('div');
+    streamingToggleWrap.className = 'input-wrapper';
+    const streamingToggle = document.createElement('input');
+    streamingToggle.type = 'checkbox';
+    streamingToggle.className = 'use-streaming-toggle';
+    streamingToggle.checked = (config.useStreaming !== false);
+    streamingToggle.title = '启用流式传输 (SSE)。禁用则使用一次性JSON响应。';
+    const streamingToggleText = document.createElement('span');
+    streamingToggleText.style.marginLeft = '8px';
+    streamingToggleText.textContent = streamingToggle.checked ? '启用' : '禁用';
+    streamingToggle.addEventListener('change', () => {
+      const enabled = !!streamingToggle.checked;
+      streamingToggleText.textContent = enabled ? '启用' : '禁用';
+      streamingHint.textContent = enabled ? '流式 (SSE)' : '非流式 (JSON)';
+      apiConfigs[index].useStreaming = enabled;
+      saveAPIConfigs();
+    });
+    streamingToggleWrap.appendChild(streamingToggle);
+    streamingToggleWrap.appendChild(streamingToggleText);
+    streamingGroup.appendChild(streamingHeader);
+    streamingGroup.appendChild(streamingToggleWrap);
+    if (formLeft) {
+      formLeft.appendChild(streamingGroup);
+    } else {
+      apiForm.appendChild(streamingGroup);
+    }
 
     // 选择按钮点击事件
     selectBtn.addEventListener('click', (e) => {
@@ -791,7 +838,7 @@ export function createApiManager(appContext) {
       requestBody = {
         model: config.modelName,
         messages: normalizedMessages, // OpenAI API可以直接处理包含图片数组的 messages
-        stream: true,
+        stream: (config.useStreaming !== false),
         temperature: config.temperature ?? 1.0, // 确保有默认值
         top_p: 0.95,
         ...overrides // 允许覆盖默认参数
@@ -852,7 +899,11 @@ export function createApiManager(appContext) {
     if (config.baseUrl === 'genai') {
       // Gemini API endpoint 和 key 参数
       // modelName 示例: "gemini-2.5-flash-preview-0520" or "gemini-2.5-pro-preview-0506"
-      endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:streamGenerateContent?key=${selectedKey}&alt=sse`;
+      if (config.useStreaming !== false) {
+        endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:streamGenerateContent?key=${selectedKey}&alt=sse`;
+      } else {
+        endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:generateContent?key=${selectedKey}`;
+      }
       // Gemini API 不需要 Authorization Bearer token header
     } else {
       // 其他 API (如 OpenAI)
@@ -1107,6 +1158,7 @@ export function createApiManager(appContext) {
             modelName: 'new-model',
             displayName: '新配置',
             temperature: 1,
+            useStreaming: true,
             isFavorite: false,
             customParams: '',
             customSystemPrompt: '',
