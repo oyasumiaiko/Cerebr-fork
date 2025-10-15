@@ -10,6 +10,7 @@
   },
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "commands",
     "activeTab",
     "tabs",
