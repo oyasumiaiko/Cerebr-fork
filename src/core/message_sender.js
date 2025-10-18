@@ -45,8 +45,9 @@ export function createMessageSender(appContext) {
   let pageContent = null;
   let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
-  const MAX_AUTO_RETRY_ATTEMPTS = 3;
-  const AUTO_RETRY_DELAY_MS = 1000;
+  // 自动重试配置：将最大重试次数调整为 10 次，并移除冷却时间（0ms）
+  const MAX_AUTO_RETRY_ATTEMPTS = 10; // 之前为 3
+  const AUTO_RETRY_DELAY_MS = 0;      // 之前为 1000ms，现设为无等待
   let currentConversationId = null;
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;

@@ -27,6 +27,10 @@ export function createApiManager(appContext) {
   let selectedConfigIndex = 0;
   // 用于存储每个配置下次应使用的 API Key 索引 (内存中)
   const apiKeyUsageIndex = {};
+  // API Key 黑名单（本地持久化），key => 过期时间戳(ms)
+  // 设计：成功的 key 不轮换；遇到 429 将该 key 拉入黑名单 24 小时；遇到 400 删除该 key
+  const BLACKLIST_STORAGE_KEY = 'apiKeyBlacklist';
+  let apiKeyBlacklist = {};
 
   const {
     dom,
@@ -67,6 +71,87 @@ export function createApiManager(appContext) {
       customParams: minifyJsonIfPossible(c.customParams || ''),
       customSystemPrompt: (c.customSystemPrompt || '').trim()
     }));
+  }
+
+  // ---- API Key 黑名单相关函数 ----
+  // 说明：为降低侵入性，黑名单存储在 chrome.storage.local，结构为 { [key: string]: expiresAtMs }
+  async function loadApiKeyBlacklist() {
+    try {
+      const data = await chrome.storage.local.get([BLACKLIST_STORAGE_KEY]);
+      const stored = data[BLACKLIST_STORAGE_KEY] || {};
+      // 清理已过期条目
+      const now = Date.now();
+      const cleaned = {};
+      for (const k in stored) {
+        if (typeof stored[k] === 'number' && stored[k] > now) cleaned[k] = stored[k];
+      }
+      apiKeyBlacklist = cleaned;
+      if (Object.keys(stored).length !== Object.keys(cleaned).length) {
+        await chrome.storage.local.set({ [BLACKLIST_STORAGE_KEY]: cleaned });
+      }
+    } catch (e) {
+      console.warn('加载 API Key 黑名单失败（忽略）：', e);
+      apiKeyBlacklist = {};
+    }
+  }
+
+  async function saveApiKeyBlacklist() {
+    try {
+      await chrome.storage.local.set({ [BLACKLIST_STORAGE_KEY]: apiKeyBlacklist });
+    } catch (e) {
+      console.warn('保存 API Key 黑名单失败（忽略）：', e);
+    }
+  }
+
+  function isKeyBlacklisted(key) {
+    if (!key) return false;
+    const exp = apiKeyBlacklist[key];
+    if (!exp) return false;
+    if (exp <= Date.now()) {
+      // 过期清理（惰性）
+      delete apiKeyBlacklist[key];
+      // 异步落盘但不 await，避免阻塞调用方
+      saveApiKeyBlacklist();
+      return false;
+    }
+    return true;
+  }
+
+  async function blacklistKey(key, durationMs) {
+    if (!key) return;
+    const until = Date.now() + Math.max(0, Number(durationMs) || 0);
+    apiKeyBlacklist[key] = until;
+    await saveApiKeyBlacklist();
+  }
+
+  function getNextUsableKeyIndex(config, startIndex, excluded = new Set()) {
+    if (!Array.isArray(config.apiKey) || config.apiKey.length === 0) return -1;
+    const n = config.apiKey.length;
+    let idx = Math.min(Math.max(0, startIndex || 0), n - 1);
+    for (let i = 0; i < n; i++) {
+      const candidateIndex = (idx + i) % n;
+      const candidate = (config.apiKey[candidateIndex] || '').trim();
+      if (!candidate) continue;
+      if (excluded.has(candidate)) continue;
+      if (!isKeyBlacklisted(candidate)) return candidateIndex;
+    }
+    return -1;
+  }
+
+  function removeKeyFromConfig(config, keyToRemove) {
+    if (!config) return false;
+    if (Array.isArray(config.apiKey)) {
+      const beforeLen = config.apiKey.length;
+      config.apiKey = config.apiKey.filter(k => (k || '').trim() && k !== keyToRemove);
+      return config.apiKey.length !== beforeLen;
+    }
+    if (typeof config.apiKey === 'string') {
+      if (config.apiKey === keyToRemove) {
+        config.apiKey = '';
+        return true;
+      }
+    }
+    return false;
   }
 
   async function saveConfigsToSyncChunked(configs) {
@@ -119,6 +204,8 @@ export function createApiManager(appContext) {
    */
   async function loadAPIConfigs() {
     try {
+      // 提前加载黑名单，确保首次请求前可用
+      await loadApiKeyBlacklist();
       // 读取顺序统一：sync 分片 → 旧 sync 字段（一次性迁移）
       let result = { apiConfigs: null, selectedConfigIndex: 0 };
       const chunked = await loadConfigsFromSyncChunked();
@@ -151,6 +238,7 @@ export function createApiManager(appContext) {
         apiConfigs.forEach(config => {
           if (!config.id) { config.id = generateUUID(); needResave = true; }
           if (typeof config.apiKey === 'string' && config.apiKey.includes(',')) {
+            // 兼容多 Key：逗号分隔
             config.apiKey = config.apiKey.split(',').map(k => k.trim()).filter(Boolean);
           }
           // 默认开启流式传输（向后兼容）
@@ -161,7 +249,10 @@ export function createApiManager(appContext) {
           // 初始化 apiKeyUsageIndex
           if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
              const configId = getConfigIdentifier(config); // 使用唯一标识符
-             apiKeyUsageIndex[configId] = 0;
+             // 使用索引表示“当前使用”的 key；成功不轮换，直到遇到429再轮换
+             if (typeof apiKeyUsageIndex[configId] !== 'number') {
+               apiKeyUsageIndex[configId] = 0;
+             }
           }
         });
         if (needResave) { await saveAPIConfigs(); }
@@ -876,56 +967,138 @@ export function createApiManager(appContext) {
    * @throws {Error} 如果 API Key 无效或缺失
    */
   async function sendRequest({ requestBody, config, signal }) {
-    let selectedKey = '';
     const configId = getConfigIdentifier(config);
+    // 确保黑名单已加载（若未调用过 loadAPIConfigs）
+    if (!apiKeyBlacklist || typeof apiKeyBlacklist !== 'object') {
+      try { await loadApiKeyBlacklist(); } catch (_) {}
+    }
 
-    // --- API Key 选择逻辑 ---
-    if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
-      // 轮询获取 Key
-      const currentIndex = apiKeyUsageIndex[configId] || 0;
-      selectedKey = config.apiKey[currentIndex];
-      // 更新下次使用的索引
-      apiKeyUsageIndex[configId] = (currentIndex + 1) % config.apiKey.length;
-    } else if (typeof config.apiKey === 'string' && config.apiKey) {
-      // 单个 Key
-      selectedKey = config.apiKey;
-    } else {
-      // 没有有效的 Key
+    // 选择可用的 Key：成功不轮换；429 才轮换；400 直接删除该 key
+    const tried = new Set();
+    let lastErrorResponse = null;
+
+    // 计算首次尝试索引（数组）或校验单 key
+    const isArrayKeys = Array.isArray(config.apiKey);
+    const keysArray = isArrayKeys ? config.apiKey : [(config.apiKey || '').trim()].filter(Boolean);
+    if (keysArray.length === 0) {
       console.error('API Key 缺失或无效:', config);
       throw new Error(`API Key for ${config.displayName || config.modelName} is missing or invalid.`);
     }
-    // ------------------------
 
-    if (!selectedKey) {
-         console.error('Selected API Key is empty:', config);
-         throw new Error(`Selected API Key for ${config.displayName || config.modelName} is empty.`);
-    }
-
-    let endpointUrl = config.baseUrl;
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-
-    if (config.baseUrl === 'genai') {
-      // Gemini API endpoint 和 key 参数
-      // modelName 示例: "gemini-2.5-flash-preview-0520" or "gemini-2.5-pro-preview-0506"
-      if (config.useStreaming !== false) {
-        endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:streamGenerateContent?key=${selectedKey}&alt=sse`;
-      } else {
-        endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:generateContent?key=${selectedKey}`;
+    // 单 Key 且已黑名单，直接错误
+    if (!isArrayKeys) {
+      const singleKey = keysArray[0];
+      if (isKeyBlacklisted(singleKey)) {
+        throw new Error('当前 API Key 因 429 已进入黑名单，24 小时内不可用');
       }
-      // Gemini API 不需要 Authorization Bearer token header
-    } else {
-      // 其他 API (如 OpenAI)
-      headers['Authorization'] = `Bearer ${selectedKey}`;
     }
 
-    return fetch(endpointUrl, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(requestBody),
-      signal
-    });
+    // 查找当前使用索引（若未设置，默认为 0）
+    if (isArrayKeys && typeof apiKeyUsageIndex[configId] !== 'number') {
+      apiKeyUsageIndex[configId] = 0;
+    }
+
+    while (true) {
+      let selectedIndex = 0;
+      let selectedKey = '';
+      if (isArrayKeys) {
+        // 从当前索引开始，选择第一个不在黑名单且未尝试过的 key
+        const startIndex = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), config.apiKey.length - 1);
+        const idx = getNextUsableKeyIndex(config, startIndex, tried);
+        if (idx === -1) {
+          // 无可用 key
+          if (lastErrorResponse) return lastErrorResponse; // 返回最后一次错误响应，让上层按原逻辑处理
+          throw new Error('没有可用的 API Key（全部黑名单或被删除）');
+        }
+        selectedIndex = idx;
+        selectedKey = (config.apiKey[selectedIndex] || '').trim();
+      } else {
+        // 单 key 情况
+        selectedIndex = 0;
+        selectedKey = keysArray[0];
+      }
+
+      if (!selectedKey) {
+        if (lastErrorResponse) return lastErrorResponse;
+        throw new Error(`Selected API Key for ${config.displayName || config.modelName} is empty.`);
+      }
+
+      // 组装请求
+      let endpointUrl = config.baseUrl;
+      const headers = { 'Content-Type': 'application/json' };
+      if (config.baseUrl === 'genai') {
+        if (config.useStreaming !== false) {
+          endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:streamGenerateContent?key=${selectedKey}&alt=sse`;
+        } else {
+          endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:generateContent?key=${selectedKey}`;
+        }
+      } else {
+        headers['Authorization'] = `Bearer ${selectedKey}`;
+      }
+
+      const response = await fetch(endpointUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal
+      });
+
+      // 处理 429：加入黑名单并尝试下一个 key
+      if (response.status === 429) {
+        lastErrorResponse = response;
+        try { await blacklistKey(selectedKey, 24 * 60 * 60 * 1000); } catch (_) {}
+        tried.add(selectedKey);
+        if (isArrayKeys) {
+          // 轮换到下一个可用 key（并更新“当前使用”索引）
+          const nextIdx = getNextUsableKeyIndex(config, (selectedIndex + 1) % config.apiKey.length, tried);
+          if (nextIdx === -1) {
+            return response; // 无可用 key，返回 429 响应
+          }
+          apiKeyUsageIndex[configId] = nextIdx;
+          // 循环继续自动重试
+          continue;
+        }
+        // 单 key 无法继续
+        return response;
+      }
+
+      // 处理 400：认为 key 无效，直接删除，并尝试下一个 key
+      if (response.status === 400 || response.status === 403) {
+        lastErrorResponse = response;
+        const removed = removeKeyFromConfig(config, selectedKey);
+        if (removed) {
+          // 如果删除的是当前索引位置的 key，需要修正索引
+          if (isArrayKeys) {
+            // 若删除后数组变短，当前索引向后取模
+            const len = Array.isArray(config.apiKey) ? config.apiKey.length : 0;
+            if (len > 0) {
+              apiKeyUsageIndex[configId] = Math.min(apiKeyUsageIndex[configId] || 0, len - 1);
+            } else {
+              apiKeyUsageIndex[configId] = 0;
+            }
+          }
+          try { await saveAPIConfigs(); } catch (_) {}
+        }
+        // 标记该 key 已尝试
+        tried.add(selectedKey);
+        // 若还有其它 key，继续；否则返回响应
+        if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
+          continue; // 尝试下一个
+        }
+        return response; // 无剩余 key
+      }
+
+      // 其他错误：直接返回给上层处理（不更改轮换状态）
+      if (!response.ok) {
+        return response;
+      }
+
+      // 成功：固定在当前 key（不轮换）。将当前索引保存为“正在使用”的索引
+      if (isArrayKeys) {
+        apiKeyUsageIndex[configId] = selectedIndex;
+      }
+      return response;
+    }
   }
 
   /**
