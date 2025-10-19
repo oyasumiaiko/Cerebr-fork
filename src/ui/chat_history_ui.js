@@ -2104,34 +2104,22 @@ export function createChatHistoryUI(appContext) {
     hint.textContent = '备份将保存到 “下载/Cerebr/” 子目录。';
     container.appendChild(hint);
 
-    // 示例对话框按钮（便于测试确认弹窗样式与交互）
-    const demoRow = document.createElement('div');
-    demoRow.style.display = 'flex';
-    demoRow.style.justifyContent = 'flex-start';
-    demoRow.style.marginTop = '8px';
-    const demoBtn = document.createElement('button');
-    demoBtn.textContent = '显示示例对话框';
-    demoBtn.addEventListener('click', async () => {
-      try {
-        const ok = await appContext.utils.showConfirm({
-          message: '示例对话框',
-          description: '这是一个用于测试的确认对话框。是否继续？',
-          confirmText: '继续',
-          cancelText: '取消',
-          type: 'info'
-        });
-        showNotification({ message: ok ? '你选择了：继续' : '你选择了：取消', type: ok ? 'success' : 'warning', duration: 1600 });
-      } catch (e) {
-        showNotification({ message: '演示失败', type: 'error' });
-      }
-    });
-    demoRow.appendChild(demoBtn);
-    container.appendChild(demoRow);
-
     // 事件：保存首选项
     cbInc.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ incrementalDefault: !!cbInc.checked }); });
     cbImg.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ excludeImagesDefault: !!cbImg.checked }); });
     cbZip.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ compressDefault: !!cbZip.checked }); });
+
+    // 初始化勾选状态（从存储读取）
+    (async () => {
+      try {
+        const saved = await loadBackupPreferencesDownloadsOnly();
+        cbInc.checked = !!saved.incrementalDefault;
+        cbImg.checked = !!saved.excludeImagesDefault;
+        cbZip.checked = saved.compressDefault !== false;
+      } catch (e) {
+        // ignore
+      }
+    })();
 
     return container;
   }
