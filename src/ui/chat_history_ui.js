@@ -1693,23 +1693,22 @@ export function createChatHistoryUI(appContext) {
    */
   async function backupConversations() {
     try {
-      // 显示进度通知（可更新）
-      const toast = showNotification({
-        message: '准备备份... ',
-        type: 'info',
-        showProgress: true,
-        progress: 0,
-        progressMode: 'determinate',
-        autoClose: false,
-        duration: 0
-      });
+      // 步进进度（等分）
+      const stepTitles = ['读取偏好', '分析会话', '读取会话内容'];
+      // 是否包含“处理图片”步骤
+      // 先假设包含，稍后根据 excludeImages 决定是否移除
+      let includeStripImages = true;
+      const tailSteps = ['打包数据', '保存文件', '更新备份时间', '完成'];
 
       // 读取备份偏好（仅下载方案）
       const prefs = await loadBackupPreferencesDownloadsOnly();
       const doIncremental = !!prefs.incrementalDefault;
       const excludeImages = !!prefs.excludeImagesDefault;
       const doCompress = prefs.compressDefault !== false; // 默认压缩
-      toast.update({ message: '读取偏好...', progress: 0.05 });
+      includeStripImages = !!excludeImages;
+      const steps = includeStripImages ? [...stepTitles, '处理图片', ...tailSteps] : [...stepTitles, ...tailSteps];
+      const sp = utils.createStepProgress({ steps, type: 'info' });
+      sp.setStep(0); // 读取偏好
 
       // 读取上次备份时间
       const LAST_BACKUP_TIME_KEY = 'chat_last_backup_time';
@@ -1718,7 +1717,7 @@ export function createChatHistoryUI(appContext) {
         const local = await chrome.storage.local.get([LAST_BACKUP_TIME_KEY]);
         lastBackupAt = Number(local[LAST_BACKUP_TIME_KEY]) || 0;
       } catch (_) {}
-      toast.update({ message: '分析需要备份的会话...', progress: 0.1 });
+      sp.next('分析会话');
 
       // 准备需要导出的会话列表
       let conversationsToExport = [];
@@ -1728,51 +1727,52 @@ export function createChatHistoryUI(appContext) {
         const updated = metas.filter(m => (Number(m.endTime) || 0) > lastBackupAt);
         const total = updated.length;
         let idx = 0;
+        sp.next('读取会话内容');
         for (const meta of updated) {
           const full = await getConversationById(meta.id, true);
           if (full) conversationsToExport.push(full);
           idx++;
-          const base = 0.1; // 10%
-          const span = 0.6; // 60% 用于加载阶段
-          const progress = base + (total ? (idx / total) * span : span);
-          toast.update({ message: `读取会话内容 (${idx}/${total})...`, progress: Math.min(0.7, progress) });
+          sp.updateSub(idx, total, `读取会话内容 (${idx}/${total})`);
         }
       } else {
-        // 全量：直接获取完整数据（阶段性不确定，使用不确定进度）
-        toast.update({ message: '读取所有会话...', progressMode: 'indeterminate' });
+        // 全量：直接获取完整数据
+        sp.next('读取会话内容');
         conversationsToExport = await getAllConversations();
-        toast.update({ message: `读取完成（${conversationsToExport.length} 条）`, progressMode: 'determinate', progress: 0.7 });
+        sp.updateSub(1, 1, `读取完成（${conversationsToExport.length} 条）`);
       }
 
       // 可选：移除图片与截图内容
-      if (excludeImages) {
-        toast.update({ message: '移除图片与截图内容...', progress: 0.75 });
-        conversationsToExport = conversationsToExport.map(stripImagesFromConversation);
+      if (includeStripImages) {
+        sp.next('处理图片');
+        const total = conversationsToExport.length;
+        for (let i = 0; i < total; i++) {
+          conversationsToExport[i] = stripImagesFromConversation(conversationsToExport[i]);
+          sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
+        }
       }
 
       // 生成文件名与 Blob
       const filenamePrefix = doIncremental ? 'chat_backup_inc_' : 'chat_backup_full_';
       const filename = filenamePrefix + new Date().toISOString().replace(/[:.]/g, '-') + (excludeImages ? '_noimg' : '') + (doCompress ? '.json.gz' : '.json');
-      toast.update({ message: doCompress ? '压缩数据...' : '打包数据...', progressMode: 'indeterminate' });
+      sp.next('打包数据');
       const blob = await buildBackupBlob(conversationsToExport, doCompress);
-      toast.update({ message: '准备保存...', progressMode: 'determinate', progress: 0.9 });
+      sp.next('保存文件');
 
       // 仅使用下载API或<a download>保存
       await triggerBlobDownload(blob, filename);
-      toast.update({ message: '备份完成', type: 'success', progress: 1, autoClose: true, duration: 1800 });
 
       // 记录本次备份时间（使用数据中最大 endTime 避免时间漂移）
+      sp.next('更新备份时间');
       try {
         const maxEnd = conversationsToExport.reduce((acc, c) => Math.max(acc, Number(c.endTime) || 0), lastBackupAt);
         const toSave = { [LAST_BACKUP_TIME_KEY]: maxEnd || Date.now() };
         await chrome.storage.local.set(toSave);
       } catch (_) {}
+      sp.next('完成');
+      sp.complete('备份完成', true);
     } catch (error) {
       console.error('备份失败:', error);
-      try {
-        // 若存在进度通知，切换为错误状态
-        showNotification({ message: '备份失败', type: 'error', description: String(error?.message || error) });
-      } catch (_) {}
+      try { showNotification({ message: '备份失败', type: 'error', description: String(error?.message || error) }); } catch (_) {}
     }
   }
 
@@ -1790,6 +1790,11 @@ export function createChatHistoryUI(appContext) {
       const files = Array.from(e.target.files || []);
       if (!files || files.length === 0) return;
       try {
+        // 步进进度：读取文件、解析合并、确认覆盖、写入会话、刷新界面、完成
+        const steps = ['读取文件', '解析与合并', '确认覆盖', '写入会话', '刷新界面', '完成'];
+        const sp = utils.createStepProgress({ steps, type: 'info' });
+        sp.setStep(0);
+
         // 读取并解析所有选中的备份文件
         const allConversations = [];
         for (const file of files) {
@@ -1805,16 +1810,17 @@ export function createChatHistoryUI(appContext) {
           } catch (err) {
             console.error('解析备份文件失败（忽略此文件）:', file.name, err);
           }
+          sp.updateSub(allConversations.length, allConversations.length, `读取文件 (${Math.min(allConversations.length, 1)}/${files.length})`);
         }
         if (allConversations.length === 0) {
           showNotification({ message: '未从所选文件读取到有效会话', type: 'warning' });
           return;
         }
-
+        sp.next('解析与合并');
         const originalTotal = allConversations.length;
         const mergedConversations = mergeConversationsById(allConversations);
         const mergedCount = mergedConversations.length;
-
+        sp.next('确认覆盖');
         const overwrite = await appContext.utils.showConfirm({
           message: '是否覆盖已有会话（同 ID）？',
           description: '选择“确定”会覆盖同 ID 的已有会话；选择“取消”仅导入新增会话。',
@@ -1825,7 +1831,8 @@ export function createChatHistoryUI(appContext) {
         let countAdded = 0;
         let countOverwritten = 0;
         let countSkipped = 0;
-
+        sp.next('写入会话');
+        const total = mergedConversations.length;
         // 逐条写入：存在且不覆盖则跳过，存在且覆盖则替换
         for (const conv of mergedConversations) {
           try {
@@ -1842,8 +1849,10 @@ export function createChatHistoryUI(appContext) {
           } catch (error) {
             console.error(`还原对话 ${conv?.id || '-'} 时出错:`, error);
           }
+          const done = countAdded + countOverwritten + countSkipped;
+          sp.updateSub(done, total, `写入会话 (${done}/${total})`);
         }
-
+        sp.next('刷新界面');
         showNotification({
           message: '还原完成',
           description: `合并：${originalTotal} → ${mergedCount}；新增 ${countAdded}，覆盖 ${countOverwritten}，跳过 ${countSkipped}`,
@@ -1853,6 +1862,8 @@ export function createChatHistoryUI(appContext) {
         // 刷新聊天记录面板
         invalidateMetadataCache();
         refreshChatHistory();
+        sp.next('完成');
+        sp.complete('还原完成', true);
       } catch (error) {
         console.error('读取备份文件失败:', error);
         showNotification({ message: '读取备份文件失败', type: 'error', description: '请检查文件格式' });

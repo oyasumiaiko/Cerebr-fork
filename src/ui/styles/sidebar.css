@@ -3665,7 +3665,7 @@ body.hide-references .reference-number.superscript {
 
 .notification__progress-bar--indeterminate {
   width: 60%;
-  animation: toastIndeterminate 1.2s ease-in-out infinite;
+  animation: toastIndeterminate 1.2s linear infinite;
 }
 
 @keyframes toastIndeterminate {

@@ -226,6 +226,69 @@ export function registerSidebarUtilities(appContext) {
     });
   };
 
+  // 多步骤进度条工具：等分整体进度，支持每步子进度
+  appContext.utils.createStepProgress = (config = {}) => {
+    const steps = Array.isArray(config.steps) ? config.steps.slice() : [];
+    const type = config.type || 'info';
+    const total = Math.max(steps.length, 1);
+    let index = 0; // 当前步索引
+    let subDone = 0;
+    let subTotal = 1;
+
+    const formatMessage = (customMessage) => {
+      const title = customMessage || steps[index] || '';
+      return `步骤 ${Math.min(index + 1, total)}/${total} · ${title}`;
+    };
+
+    const toast = appContext.utils.showNotification({
+      message: formatMessage(config.message),
+      type,
+      showProgress: true,
+      progress: 0,
+      progressMode: 'determinate',
+      autoClose: false,
+      duration: 0
+    });
+
+    const calcProgress = () => {
+      const stepBase = index / total;
+      const stepSpan = 1 / total;
+      const frac = Math.max(0, Math.min(1, subTotal ? (subDone / subTotal) : 0));
+      return Math.max(0, Math.min(1, stepBase + frac * stepSpan));
+    };
+
+    const api = {
+      toast,
+      setStep(i, message) {
+        index = Math.max(0, Math.min(total - 1, Number(i) || 0));
+        subDone = 0; subTotal = 1;
+        toast.update({ message: formatMessage(message), progress: calcProgress(), progressMode: 'determinate' });
+        return api;
+      },
+      updateSub(done, totalSub, message) {
+        if (typeof message === 'string') toast.update({ message: formatMessage(message) });
+        subDone = Math.max(0, Number(done) || 0);
+        subTotal = Math.max(1, Number(totalSub) || 1);
+        toast.update({ progress: calcProgress(), progressMode: 'determinate' });
+        return api;
+      },
+      next(message) {
+        index = Math.min(index + 1, total - 1);
+        subDone = 0; subTotal = 1;
+        toast.update({ message: formatMessage(message), progress: calcProgress(), progressMode: 'determinate' });
+        return api;
+      },
+      complete(message, succeed = true) {
+        toast.update({ message: message || '完成', type: succeed ? 'success' : 'error', progress: 1, autoClose: true, duration: 1800 });
+        return api;
+      }
+    };
+
+    // 初始化第 1 步显示
+    api.setStep(0, steps[0] || config.message || '');
+    return api;
+  };
+
   appContext.utils.closeExclusivePanels = () => {
     return appContext.services.uiManager?.closeExclusivePanels();
   };
