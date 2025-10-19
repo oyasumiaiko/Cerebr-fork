@@ -1741,55 +1741,136 @@ export function createChatHistoryUI(appContext) {
         const toSave = { [LAST_BACKUP_TIME_KEY]: maxEnd || Date.now() };
         await chrome.storage.local.set(toSave);
       } catch (_) {}
-    } catch (error) {
-      console.error('备份失败:', error);
-      alert('备份失败，请检查浏览器控制台。');
-    }
+      } catch (error) {
+        console.error('备份失败:', error);
+        showNotification({ message: '备份失败', type: 'error', description: String(error?.message || error) });
+      }
   }
 
   /**
-   * 从备份文件还原对话记录
+   * 从备份文件还原对话记录（支持多选与合并去重）
    */
   function restoreConversations() {
     // 创建一个 file input 元素用于选择文件
     const input = document.createElement('input');
     input.type = 'file';
+    input.multiple = true; // 支持多选
     // 同时支持 .json 与 .json.gz
     input.accept = '.json,application/json,.gz,application/gzip';
     input.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+      const files = Array.from(e.target.files || []);
+      if (!files || files.length === 0) return;
       try {
-        const text = await readBackupFileAsText(file);
-        const backupData = JSON.parse(text);
-        if (!Array.isArray(backupData)) {
-          alert('备份文件格式不正确！');
+        // 读取并解析所有选中的备份文件
+        const allConversations = [];
+        for (const file of files) {
+          try {
+            const text = await readBackupFileAsText(file);
+            const data = JSON.parse(text);
+            const arr = normalizeBackupArray(data);
+            if (!arr) {
+              console.warn('备份文件格式不正确（忽略此文件）:', file.name);
+              continue;
+            }
+            allConversations.push(...arr);
+          } catch (err) {
+            console.error('解析备份文件失败（忽略此文件）:', file.name, err);
+          }
+        }
+        if (allConversations.length === 0) {
+          showNotification({ message: '未从所选文件读取到有效会话', type: 'warning' });
           return;
         }
-        const overwrite = window.confirm('是否覆盖已有会话（同 ID）？\n选择取消则仅导入新增的会话');
+
+        const originalTotal = allConversations.length;
+        const mergedConversations = mergeConversationsById(allConversations);
+        const mergedCount = mergedConversations.length;
+
+        const overwrite = await appContext.utils.showConfirm({
+          message: '是否覆盖已有会话（同 ID）？',
+          description: '选择“确定”会覆盖同 ID 的已有会话；选择“取消”仅导入新增会话。',
+          confirmText: '确定',
+          cancelText: '取消',
+          type: 'warning'
+        });
         let countAdded = 0;
-        for (const conv of backupData) {
+        let countOverwritten = 0;
+        let countSkipped = 0;
+
+        // 逐条写入：存在且不覆盖则跳过，存在且覆盖则替换
+        for (const conv of mergedConversations) {
           try {
             const existing = await getConversationById(conv.id, false);
-            if (!existing || overwrite) {
+            if (!existing) {
               await putConversation(conv);
               countAdded++;
+            } else if (overwrite) {
+              await putConversation(conv);
+              countOverwritten++;
+            } else {
+              countSkipped++;
             }
           } catch (error) {
-            console.error(`还原对话 ${conv.id} 时出错:`, error);
+            console.error(`还原对话 ${conv?.id || '-'} 时出错:`, error);
           }
-
         }
-        alert(`还原完成，新增 ${countAdded} 条记录。`);
+
+        showNotification({
+          message: '还原完成',
+          description: `合并：${originalTotal} → ${mergedCount}；新增 ${countAdded}，覆盖 ${countOverwritten}，跳过 ${countSkipped}`,
+          type: 'success',
+          duration: 3000
+        });
         // 刷新聊天记录面板
         invalidateMetadataCache();
         refreshChatHistory();
       } catch (error) {
         console.error('读取备份文件失败:', error);
-        alert('读取备份文件失败，请检查文件格式。');
+        showNotification({ message: '读取备份文件失败', type: 'error', description: '请检查文件格式' });
       }
     });
     input.click();
+  }
+
+  /**
+   * 兼容不同导出格式，将对象归一为会话数组
+   * @param {any} data
+   * @returns {Array<Object>|null}
+   */
+  function normalizeBackupArray(data) {
+    if (!data) return null;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.items)) return data.items;
+    return null;
+  }
+
+  /**
+   * 将多文件中的会话按 id 合并去重，冲突优先选择 endTime 更新的记录；
+   * 若 endTime 相同，选择消息数更多的记录
+   * @param {Array<Object>} conversations
+   * @returns {Array<Object>}
+   */
+  function mergeConversationsById(conversations) {
+    const map = new Map();
+    (conversations || []).forEach((c) => {
+      const id = c && c.id;
+      if (!id) return;
+      const prev = map.get(id);
+      if (!prev) {
+        map.set(id, c);
+      } else {
+        const endPrev = Number(prev.endTime) || 0;
+        const endCur = Number(c.endTime) || 0;
+        if (endCur > endPrev) {
+          map.set(id, c);
+        } else if (endCur === endPrev) {
+          const countPrev = (Array.isArray(prev.messages) ? prev.messages.length : (prev.messageCount || 0)) || 0;
+          const countCur = (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 0)) || 0;
+          if (countCur > countPrev) map.set(id, c);
+        }
+      }
+    });
+    return Array.from(map.values());
   }
 
   /**
@@ -1982,6 +2063,30 @@ export function createChatHistoryUI(appContext) {
     hint.style.marginTop = '6px';
     hint.textContent = '备份将保存到 “下载/Cerebr/” 子目录。';
     container.appendChild(hint);
+
+    // 示例对话框按钮（便于测试确认弹窗样式与交互）
+    const demoRow = document.createElement('div');
+    demoRow.style.display = 'flex';
+    demoRow.style.justifyContent = 'flex-start';
+    demoRow.style.marginTop = '8px';
+    const demoBtn = document.createElement('button');
+    demoBtn.textContent = '显示示例对话框';
+    demoBtn.addEventListener('click', async () => {
+      try {
+        const ok = await appContext.utils.showConfirm({
+          message: '示例对话框',
+          description: '这是一个用于测试的确认对话框。是否继续？',
+          confirmText: '继续',
+          cancelText: '取消',
+          type: 'info'
+        });
+        showNotification({ message: ok ? '你选择了：继续' : '你选择了：取消', type: ok ? 'success' : 'warning', duration: 1600 });
+      } catch (e) {
+        showNotification({ message: '演示失败', type: 'error' });
+      }
+    });
+    demoRow.appendChild(demoBtn);
+    container.appendChild(demoRow);
 
     // 事件：保存首选项
     cbInc.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ incrementalDefault: !!cbInc.checked }); });

@@ -3689,6 +3689,38 @@ body.hide-references .reference-number.superscript {
 }
 
 /* 深色适配由上方 .dark-theme .notification 覆盖 */
+
+/* 确认对话框（统一样式） */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1020;
+  animation: notificationFadeIn 160ms ease;
+}
+.confirm-overlay.fade-out { animation: notificationFadeOut 0.2s ease forwards; }
+.confirm-dialog {
+  width: min(420px, calc(100vw - 40px));
+  border-radius: 14px;
+  padding: 16px 16px 12px;
+  background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+}
+.dark-theme .confirm-dialog {
+  background: color-mix(in srgb, var(--cerebr-message-ai-bg) 78%, transparent);
+  box-shadow: 0 18px 44px rgba(3, 7, 18, 0.56);
+}
+.confirm-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--cerebr-text-color); }
+.confirm-desc  { font-size: 12px; opacity: 0.78; line-height: 1.45; color: var(--cerebr-text-color); }
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.confirm-actions .btn { padding: 6px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent); cursor: pointer; background: var(--cerebr-input-bg, #fff); color: var(--cerebr-text-color); }
+.confirm-actions .btn.btn-primary { background: var(--cerebr-highlight, #2ecc71); color: #fff; border-color: transparent; }
+.confirm-actions .btn.btn-secondary { background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent); }
 /* 空状态样式 - 轻盈空灵的设计 */
 .empty-state-content {
     mix-blend-mode: plus-lighter;

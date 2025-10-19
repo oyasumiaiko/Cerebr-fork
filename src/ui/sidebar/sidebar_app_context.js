@@ -158,6 +158,74 @@ export function registerSidebarUtilities(appContext) {
     });
   };
 
+  // 统一确认对话框（是/否），返回 Promise<boolean>
+  appContext.utils.showConfirm = (options = {}) => {
+    const {
+      message = '确认操作？',
+      description = '',
+      confirmText = '确定',
+      cancelText = '取消',
+      type = 'warning' // info | warning | error
+    } = options;
+
+    return new Promise((resolve) => {
+      // 背景遮罩
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-overlay';
+
+      // 对话框
+      const dialog = document.createElement('div');
+      dialog.className = `confirm-dialog confirm-${type}`;
+
+      const msgEl = document.createElement('div');
+      msgEl.className = 'confirm-title';
+      msgEl.textContent = message;
+      dialog.appendChild(msgEl);
+
+      if (description) {
+        const descEl = document.createElement('div');
+        descEl.className = 'confirm-desc';
+        descEl.textContent = description;
+        dialog.appendChild(descEl);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'confirm-actions';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-secondary';
+      cancelBtn.textContent = cancelText;
+
+      const okBtn = document.createElement('button');
+      okBtn.className = 'btn btn-primary';
+      okBtn.textContent = confirmText;
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      dialog.appendChild(actions);
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      const cleanUp = () => {
+        overlay.classList.add('fade-out');
+        setTimeout(() => overlay.remove(), 200);
+      };
+
+      const onCancel = () => { try { cleanUp(); } finally { resolve(false); } };
+      const onConfirm = () => { try { cleanUp(); } finally { resolve(true); } };
+
+      cancelBtn.addEventListener('click', onCancel);
+      okBtn.addEventListener('click', onConfirm);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) onCancel(); });
+      document.addEventListener('keydown', function onKey(e) {
+        if (!document.body.contains(overlay)) { document.removeEventListener('keydown', onKey); return; }
+        if (e.key === 'Escape') onCancel();
+        if (e.key === 'Enter') onConfirm();
+      });
+    });
+  };
+
   appContext.utils.closeExclusivePanels = () => {
     return appContext.services.uiManager?.closeExclusivePanels();
   };

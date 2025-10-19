@@ -83,6 +83,26 @@ function exposeGlobals(appContext, isStandalone) {
   };
   window.cerebr.pageInfo = appContext.state.pageInfo;
 
+  // 暴露一个示例对话框函数，便于快速测试 UI 确认框
+  window.cerebr.showConfirmDemo = async () => {
+    try {
+      const ok = await appContext.utils.showConfirm({
+        message: '这是一个示例对话框',
+        description: '用于演示统一的确认对话框样式与交互。是否继续？',
+        confirmText: '继续',
+        cancelText: '取消',
+        type: 'info'
+      });
+      const resultText = ok ? '你选择了：继续' : '你选择了：取消';
+      appContext.utils.showNotification({ message: resultText, type: ok ? 'success' : 'warning', duration: 1800 });
+      return ok;
+    } catch (e) {
+      console.error('示例对话框演示失败:', e);
+      appContext.utils.showNotification({ message: '示例对话框演示失败', type: 'error' });
+      return false;
+    }
+  };
+
   document.addEventListener('promptSettingsUpdated', () => {
     if (appContext.services.promptSettingsManager) {
       window.cerebr.settings.prompts = appContext.services.promptSettingsManager.getPrompts();

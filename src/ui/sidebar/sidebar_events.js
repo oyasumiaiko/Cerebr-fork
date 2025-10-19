@@ -339,6 +339,10 @@ function setupGlobalEscapeHandler(appContext) {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (appContext.state.isComposing) return;
+    // 若存在统一确认对话框，交由对话框自身处理，不在此处影响面板状态
+    if (document.querySelector('.confirm-overlay')) {
+      return;
+    }
 
     const chatOpen = appContext.services.chatHistoryUI.isChatHistoryPanelOpen();
     const apiOpen = appContext.dom.apiSettingsPanel?.classList.contains('visible');
@@ -356,6 +360,10 @@ function setupGlobalEscapeHandler(appContext) {
 
 function setupClickAwayHandler(appContext) {
   document.addEventListener('click', (e) => {
+    // 若存在统一确认对话框，避免点击外部逻辑误关面板
+    if (document.querySelector('.confirm-overlay')) {
+      return;
+    }
     const target = e.target;
 
     const panelsAndToggles = [
