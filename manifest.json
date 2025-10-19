@@ -15,7 +15,8 @@
     "activeTab",
     "tabs",
     "webRequest",
-    "contextMenus"
+    "contextMenus",
+    "downloads"
   ],
   "host_permissions": ["<all_urls>", "file:///*", "https://generativelanguage.googleapis.com/*"],
   "action": {

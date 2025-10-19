@@ -1525,9 +1525,15 @@ export function createChatHistoryUI(appContext) {
       statsTab.className = 'history-tab';
       statsTab.textContent = '数据统计';
       statsTab.dataset.tab = 'stats';
+
+      const backupTab = document.createElement('div');
+      backupTab.className = 'history-tab';
+      backupTab.textContent = '备份设置';
+      backupTab.dataset.tab = 'backup-settings';
       
       tabBar.appendChild(historyTab);
       tabBar.appendChild(statsTab);
+      tabBar.appendChild(backupTab);
       panel.appendChild(tabBar);
       
       // 创建标签内容区域
@@ -1586,13 +1592,20 @@ export function createChatHistoryUI(appContext) {
       statsContent.className = 'history-tab-content';
       statsContent.dataset.tab = 'stats';
       
+      // 备份设置标签内容
+      const backupSettingsContent = document.createElement('div');
+      backupSettingsContent.className = 'history-tab-content';
+      backupSettingsContent.dataset.tab = 'backup-settings';
+      backupSettingsContent.appendChild(renderBackupSettingsPanelDownloadsOnly());
+
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
       tabContents.appendChild(statsContent);
+      tabContents.appendChild(backupSettingsContent);
       panel.appendChild(tabContents);
       
-      // 设置标签切换事件
-      tabBar.addEventListener('click', (e) => {
+      // 设置标签切换事件（异步以支持 await 刷新）
+      tabBar.addEventListener('click', async (e) => {
         if (e.target.classList.contains('history-tab')) {
           // 移除所有标签和内容的active类
           tabBar.querySelectorAll('.history-tab').forEach(tab => tab.classList.remove('active'));
@@ -1632,6 +1645,8 @@ export function createChatHistoryUI(appContext) {
                 console.error('更新统计数据失败:', error);
               });
             }
+          } else if (tabName === 'backup-settings') {
+            // 纯下载方案，无需刷新句柄状态
           }
         }
       });
@@ -1678,9 +1693,11 @@ export function createChatHistoryUI(appContext) {
    */
   async function backupConversations() {
     try {
-      // 交互：是否进行增量备份、是否排除图片
-      const doIncremental = window.confirm('是否进行增量备份？\n仅导出自上次备份后新增或更新的会话');
-      const excludeImages = window.confirm('是否排除图片与截图内容以减小体积？');
+      // 读取备份偏好（仅下载方案）
+      const prefs = await loadBackupPreferencesDownloadsOnly();
+      const doIncremental = !!prefs.incrementalDefault;
+      const excludeImages = !!prefs.excludeImagesDefault;
+      const doCompress = prefs.compressDefault !== false; // 默认压缩
 
       // 读取上次备份时间
       const LAST_BACKUP_TIME_KEY = 'chat_last_backup_time';
@@ -1710,9 +1727,13 @@ export function createChatHistoryUI(appContext) {
         conversationsToExport = conversationsToExport.map(stripImagesFromConversation);
       }
 
-      // 压缩并下载：使用原生 CompressionStream('gzip')
+      // 生成文件名与 Blob
       const filenamePrefix = doIncremental ? 'chat_backup_inc_' : 'chat_backup_full_';
-      await downloadAsGzip(conversationsToExport, filenamePrefix + new Date().toISOString().replace(/[:.]/g, '-') + (excludeImages ? '_noimg' : '') + '.json.gz');
+      const filename = filenamePrefix + new Date().toISOString().replace(/[:.]/g, '-') + (excludeImages ? '_noimg' : '') + (doCompress ? '.json.gz' : '.json');
+      const blob = await buildBackupBlob(conversationsToExport, doCompress);
+
+      // 仅使用下载API或<a download>保存
+      await triggerBlobDownload(blob, filename);
 
       // 记录本次备份时间（使用数据中最大 endTime 避免时间漂移）
       try {
@@ -1803,27 +1824,46 @@ export function createChatHistoryUI(appContext) {
    * @param {any} data
    * @param {string} filename
    */
-  async function downloadAsGzip(data, filename) {
+  async function buildBackupBlob(data, compress = true) {
     const jsonStr = JSON.stringify(data);
-    let blobToDownload = null;
-    try {
-      if (typeof CompressionStream !== 'undefined') {
+    if (compress && typeof CompressionStream !== 'undefined') {
+      try {
         const enc = new TextEncoder();
         const inputStream = new Blob([enc.encode(jsonStr)]).stream();
         const gzipStream = inputStream.pipeThrough(new CompressionStream('gzip'));
         const gzipBlob = await new Response(gzipStream).blob();
-        blobToDownload = new Blob([gzipBlob], { type: 'application/gzip' });
-      } else {
-        // 回退：不支持压缩则直接下载原始 JSON
-        blobToDownload = new Blob([jsonStr], { type: 'application/json' });
-        filename = filename.replace(/\.json\.gz$/i, '.json');
+        return new Blob([gzipBlob], { type: 'application/gzip' });
+      } catch (e) {
+        console.warn('压缩失败，回退至原始 JSON:', e);
+        return new Blob([jsonStr], { type: 'application/json' });
       }
-    } catch (e) {
-      console.warn('压缩失败，回退至原始 JSON:', e);
-      blobToDownload = new Blob([jsonStr], { type: 'application/json' });
-      filename = filename.replace(/\.json\.gz$/i, '.json');
     }
-    const url = URL.createObjectURL(blobToDownload);
+    return new Blob([jsonStr], { type: 'application/json' });
+  }
+
+  async function triggerBlobDownload(blob, filename) {
+    // 尝试使用 chrome.downloads 以便指定子目录（如 Cerebr/），失败再回退为 <a download>
+    const useDownloadsApi = !!(chrome && chrome.downloads && chrome.downloads.download);
+    if (useDownloadsApi) {
+      try {
+        const url = URL.createObjectURL(blob);
+        const target = `Cerebr/${filename}`; // 保存到下载目录下的 Cerebr 子文件夹
+        await new Promise((resolve, reject) => {
+          chrome.downloads.download({ url, filename: target, saveAs: false }, (id) => {
+            if (chrome.runtime.lastError || !id) {
+              try { URL.revokeObjectURL(url); } catch (_) {}
+              reject(chrome.runtime.lastError || new Error('downloads.download failed'));
+            } else {
+              // 稍后撤销 URL，避免泄漏
+              setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 60 * 1000);
+              resolve(id);
+            }
+          });
+        });
+        return;
+      } catch (_) { /* 回退到 <a download> */ }
+    }
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -1851,6 +1891,107 @@ export function createChatHistoryUI(appContext) {
     // 常规 JSON
     return await file.text();
   }
+
+  // ==== 仅下载方案的备份偏好 ====
+  const BACKUP_PREFS_KEY = 'chat_backup_prefs';
+  async function loadBackupPreferencesDownloadsOnly() {
+    try {
+      const res = await chrome.storage.local.get([BACKUP_PREFS_KEY]);
+      const prefs = res[BACKUP_PREFS_KEY] || {};
+      return {
+        incrementalDefault: prefs.incrementalDefault !== false, // 默认增量
+        excludeImagesDefault: !!prefs.excludeImagesDefault,     // 默认不排除（false）
+        compressDefault: prefs.compressDefault !== false        // 默认压缩
+      };
+    } catch (_) {
+      return { incrementalDefault: true, excludeImagesDefault: false, compressDefault: true };
+    }
+  }
+  async function saveBackupPreferencesDownloadsOnly(prefs) {
+    try {
+      const current = await loadBackupPreferencesDownloadsOnly();
+      const merged = { ...current, ...prefs };
+      await chrome.storage.local.set({ [BACKUP_PREFS_KEY]: merged });
+      return merged;
+    } catch (e) {
+      console.warn('保存备份偏好失败:', e);
+      return prefs;
+    }
+  }
+
+  // 已移除目录授权/直写方案，统一使用下载 API
+
+  // ==== UI：在聊天记录面板添加“备份设置”标签页 ====
+  // 在渲染面板的逻辑中（创建 tabs 处）插入一个设置页
+  function renderBackupSettingsPanelDownloadsOnly() {
+    const container = document.createElement('div');
+    container.className = 'backup-settings-panel';
+
+    // 同步初始化控件，随后从存储刷新状态
+    let prefs = { incrementalDefault: true, excludeImagesDefault: false, compressDefault: true };
+
+    const makeRow = () => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+      row.style.margin = '6px 0';
+      return row;
+    };
+
+    const title = document.createElement('div');
+    title.textContent = '备份默认项设置';
+    title.style.fontWeight = '600';
+    title.style.margin = '8px 0';
+    container.appendChild(title);
+
+    // 默认增量备份
+    const rowInc = makeRow();
+    const cbInc = document.createElement('input');
+    cbInc.type = 'checkbox';
+    cbInc.checked = !!prefs.incrementalDefault;
+    const lbInc = document.createElement('label');
+    lbInc.textContent = '默认增量备份（按 endTime 仅导出变更）';
+    rowInc.appendChild(cbInc); rowInc.appendChild(lbInc);
+    container.appendChild(rowInc);
+
+    // 默认排除图片
+    const rowImg = makeRow();
+    const cbImg = document.createElement('input');
+    cbImg.type = 'checkbox';
+    cbImg.checked = !!prefs.excludeImagesDefault;
+    const lbImg = document.createElement('label');
+    lbImg.textContent = '默认排除图片/截图（仅导出文本）';
+    rowImg.appendChild(cbImg); rowImg.appendChild(lbImg);
+    container.appendChild(rowImg);
+
+    // 默认压缩
+    const rowZip = makeRow();
+    const cbZip = document.createElement('input');
+    cbZip.type = 'checkbox';
+    cbZip.checked = prefs.compressDefault !== false;
+    const lbZip = document.createElement('label');
+    lbZip.textContent = '默认压缩为 .json.gz（不支持则回退 .json）';
+    rowZip.appendChild(cbZip); rowZip.appendChild(lbZip);
+    container.appendChild(rowZip);
+
+    // 下载路径说明
+    const hint = document.createElement('div');
+    hint.style.fontSize = '12px';
+    hint.style.opacity = '0.8';
+    hint.style.marginTop = '6px';
+    hint.textContent = '备份将保存到 “下载/Cerebr/” 子目录。';
+    container.appendChild(hint);
+
+    // 事件：保存首选项
+    cbInc.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ incrementalDefault: !!cbInc.checked }); });
+    cbImg.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ excludeImagesDefault: !!cbImg.checked }); });
+    cbZip.addEventListener('change', async () => { await saveBackupPreferencesDownloadsOnly({ compressDefault: !!cbZip.checked }); });
+
+    return container;
+  }
+
+  // 已移除目录选择与顶层写入弹窗逻辑
 
   /**
    * 更新当前页面信息
