@@ -1693,11 +1693,23 @@ export function createChatHistoryUI(appContext) {
    */
   async function backupConversations() {
     try {
+      // 显示进度通知（可更新）
+      const toast = showNotification({
+        message: '准备备份... ',
+        type: 'info',
+        showProgress: true,
+        progress: 0,
+        progressMode: 'determinate',
+        autoClose: false,
+        duration: 0
+      });
+
       // 读取备份偏好（仅下载方案）
       const prefs = await loadBackupPreferencesDownloadsOnly();
       const doIncremental = !!prefs.incrementalDefault;
       const excludeImages = !!prefs.excludeImagesDefault;
       const doCompress = prefs.compressDefault !== false; // 默认压缩
+      toast.update({ message: '读取偏好...', progress: 0.05 });
 
       // 读取上次备份时间
       const LAST_BACKUP_TIME_KEY = 'chat_last_backup_time';
@@ -1706,6 +1718,7 @@ export function createChatHistoryUI(appContext) {
         const local = await chrome.storage.local.get([LAST_BACKUP_TIME_KEY]);
         lastBackupAt = Number(local[LAST_BACKUP_TIME_KEY]) || 0;
       } catch (_) {}
+      toast.update({ message: '分析需要备份的会话...', progress: 0.1 });
 
       // 准备需要导出的会话列表
       let conversationsToExport = [];
@@ -1713,27 +1726,40 @@ export function createChatHistoryUI(appContext) {
         // 增量：先获取元数据筛选 endTime 更大的会话，再逐个加载完整内容
         const metas = await getAllConversations(false);
         const updated = metas.filter(m => (Number(m.endTime) || 0) > lastBackupAt);
+        const total = updated.length;
+        let idx = 0;
         for (const meta of updated) {
           const full = await getConversationById(meta.id, true);
           if (full) conversationsToExport.push(full);
+          idx++;
+          const base = 0.1; // 10%
+          const span = 0.6; // 60% 用于加载阶段
+          const progress = base + (total ? (idx / total) * span : span);
+          toast.update({ message: `读取会话内容 (${idx}/${total})...`, progress: Math.min(0.7, progress) });
         }
       } else {
-        // 全量：直接获取完整数据
+        // 全量：直接获取完整数据（阶段性不确定，使用不确定进度）
+        toast.update({ message: '读取所有会话...', progressMode: 'indeterminate' });
         conversationsToExport = await getAllConversations();
+        toast.update({ message: `读取完成（${conversationsToExport.length} 条）`, progressMode: 'determinate', progress: 0.7 });
       }
 
       // 可选：移除图片与截图内容
       if (excludeImages) {
+        toast.update({ message: '移除图片与截图内容...', progress: 0.75 });
         conversationsToExport = conversationsToExport.map(stripImagesFromConversation);
       }
 
       // 生成文件名与 Blob
       const filenamePrefix = doIncremental ? 'chat_backup_inc_' : 'chat_backup_full_';
       const filename = filenamePrefix + new Date().toISOString().replace(/[:.]/g, '-') + (excludeImages ? '_noimg' : '') + (doCompress ? '.json.gz' : '.json');
+      toast.update({ message: doCompress ? '压缩数据...' : '打包数据...', progressMode: 'indeterminate' });
       const blob = await buildBackupBlob(conversationsToExport, doCompress);
+      toast.update({ message: '准备保存...', progressMode: 'determinate', progress: 0.9 });
 
       // 仅使用下载API或<a download>保存
       await triggerBlobDownload(blob, filename);
+      toast.update({ message: '备份完成', type: 'success', progress: 1, autoClose: true, duration: 1800 });
 
       // 记录本次备份时间（使用数据中最大 endTime 避免时间漂移）
       try {
@@ -1741,10 +1767,13 @@ export function createChatHistoryUI(appContext) {
         const toSave = { [LAST_BACKUP_TIME_KEY]: maxEnd || Date.now() };
         await chrome.storage.local.set(toSave);
       } catch (_) {}
-      } catch (error) {
-        console.error('备份失败:', error);
+    } catch (error) {
+      console.error('备份失败:', error);
+      try {
+        // 若存在进度通知，切换为错误状态
         showNotification({ message: '备份失败', type: 'error', description: String(error?.message || error) });
-      }
+      } catch (_) {}
+    }
   }
 
   /**
