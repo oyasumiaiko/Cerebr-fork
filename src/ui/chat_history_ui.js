@@ -82,7 +82,8 @@ export function createChatHistoryUI(appContext) {
       normalized: '',
       results: null,
       matchMap: new Map(),
-      timestamp: 0
+      timestamp: 0,
+      meta: null
     };
   }
   let searchCache = createEmptySearchCache();
@@ -107,6 +108,10 @@ export function createChatHistoryUI(appContext) {
 
   function invalidateSearchCache() {
     searchCache = createEmptySearchCache();
+    try {
+      const panel = document.getElementById('chat-history-panel');
+      if (panel) removeSearchSummary(panel);
+    } catch (_) {}
   }
 
   function invalidateMetadataCache() {
@@ -611,6 +616,62 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
+  function removeSearchSummary(panel) {
+    if (!panel) return;
+    const summary = panel.querySelector('.search-result-summary');
+    if (summary && summary.parentNode) {
+      summary.remove();
+    }
+  }
+
+  function renderSearchSummary(panel, info = {}) {
+    if (!panel) return;
+    const filterContainer = panel.querySelector('.filter-container');
+    if (!filterContainer) return;
+
+    const queryText = (info.query || '').trim();
+    const scannedCount = Math.max(0, Number(info.scannedCount || 0));
+    const resultCount = Math.max(0, Number(info.resultCount || 0));
+    const excerptCount = Math.max(0, Number(info.excerptCount || 0));
+    const durationMs = typeof info.durationMs === 'number' ? info.durationMs : null;
+    const reused = !!info.reused;
+
+    let summary = panel.querySelector('.search-result-summary');
+    if (!summary) {
+      summary = document.createElement('div');
+      summary.className = 'search-result-summary';
+      filterContainer.insertAdjacentElement('afterend', summary);
+    }
+
+    let durationText = '';
+    if (durationMs !== null) {
+      if (durationMs >= 1000) {
+        const seconds = durationMs / 1000;
+        durationText = `${seconds.toFixed(seconds >= 10 ? 1 : 2)}秒`;
+      } else {
+        durationText = `${Math.max(1, Math.round(durationMs))}毫秒`;
+      }
+    }
+
+    const metaParts = [];
+    if (scannedCount) metaParts.push(`遍历 ${scannedCount} 条会话`);
+    metaParts.push(`匹配 ${resultCount} 条聊天记录`);
+    if (excerptCount) metaParts.push(`提取 ${excerptCount} 条片段`);
+    if (durationText) metaParts.push(`耗时 ${durationText}`);
+    if (reused) metaParts.push('缓存结果');
+
+    const summaryTitle = queryText ? `搜索 “${queryText}”` : '搜索结果';
+    summary.textContent = '';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'summary-title';
+    titleSpan.textContent = summaryTitle;
+    const metaSpan = document.createElement('span');
+    metaSpan.className = 'summary-meta';
+    metaSpan.textContent = metaParts.join(' · ');
+    summary.appendChild(titleSpan);
+    summary.appendChild(metaSpan);
+  }
+
   /**
    * 清空聊天记录
    * @returns {Promise<void>}
@@ -948,13 +1009,26 @@ export function createChatHistoryUI(appContext) {
         compareCount(history.messageCount, countOperator, countThreshold)
       );
       effectiveFilterTextForHighlight = '';
-    } else if (filterText) {
+      removeSearchSummary(panel);
+    } else if (filterText.trim()) {
       const normalizedFilter = panel.dataset.normalizedFilter || filterText.trim().toLowerCase();
       if (searchCache.results && searchCache.normalized === normalizedFilter) {
         sourceHistories = searchCache.results.slice();
         effectiveFilterTextForHighlight = filterText;
+        const meta = searchCache.meta || {};
+        renderSearchSummary(panel, {
+          query: searchCache.query || filterText,
+          normalized: searchCache.normalized,
+          durationMs: meta.durationMs,
+          resultCount: meta.resultCount ?? sourceHistories.length,
+          excerptCount: meta.excerptCount,
+          scannedCount: meta.scannedCount,
+          reused: true
+        });
       } else {
+        removeSearchSummary(panel);
         const lowerFilter = normalizedFilter;
+        const searchStartTime = performance.now();
         const matchedEntries = [];
         const matchInfoMap = new Map();
         const totalItems = allHistoriesMeta.length;
@@ -1036,14 +1110,14 @@ export function createChatHistoryUI(appContext) {
                       if (!matchInfo.messageId && message.id) {
                         matchInfo.messageId = message.id;
                       }
-                      if (matchInfo.excerpts.length < 4) {
+                      if (matchInfo.excerpts.length < 20) {
                         const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
                         if (excerpt) {
                           matchInfo.excerpts.push(excerpt);
                         }
                       }
                     }
-                    if (matchInfo.excerpts.length >= 4) break;
+                    if (matchInfo.excerpts.length >= 20) break;
                   }
                   if (conversationMatched) {
                     matchInfoMap.set(historyMeta.id, matchInfo);
@@ -1073,16 +1147,35 @@ export function createChatHistoryUI(appContext) {
 
         matchedEntries.sort((a, b) => a.index - b.index);
         const finalResults = matchedEntries.map(entry => entry.data);
+        const durationMs = performance.now() - searchStartTime;
+        const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
+        const scannedCount = Math.min(processedCount, totalItems);
         searchCache = {
           query: filterText,
           normalized: normalizedFilter,
           results: finalResults.slice(),
           matchMap: matchInfoMap,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          meta: {
+            durationMs,
+            resultCount: finalResults.length,
+            excerptCount,
+            scannedCount
+          }
         };
         sourceHistories = searchCache.results.slice();
+        renderSearchSummary(panel, {
+          query: filterText,
+          normalized: normalizedFilter,
+          durationMs,
+          resultCount: finalResults.length,
+          excerptCount,
+          scannedCount,
+          reused: false
+        });
       }
     } else {
+      removeSearchSummary(panel);
       sourceHistories = allHistoriesMeta;
       effectiveFilterTextForHighlight = '';
     }
@@ -1286,7 +1379,7 @@ export function createChatHistoryUI(appContext) {
             const index = contentLower.indexOf(lowerFilter, startIndex);
             if (index === -1) break;
             totalMatches++;
-            if (snippets.length < 5) {
+            if (snippets.length < 8) {
               const snippetStart = Math.max(0, index - 30);
               const snippetEnd = Math.min(content.length, index + filterText.length + 30);
               let snippet = content.substring(snippetStart, snippetEnd);
@@ -1305,17 +1398,17 @@ export function createChatHistoryUI(appContext) {
       if (snippets.length > 0) {
         const snippetDiv = document.createElement('div');
         snippetDiv.className = 'highlight-snippet';
-        snippets.forEach((span, index) => {
-          snippetDiv.appendChild(span);
-          if (index < snippets.length - 1) {
-            snippetDiv.appendChild(document.createElement('br'));
-          }
+        snippets.forEach((span) => {
+          const line = document.createElement('div');
+          line.className = 'highlight-snippet-line';
+          line.appendChild(span);
+          snippetDiv.appendChild(line);
         });
         if (totalMatches > snippets.length) {
-          const moreMatchesSpan = document.createElement('span');
-          moreMatchesSpan.textContent = `…… 共 ${totalMatches} 匹配`;
-          snippetDiv.appendChild(document.createElement('br'));
-          snippetDiv.appendChild(moreMatchesSpan);
+          const moreMatchesLine = document.createElement('div');
+          moreMatchesLine.className = 'highlight-snippet-line';
+          moreMatchesLine.textContent = `…… 共 ${totalMatches} 匹配`;
+          snippetDiv.appendChild(moreMatchesLine);
         }
         item.appendChild(snippetDiv);
       }
