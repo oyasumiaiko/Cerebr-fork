@@ -1038,13 +1038,29 @@ export function createChatHistoryUI(appContext) {
     if (isTextFilterActive && displaySummary) {
       try {
         const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`(${escapedFilterForSummary})`, 'gi');
-        displaySummary = displaySummary.replace(regex, '<mark>$1</mark>');
+        const regex = new RegExp(escapedFilterForSummary, 'gi');
+        let lastIndex = 0;
+        summaryDiv.textContent = '';
+        let match;
+        while ((match = regex.exec(displaySummary)) !== null) {
+          if (match.index > lastIndex) {
+            summaryDiv.appendChild(document.createTextNode(displaySummary.slice(lastIndex, match.index)));
+          }
+          const mark = document.createElement('mark');
+          mark.textContent = match[0];
+          summaryDiv.appendChild(mark);
+          lastIndex = match.index + match[0].length;
+        }
+        if (lastIndex < displaySummary.length) {
+          summaryDiv.appendChild(document.createTextNode(displaySummary.slice(lastIndex)));
+        }
       } catch (e) {
         console.error("高亮摘要时发生错误:", e);
+        summaryDiv.textContent = displaySummary;
       }
+    } else {
+      summaryDiv.textContent = displaySummary;
     }
-    summaryDiv.innerHTML = displaySummary;
 
     const infoDiv = document.createElement('div');
     infoDiv.className = 'info';
