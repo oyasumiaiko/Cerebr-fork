@@ -45,9 +45,16 @@ export function createMessageSender(appContext) {
   let pageContent = null;
   let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
-  // 自动重试配置：将最大重试次数调整为 10 次，并移除冷却时间（0ms）
-  const MAX_AUTO_RETRY_ATTEMPTS = 10; // 之前为 3
-  const AUTO_RETRY_DELAY_MS = 0;      // 之前为 1000ms，现设为无等待
+  // 自动重试配置：指数退避，最多 5 次
+  const MAX_AUTO_RETRY_ATTEMPTS = 5;
+  const AUTO_RETRY_BASE_DELAY_MS = 500;
+  const AUTO_RETRY_MAX_DELAY_MS = 8000;
+
+  function getAutoRetryDelayMs(attemptIndex = 0) {
+    const normalizedAttempt = Math.max(0, attemptIndex);
+    const rawDelay = AUTO_RETRY_BASE_DELAY_MS * Math.pow(2, normalizedAttempt);
+    return Math.min(AUTO_RETRY_MAX_DELAY_MS, Math.round(rawDelay));
+  }
   let currentConversationId = null;
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
@@ -468,12 +475,19 @@ export function createMessageSender(appContext) {
         if (loadingMessage && loadingMessage.parentNode) {
           loadingMessage.remove();
         }
+        const nextAttemptIndex = autoRetryAttempt + 1;
+        const delayMs = getAutoRetryDelayMs(autoRetryAttempt);
         if (typeof showNotification === 'function') {
-          const displayAttempt = autoRetryAttempt + 1;
+          const delayText = delayMs >= 1000
+            ? `${(delayMs / 1000).toFixed(delayMs >= 10000 ? 0 : 1)}秒`
+            : `${delayMs}毫秒`;
           // 警告：发送失败，进入自动重试
-          showNotification({ message: `发送失败，正在自动重试 (${displayAttempt}/${MAX_AUTO_RETRY_ATTEMPTS})`, type: 'warning' });
+          showNotification({
+            message: `发送失败，将在 ${delayText} 后自动重试 (${nextAttemptIndex}/${MAX_AUTO_RETRY_ATTEMPTS})`,
+            type: 'warning'
+          });
         }
-        return retry(AUTO_RETRY_DELAY_MS, { __autoRetryAttempt: autoRetryAttempt + 1 });
+        return retry(delayMs, { __autoRetryAttempt: nextAttemptIndex });
       }
 
       const detail = (typeof error?.message === 'string' && error.message.trim().length > 0)
