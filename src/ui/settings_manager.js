@@ -595,6 +595,40 @@ export function createSettingsManager(appContext) {
     } catch (error) {
       console.error('初始化设置失败:', error);
     }
+
+    // 监听跨标签页 storage 变更，按键增量应用，避免状态漂移
+    try {
+      if (!chrome?.storage?.onChanged) return;
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'sync') return;
+        let mutated = false;
+        Object.keys(changes).forEach((key) => {
+          if (!(key in DEFAULT_SETTINGS)) return;
+          const { newValue } = changes[key] || {};
+          // 仅在值确实变化时应用
+          if (typeof newValue === 'undefined') return;
+          if (currentSettings[key] === newValue) return;
+          currentSettings[key] = newValue;
+          // 按注册项 apply 与 UI 同步
+          const def = getActiveRegistry().find(d => d.key === key);
+          if (def) {
+            try { if (typeof def.apply === 'function') def.apply(newValue); } catch (e) { console.warn('应用存储变更失败', key, e); }
+            const el = dynamicElements.get(key);
+            try {
+              const entry = generatedSchema[key];
+              if (el && entry?.writeToUI) entry.writeToUI(el, newValue);
+            } catch (_) {}
+          }
+          mutated = true;
+        });
+        if (mutated) {
+          // 某些 UI 派生项（如宽度/字体显示文本）需要刷新显示值
+          try { applyAllSettings(); } catch (_) {}
+        }
+      });
+    } catch (e) {
+      console.warn('注册 storage 变更监听失败（忽略）：', e);
+    }
   }
   
   // 保存单个设置

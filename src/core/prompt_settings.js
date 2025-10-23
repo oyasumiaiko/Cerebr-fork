@@ -192,8 +192,21 @@ class PromptSettings {
         this.urlRulesList = document.getElementById('url-rules-list');
         
         // 初始化URL规则列表
+    this.renderUrlRules();
+
+    // 跨标签页同步：监听提示词键的变更并增量刷新 UI
+    try {
+      const PREFIX = 'prompt_';
+      chrome.storage.onChanged.addListener(async (changes, areaName) => {
+        if (areaName !== 'sync') return;
+        const keys = Object.keys(changes || {});
+        if (!keys.some(k => k && (k.startsWith(PREFIX) || k.includes(`${PREFIX}_chunk_`)))) return;
+        // 仅当面板已构建时执行轻量刷新
+        await this.loadPromptSettings();
         this.renderUrlRules();
-    }
+      });
+    } catch (e) { console.warn('注册提示词跨标签同步失败（忽略）：', e); }
+  }
 
     // 分块清理逻辑已迁移到 prompt_store.js，保留空壳占位以避免外部直接调用
 

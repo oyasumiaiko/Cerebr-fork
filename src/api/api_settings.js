@@ -45,6 +45,7 @@ export function createApiManager(appContext) {
   // ---- Sync Chunking Helpers ----
   const SYNC_CHUNK_META_KEY = 'apiConfigs_chunks_meta';
   const SYNC_CHUNK_KEY_PREFIX = 'apiConfigs_chunk_';
+  let lastMetaUpdatedAt = 0;
 
 
   function minifyJsonIfPossible(input) {
@@ -213,6 +214,11 @@ export function createApiManager(appContext) {
         result.apiConfigs = chunked;
         const syncSel = await chrome.storage.sync.get(['selectedConfigIndex']);
         result.selectedConfigIndex = syncSel.selectedConfigIndex || 0;
+        try {
+          const metaWrap = await chrome.storage.sync.get([SYNC_CHUNK_META_KEY]);
+          const meta = metaWrap[SYNC_CHUNK_META_KEY];
+          lastMetaUpdatedAt = Number(meta?.updatedAt || Date.now());
+        } catch (_) {}
       } else {
         // 兼容最老的存储形态（仅一次性迁移）
         const syncResult = await chrome.storage.sync.get(['apiConfigs', 'selectedConfigIndex']);
@@ -325,6 +331,44 @@ export function createApiManager(appContext) {
       (apiSettingsPanel || document).dispatchEvent(new Event('apiConfigsUpdated', { bubbles: true, composed: true }));
     } catch (error) {
       console.error('保存 API 配置失败:', error);
+    }
+  }
+
+  // 跨标签页同步：监听 storage 变更（sync + local）
+  function setupStorageSyncListeners() {
+    try {
+      chrome.storage.onChanged.addListener(async (changes, areaName) => {
+        if (areaName === 'local') {
+          if (changes[BLACKLIST_STORAGE_KEY]) {
+            await loadApiKeyBlacklist();
+          }
+          return;
+        }
+        if (areaName !== 'sync') return;
+        let needReload = false;
+        if (changes[SYNC_CHUNK_META_KEY]) {
+          const ts = Number(changes[SYNC_CHUNK_META_KEY]?.newValue?.updatedAt || 0);
+          if (ts && ts > lastMetaUpdatedAt) {
+            lastMetaUpdatedAt = ts;
+            needReload = true;
+          }
+        }
+        if (changes['selectedConfigIndex']) {
+          selectedConfigIndex = Number(changes['selectedConfigIndex']?.newValue || 0);
+          needReload = true;
+        }
+        Object.keys(changes).forEach((k) => { if (k.startsWith(SYNC_CHUNK_KEY_PREFIX)) needReload = true; });
+        if (needReload) {
+          const items = await loadConfigsFromSyncChunked();
+          if (items && Array.isArray(items)) {
+            apiConfigs = items;
+            renderAPICards();
+            renderFavoriteApis();
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('注册 API 配置跨标签同步失败（忽略）：', e);
     }
   }
 
@@ -1364,4 +1408,7 @@ export function createApiManager(appContext) {
         renderFavoriteApis();
     }
   };
-} 
+
+  // 启动跨标签页变更监听（在管理器创建时即注册）
+  setupStorageSyncListeners();
+}
