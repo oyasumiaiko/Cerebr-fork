@@ -517,6 +517,41 @@ class CerebrSidebar {
             // console.log('已发送当前页面信息到侧边栏');
           }
           break;
+        case 'REQUEST_COMPUTER_USE_SNAPSHOT':
+          (async () => {
+            const iframeEl = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+            if (!iframeEl) return;
+            try {
+              const dataUrl = await captureScreenshotForComputerUse();
+              iframeEl.contentWindow.postMessage({
+                type: 'COMPUTER_USE_SNAPSHOT_RESULT',
+                requestId: event.data.requestId,
+                success: true,
+                dataURL: dataUrl
+              }, '*');
+            } catch (error) {
+              iframeEl.contentWindow.postMessage({
+                type: 'COMPUTER_USE_SNAPSHOT_RESULT',
+                requestId: event.data.requestId,
+                success: false,
+                error: error.message || '截图失败'
+              }, '*');
+            }
+          })();
+          break;
+        case 'PERFORM_COMPUTER_USE_CLICK':
+          (async () => {
+            const iframeEl = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+            if (!iframeEl) return;
+            const payload = event.data.payload || {};
+            const result = performNormalizedClick(payload.x, payload.y);
+            iframeEl.contentWindow.postMessage({
+              type: 'COMPUTER_USE_CLICK_RESULT',
+              requestId: event.data.requestId,
+              ...result
+            }, '*');
+          })();
+          break;
       }
     });
   }
@@ -1423,6 +1458,140 @@ function captureAndDropScreenshot() {
   }
 
   waitCaptureWithAnimationFrame(5); // 初始调用，设置递归层级为 5，实现等待五帧的效果
+}
+
+/**
+ * 捕获页面截图供 Computer Use 调用
+ * @returns {Promise<string>} dataURL
+ */
+function captureScreenshotForComputerUse() {
+  return new Promise((resolve, reject) => {
+    try {
+      const sidebarElement = sidebar?.sidebar;
+      const originalVisibility = sidebarElement?.style?.visibility || '';
+      const originalTransition = sidebarElement?.style?.transition || '';
+
+      const restoreSidebar = () => {
+        if (sidebarElement) {
+          sidebarElement.style.visibility = originalVisibility;
+          sidebarElement.style.transition = originalTransition;
+        }
+      };
+
+      if (sidebarElement) {
+        sidebarElement.style.transition = 'none';
+        sidebarElement.style.visibility = 'hidden';
+      }
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          chrome.runtime.sendMessage({ action: 'capture_visible_tab' }, (response) => {
+            restoreSidebar();
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (response?.success && response.dataURL) {
+              resolve(response.dataURL);
+            } else {
+              reject(new Error(response?.error || '截图失败'));
+            }
+          });
+        });
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function buildCssSelector(element) {
+  if (!element || !(element instanceof Element)) return '';
+  const path = [];
+  let current = element;
+  while (current && current.nodeType === Node.ELEMENT_NODE) {
+    let selector = current.tagName.toLowerCase();
+    if (current.id) {
+      selector += `#${current.id}`;
+      path.unshift(selector);
+      break;
+    }
+    if (current.classList.length > 0) {
+      selector += '.' + Array.from(current.classList).join('.');
+    }
+    let index = 1;
+    let sibling = current;
+    while ((sibling = sibling.previousElementSibling)) {
+      if (sibling.tagName === current.tagName) index += 1;
+    }
+    if (index > 1) {
+      selector += `:nth-of-type(${index})`;
+    }
+    path.unshift(selector);
+    current = current.parentElement;
+  }
+  return path.join(' > ');
+}
+
+function flashClickOverlay(clientX, clientY) {
+  try {
+    const overlay = document.createElement('div');
+    overlay.style.position = 'fixed';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.zIndex = 2147483647;
+    overlay.style.width = '32px';
+    overlay.style.height = '32px';
+    overlay.style.border = '2px solid #0d99ff';
+    overlay.style.borderRadius = '50%';
+    overlay.style.boxShadow = '0 0 12px rgba(13, 153, 255, 0.6)';
+    overlay.style.background = 'rgba(13, 153, 255, 0.15)';
+    overlay.style.transform = 'translate(-50%, -50%) scale(1)';
+    overlay.style.opacity = '1';
+    overlay.style.transition = 'all 0.4s ease-out';
+    overlay.style.left = `${clientX}px`;
+    overlay.style.top = `${clientY}px`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => {
+      overlay.style.opacity = '0';
+      overlay.style.transform = 'translate(-50%, -50%) scale(1.4)';
+    });
+    setTimeout(() => overlay.remove(), 450);
+  } catch (error) {
+    console.warn('绘制点击高亮失败:', error);
+  }
+}
+
+function performNormalizedClick(normalizedX, normalizedY) {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  if (!viewportWidth || !viewportHeight) {
+    return { success: false, error: '无法获取视口尺寸' };
+  }
+  const clientX = (Number(normalizedX) / 1000) * viewportWidth;
+  const clientY = (Number(normalizedY) / 1000) * viewportHeight;
+  const target = document.elementFromPoint(clientX, clientY);
+  if (!target) {
+    return { success: false, error: '未找到可点击元素' };
+  }
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    view: window,
+    button: 0
+  };
+  try {
+    target.dispatchEvent(new MouseEvent('mousemove', eventInit));
+    target.dispatchEvent(new MouseEvent('mousedown', eventInit));
+    target.dispatchEvent(new MouseEvent('mouseup', eventInit));
+    target.dispatchEvent(new MouseEvent('click', eventInit));
+    flashClickOverlay(clientX, clientY);
+    return { success: true, selector: buildCssSelector(target) };
+  } catch (error) {
+    console.error('执行归一化点击失败:', error);
+    return { success: false, error: error.message || '执行点击失败' };
+  }
 }
 
 // ====================== 临时调试用 ======================

@@ -4,12 +4,14 @@ import { createMessageProcessor } from '../../core/message_processor.js';
 import { createImageHandler } from '../../utils/image_handler.js';
 import { createChatHistoryUI } from '../chat_history_ui.js';
 import { createApiManager } from '../../api/api_settings.js';
+import { createComputerUseApi } from '../../api/gemini_computer_use.js';
 import { createMessageSender } from '../../core/message_sender.js';
 import { createSettingsManager } from '../settings_manager.js';
 import { createContextMenuManager } from '../context_menu_manager.js';
 import { createUIManager } from '../ui_manager.js';
 import { createInputController } from '../input_controller.js';
 import { applyStandaloneAdjustments } from './sidebar_app_context.js';
+import { createComputerUseTool } from './computer_use_tool.js';
 
 /**
  * 初始化侧边栏依赖的各类服务，并将实例挂载到 appContext。
@@ -26,6 +28,7 @@ export async function initializeSidebarServices(appContext) {
   appContext.services.settingsManager = createSettingsManager(appContext);
   appContext.services.imageHandler = createImageHandler(appContext);
   appContext.services.apiManager = createApiManager(appContext);
+  appContext.services.computerUseApi = createComputerUseApi(appContext);
 
   appContext.services.messageProcessor = createMessageProcessor(appContext);
   appContext.services.chatHistoryUI = createChatHistoryUI(appContext);
@@ -45,10 +48,12 @@ export async function initializeSidebarServices(appContext) {
 
   appContext.services.uiManager = createUIManager(appContext);
   appContext.services.contextMenuManager = createContextMenuManager(appContext);
+  appContext.services.computerUseTool = createComputerUseTool(appContext);
 
   // 初始化 UI/上下文菜单管理器，确保后续事件注册时可立即使用。
   appContext.services.contextMenuManager.init();
   appContext.services.uiManager.init();
+  appContext.services.computerUseTool.init();
 
   await appContext.services.settingsManager.init();
   applyStandaloneAdjustments(appContext);

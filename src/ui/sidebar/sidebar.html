@@ -179,6 +179,10 @@
                         <i class="far fa-history"></i>
                         <span>聊天记录</span>
                     </div>
+                    <div class="menu-item" id="computer-use-tool">
+                        <i class="far fa-mouse-pointer"></i>
+                        <span>Gemini 电脑操作</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -261,6 +265,37 @@
                              </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="computer-use-panel">
+        <div class="settings-header">
+            <button class="back-button">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M12 4L6 10L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <span class="settings-title">Gemini 电脑操作</span>
+        </div>
+        <div class="computer-use-body">
+            <p class="computer-use-hint">通过计算机操作模型生成准确的页面交互步骤。目前支持基础点击操作。</p>
+            <label class="computer-use-label" for="computer-use-instruction">操作指令</label>
+            <textarea id="computer-use-instruction" class="computer-use-textarea" rows="3" placeholder="示例：点击页面右上角的登录按钮"></textarea>
+            <div class="computer-use-controls">
+                <button id="computer-use-capture" class="computer-use-btn secondary">更新截图</button>
+                <button id="computer-use-run" class="computer-use-btn primary">生成操作</button>
+            </div>
+            <div id="computer-use-snapshot-label" class="computer-use-meta">当前截图：尚未生成</div>
+            <div id="computer-use-status" class="computer-use-status"></div>
+            <div class="computer-use-result">
+                <div class="result-section">
+                    <div class="section-title">模型推理</div>
+                    <div id="computer-use-narration" class="computer-use-narration">尚无内容</div>
+                </div>
+                <div class="result-section">
+                    <div class="section-title">操作列表</div>
+                    <div id="computer-use-actions" class="computer-use-action-list"></div>
                 </div>
             </div>
         </div>

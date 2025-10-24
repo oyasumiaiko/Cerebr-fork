@@ -537,6 +537,12 @@ function setupWindowMessageHandlers(appContext) {
           document.documentElement.classList.remove('fullscreen-mode');
         }
         break;
+      case 'COMPUTER_USE_SNAPSHOT_RESULT':
+        appContext.services.computerUseTool?.handleSnapshotResult(data);
+        break;
+      case 'COMPUTER_USE_CLICK_RESULT':
+        appContext.services.computerUseTool?.handleClickResult(data);
+        break;
       default:
         break;
     }

@@ -118,6 +118,7 @@ export function createUIManager(appContext) {
     const chatPanel = document.getElementById('chat-history-panel');
     const apiPanel = appContext.dom.apiSettingsPanel;
     const promptPanel = appContext.dom.promptSettingsPanel;
+    const computerUsePanel = appContext.dom.computerUsePanel;
 
     if (chatHistoryUI?.closeChatHistoryPanel) chatHistoryUI.closeChatHistoryPanel();
     if (promptSettingsManager?.closePanel) {
@@ -129,6 +130,11 @@ export function createUIManager(appContext) {
       apiManager.closePanel();
     } else if (isPanelOpen(apiPanel)) {
       apiPanel.classList.remove('visible');
+    }
+    if (services.computerUseTool?.closePanel) {
+      services.computerUseTool.closePanel();
+    } else if (computerUsePanel && isPanelOpen(computerUsePanel)) {
+      computerUsePanel.classList.remove('visible');
     }
   }
 

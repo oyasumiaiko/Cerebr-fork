@@ -87,7 +87,17 @@ export function createSidebarAppContext(isStandalone) {
     resetSettingsButton: document.getElementById('reset-settings-button'),
     settingsBackButton: document.querySelector('#settings-menu .back-button'),
     openStandalonePage: document.getElementById('open-standalone-page'),
-    modeIndicator: document.getElementById('mode-indicator')
+    modeIndicator: document.getElementById('mode-indicator'),
+    computerUseMenuItem: document.getElementById('computer-use-tool'),
+    computerUsePanel: document.getElementById('computer-use-panel'),
+    computerUseBackButton: document.querySelector('#computer-use-panel .back-button'),
+    computerUseInstruction: document.getElementById('computer-use-instruction'),
+    computerUseRunButton: document.getElementById('computer-use-run'),
+    computerUseCaptureButton: document.getElementById('computer-use-capture'),
+    computerUseSnapshotLabel: document.getElementById('computer-use-snapshot-label'),
+    computerUseStatus: document.getElementById('computer-use-status'),
+    computerUseNarration: document.getElementById('computer-use-narration'),
+    computerUseActionList: document.getElementById('computer-use-actions')
   };
 
   return {
