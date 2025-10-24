@@ -23,6 +23,7 @@ export function createComputerUseTool(appContext) {
   let isLoading = false;
   let unsubscribeConfig = null;
   let cachedConfig = computerUseApi?.getConfig?.() || {};
+  let currentSession = null;
 
   function init() {
     if (!dom.computerUseMenuItem || !dom.computerUsePanel) {
@@ -198,6 +199,7 @@ export function createComputerUseTool(appContext) {
     } finally {
       if (!silent) setLoading(false);
     }
+    return latestScreenshot;
   }
 
   function renderActions({ narration = '', actions = [] }) {
@@ -243,7 +245,15 @@ export function createComputerUseTool(appContext) {
       const button = document.createElement('button');
       button.className = 'computer-use-action-btn';
       button.textContent = '执行该操作';
-      button.addEventListener('click', () => executeAction(action));
+      button.addEventListener('click', async () => {
+        if (!currentSession) {
+          setStatus('请先生成操作。', 'warning');
+          return;
+        }
+        const response = await executeAction(action);
+        if (!response) return;
+        await advanceSessionWithResponses([response]);
+      });
       card.appendChild(button);
 
       dom.computerUseActionList.appendChild(card);
@@ -275,6 +285,7 @@ export function createComputerUseTool(appContext) {
     }
 
     try {
+      currentSession = null;
       setLoading(true, '正在更新截图...');
       await refreshScreenshot({ silent: true });
       const screenshot = latestScreenshot;
@@ -282,16 +293,23 @@ export function createComputerUseTool(appContext) {
         throw new Error('截图失败，无法构建请求');
       }
       setLoading(true, '正在向 Gemini 请求操作...');
-      const result = await computerUseApi.sendInitialRequest({
+      const start = await computerUseApi.startSession({
         instruction,
         screenshotDataUrl: screenshot
       });
-      renderActions(result);
-      setStatus(result.actions?.length ? '已生成操作，可逐项执行。' : '模型未返回操作，请调整描述或刷新页面。', result.actions?.length ? 'success' : 'warning');
+      currentSession = start.session;
+      renderActions(start);
+      setLoading(false);
+      if (start.actions?.length) {
+        await runActionsSequence(start.actions);
+      } else if (start.finishReason === 'STOP') {
+        setStatus('电脑操作流程完成。', 'success');
+      } else {
+        setStatus('模型未返回操作，请调整指令。', 'warning');
+      }
     } catch (error) {
       console.error('调用 Gemini Computer Use 失败:', error);
       setStatus(error.message || '请求失败，请检查控制台日志', 'error');
-    } finally {
       setLoading(false);
     }
   }
@@ -312,10 +330,16 @@ export function createComputerUseTool(appContext) {
     });
   }
 
+  function extractBase64(dataUrl) {
+    if (!dataUrl) return '';
+    const commaIndex = dataUrl.indexOf(',');
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  }
+
   async function executeAction(action) {
     if (!action || !action.name) {
       setStatus('无效的动作数据，无法执行。', 'error');
-      return;
+      return null;
     }
     const workingAction = JSON.parse(JSON.stringify(action));
     const safetyDecision = workingAction?.args?.safety_decision;
@@ -329,7 +353,7 @@ export function createComputerUseTool(appContext) {
       });
       if (!confirmed) {
         setStatus('用户取消了敏感操作执行。', 'warning');
-        return;
+        return null;
       }
       workingAction.args.safety_acknowledgement = true;
     }
@@ -338,7 +362,7 @@ export function createComputerUseTool(appContext) {
       const result = await requestAction(workingAction);
       if (!result?.success) {
         setStatus(result?.error || `动作 ${workingAction.name} 执行失败`, 'error');
-        return;
+        return null;
       }
       if (result.navigation) {
         setStatus('已触发页面导航，正在等待浏览器更新...', 'success');
@@ -350,9 +374,68 @@ export function createComputerUseTool(appContext) {
       try {
         await refreshScreenshot({ silent: true });
       } catch (_) {}
+      const base64 = extractBase64(latestScreenshot);
+      const responsePayload = {
+        success: true,
+        url: result.url || window.location.href
+      };
+      if (result.navigation) responsePayload.navigation = true;
+      if (result.selector) responsePayload.selector = result.selector;
+      if (result.info) responsePayload.info = result.info;
+      return {
+        name: workingAction.name,
+        response: responsePayload,
+        parts: base64 ? [{ inline_data: { mime_type: 'image/png', data: base64 } }] : []
+      };
     } catch (error) {
       console.error('执行电脑操作动作失败:', error);
       setStatus(error.message || `动作 ${workingAction.name} 执行失败`, 'error');
+      return null;
+    }
+  }
+
+  async function runActionsSequence(actions) {
+    if (!Array.isArray(actions) || !actions.length || !currentSession) {
+      return;
+    }
+    setLoading(true, `执行 ${actions.length} 个动作...`);
+    const responses = [];
+    for (const action of actions) {
+      const response = await executeAction(action);
+      if (!response) {
+        setLoading(false);
+        return;
+      }
+      responses.push(response);
+    }
+    setLoading(false);
+    await advanceSessionWithResponses(responses);
+  }
+
+  async function advanceSessionWithResponses(responses) {
+    if (!currentSession || !Array.isArray(responses) || !responses.length) {
+      return;
+    }
+    try {
+      setLoading(true, '正在请求下一步动作...');
+      const next = await computerUseApi.continueSession({
+        session: currentSession,
+        functionResponses: responses
+      });
+      currentSession = next.session;
+      renderActions(next);
+      setLoading(false);
+      if (next.actions?.length) {
+        await runActionsSequence(next.actions);
+      } else if (next.finishReason === 'STOP') {
+        setStatus('电脑操作流程完成。', 'success');
+      } else {
+        setStatus('模型未返回更多操作。', 'info');
+      }
+    } catch (error) {
+      console.error('继续电脑操作流程失败:', error);
+      setStatus(error.message || '继续执行失败', 'error');
+      setLoading(false);
     }
   }
 

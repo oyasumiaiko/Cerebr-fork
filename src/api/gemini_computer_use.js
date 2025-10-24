@@ -152,7 +152,7 @@ export function createComputerUseApi(appContext) {
    * @param {string} options.screenshotDataUrl - 当前页面的截图（dataURL）
    * @returns {Promise<{ narration: string, actions: Array<Object>, candidate: Object }>}
    */
-  async function sendInitialRequest({ instruction, screenshotDataUrl }) {
+  async function startSession({ instruction, screenshotDataUrl }) {
     if (!instruction || !instruction.trim()) {
       throw new Error('请输入要执行的操作指令');
     }
@@ -217,9 +217,76 @@ export function createComputerUseApi(appContext) {
       }
 
       const payload = await response.json();
-      return normalizeResponse(payload);
+      const parsed = normalizeResponse(payload);
+      return {
+        ...parsed,
+        session: payload.session || null,
+        finishReason: payload.candidates?.[0]?.finishReason || null
+      };
     } catch (error) {
       console.error('调用 Gemini Computer Use 失败:', error);
+      showNotification({ message: error.message || 'Computer Use 请求失败', type: 'error' });
+      throw error;
+    }
+  }
+
+  async function continueSession({ session, functionResponses }) {
+    if (!session) {
+      throw new Error('缺少会话信息，无法继续电脑操作流程');
+    }
+
+    await loadConfig();
+    const { apiKey, modelName, temperature } = currentConfig;
+    const trimmedKey = (apiKey || '').trim();
+    if (!trimmedKey) {
+      throw new Error('请在电脑操作设置中填写专用的 Gemini API Key');
+    }
+    if (!modelName || !modelName.trim()) {
+      throw new Error('请在电脑操作设置中填写电脑操作模型名称');
+    }
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName.trim()}:generateContent?key=${encodeURIComponent(trimmedKey)}`;
+
+    const requestBody = {
+      session,
+      contents: [],
+      tools: [
+        {
+          computerUse: {
+            environment: 'ENVIRONMENT_BROWSER'
+          }
+        }
+      ],
+      toolResponse: functionResponses || [],
+      generationConfig: {
+        temperature: typeof temperature === 'number' ? temperature : defaultConfig.temperature,
+        topP: 0.95,
+        topK: 40,
+        maxOutputTokens: 4096
+      }
+    };
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(`Computer Use 请求失败 (${response.status}): ${detail}`);
+      }
+
+      const payload = await response.json();
+      const parsed = normalizeResponse(payload);
+      return {
+        ...parsed,
+        session: payload.session || session,
+        finishReason: payload.candidates?.[0]?.finishReason || null
+      };
+    } catch (error) {
+      console.error('继续 Gemini Computer Use 失败:', error);
       showNotification({ message: error.message || 'Computer Use 请求失败', type: 'error' });
       throw error;
     }
@@ -230,6 +297,7 @@ export function createComputerUseApi(appContext) {
     getConfig: () => cloneConfig(),
     saveConfig: (partial) => persistConfig(partial),
     subscribe,
-    sendInitialRequest
+    startSession,
+    continueSession
   };
 }
