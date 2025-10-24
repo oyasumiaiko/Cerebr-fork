@@ -4,30 +4,101 @@
  * @returns {Object} 客户端实例
  */
 export function createComputerUseApi(appContext) {
-  const apiManager = appContext?.services?.apiManager;
   const showNotification = appContext?.utils?.showNotification || (() => {});
 
-  /**
-   * 校验并获取当前选中的 API 配置
-   * @returns {Object}
-   */
-  function getValidConfig() {
-    const config = apiManager?.getSelectedConfig?.();
-    if (!config) {
-      throw new Error('未找到可用的 API 配置');
+  const STORAGE_KEY = 'computerUseApiConfig';
+  const defaultConfig = {
+    apiKey: '',
+    modelName: 'gemini-2.5-computer-use-preview-10-2025',
+    temperature: 0.2
+  };
+
+  let initialized = false;
+  let currentConfig = { ...defaultConfig };
+  const subscribers = new Set();
+
+  function cloneConfig() {
+    return { ...currentConfig };
+  }
+
+  function storageGet(key) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.get(key, (result) => {
+          const err = chrome.runtime?.lastError;
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve(result || {});
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function storageSet(payload) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.set(payload, () => {
+          const err = chrome.runtime?.lastError;
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async function loadConfig() {
+    if (initialized) return;
+    initialized = true;
+    try {
+      const stored = await storageGet(STORAGE_KEY);
+      const saved = stored?.[STORAGE_KEY];
+      if (saved && typeof saved === 'object') {
+        currentConfig = { ...defaultConfig, ...saved };
+      }
+    } catch (error) {
+      console.warn('加载电脑操作配置失败，将使用默认值:', error);
+      currentConfig = { ...defaultConfig };
     }
-    if ((config.baseUrl || '').toLowerCase() !== 'genai') {
-      throw new Error('当前配置不是 Gemini API，请选择 Gemini 电脑操作模型');
+  }
+
+  async function persistConfig(partial) {
+    await loadConfig();
+    if (partial && typeof partial === 'object') {
+      currentConfig = { ...currentConfig, ...partial };
     }
-    if (!String(config.modelName || '').includes('computer-use')) {
-      throw new Error('请选择 Gemini 电脑操作模型 (computer-use)');
+    try {
+      await storageSet({ [STORAGE_KEY]: currentConfig });
+      notifySubscribers();
+    } catch (error) {
+      console.warn('保存电脑操作配置失败:', error);
     }
-    const rawKey = Array.isArray(config.apiKey) ? config.apiKey[0] : config.apiKey;
-    const apiKey = (rawKey || '').trim();
-    if (!apiKey) {
-      throw new Error('当前配置缺少有效的 API Key');
-    }
-    return { config, apiKey };
+  }
+
+  function notifySubscribers() {
+    const snapshot = cloneConfig();
+    subscribers.forEach((cb) => {
+      try {
+        cb(snapshot);
+      } catch (err) {
+        console.warn('电脑操作配置监听回调失败:', err);
+      }
+    });
+  }
+
+  function subscribe(callback) {
+    if (typeof callback !== 'function') return () => {};
+    subscribers.add(callback);
+    callback(cloneConfig());
+    return () => subscribers.delete(callback);
   }
 
   /**
@@ -86,8 +157,17 @@ export function createComputerUseApi(appContext) {
       throw new Error('请输入要执行的操作指令');
     }
 
-    const { config, apiKey } = getValidConfig();
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    await loadConfig();
+    const { apiKey, modelName, temperature } = currentConfig;
+    const trimmedKey = (apiKey || '').trim();
+    if (!trimmedKey) {
+      throw new Error('请在电脑操作设置中填写专用的 Gemini API Key');
+    }
+    if (!modelName || !modelName.trim()) {
+      throw new Error('请在电脑操作设置中填写电脑操作模型名称');
+    }
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName.trim()}:generateContent?key=${encodeURIComponent(trimmedKey)}`;
 
     const inlineData = extractBase64(screenshotDataUrl);
     if (!inlineData) {
@@ -117,7 +197,7 @@ export function createComputerUseApi(appContext) {
         }
       ],
       generationConfig: {
-        temperature: config.temperature ?? 0.2,
+        temperature: typeof temperature === 'number' ? temperature : defaultConfig.temperature,
         topP: 0.95,
         topK: 40,
         maxOutputTokens: 4096
@@ -146,6 +226,10 @@ export function createComputerUseApi(appContext) {
   }
 
   return {
+    init: loadConfig,
+    getConfig: () => cloneConfig(),
+    saveConfig: (partial) => persistConfig(partial),
+    subscribe,
     sendInitialRequest
   };
 }

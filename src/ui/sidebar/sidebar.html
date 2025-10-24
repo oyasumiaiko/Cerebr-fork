@@ -280,6 +280,28 @@
         </div>
         <div class="computer-use-body">
             <p class="computer-use-hint">通过计算机操作模型生成准确的页面交互步骤。目前支持基础点击操作。</p>
+            <div class="computer-use-config">
+                <div class="config-group">
+                    <label for="computer-use-api-key">Gemini API Key（仅用于电脑操作）</label>
+                    <div class="config-input-wrapper">
+                        <input type="password" id="computer-use-api-key" placeholder="输入Computer Use专用Key">
+                        <button id="computer-use-toggle-key" type="button" aria-label="显示或隐藏电脑操作API Key">
+                            <i class="far fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="config-group">
+                        <label for="computer-use-model">模型名称</label>
+                        <input type="text" id="computer-use-model" placeholder="gemini-2.5-computer-use-preview-10-2025">
+                    </div>
+                    <div class="config-group temperature-group">
+                        <label for="computer-use-temperature">Temperature <span id="computer-use-temp-value">0.2</span></label>
+                        <input type="range" id="computer-use-temperature" min="0" max="1" step="0.05" value="0.2">
+                    </div>
+                </div>
+                <p class="computer-use-tip">此处配置仅供电脑操作功能使用，不会影响聊天模型。</p>
+            </div>
             <label class="computer-use-label" for="computer-use-instruction">操作指令</label>
             <textarea id="computer-use-instruction" class="computer-use-textarea" rows="3" placeholder="示例：点击页面右上角的登录按钮"></textarea>
             <div class="computer-use-controls">

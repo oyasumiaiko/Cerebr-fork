@@ -981,6 +981,83 @@ input:checked + .slider::before {
     gap: 12px;
 }
 
+.computer-use-config {
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color, rgba(255, 255, 255, 0.15)) 80%, transparent);
+    border-radius: 14px;
+    padding: 12px;
+    background: color-mix(in srgb, var(--cerebr-surface, #181a1f) 92%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.computer-use-config .config-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.computer-use-config label {
+    font-size: 0.85rem;
+    color: var(--cerebr-secondary-text, #9aa0a6);
+}
+
+.computer-use-config input[type="password"],
+.computer-use-config input[type="text"] {
+    border-radius: 10px;
+    border: 1px solid var(--cerebr-border-color, rgba(255, 255, 255, 0.15));
+    padding: 8px 12px;
+    background: var(--cerebr-input-bg, rgba(255, 255, 255, 0.05));
+    color: var(--cerebr-text-color, #fff);
+}
+
+.computer-use-config input[type="text"]:focus,
+.computer-use-config input[type="password"]:focus {
+    outline: none;
+    border-color: var(--cerebr-highlight, #2ecc71);
+}
+
+.computer-use-config .config-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#computer-use-toggle-key {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--cerebr-border-color, rgba(255, 255, 255, 0.12));
+    background: transparent;
+    color: var(--cerebr-text-color, #fff);
+    cursor: pointer;
+}
+
+.computer-use-config .config-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.computer-use-config .config-row .config-group {
+    flex: 1;
+    min-width: 180px;
+}
+
+.computer-use-config .temperature-group {
+    position: relative;
+}
+
+#computer-use-temperature {
+    width: 100%;
+}
+
+.computer-use-tip {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--cerebr-secondary-text, #8a8f99);
+}
+
 .computer-use-hint {
     margin: 0;
     font-size: 0.9rem;

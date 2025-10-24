@@ -97,7 +97,12 @@ export function createSidebarAppContext(isStandalone) {
     computerUseSnapshotLabel: document.getElementById('computer-use-snapshot-label'),
     computerUseStatus: document.getElementById('computer-use-status'),
     computerUseNarration: document.getElementById('computer-use-narration'),
-    computerUseActionList: document.getElementById('computer-use-actions')
+    computerUseActionList: document.getElementById('computer-use-actions'),
+    computerUseApiKey: document.getElementById('computer-use-api-key'),
+    computerUseToggleKey: document.getElementById('computer-use-toggle-key'),
+    computerUseModelInput: document.getElementById('computer-use-model'),
+    computerUseTempSlider: document.getElementById('computer-use-temperature'),
+    computerUseTempValue: document.getElementById('computer-use-temp-value')
   };
 
   return {

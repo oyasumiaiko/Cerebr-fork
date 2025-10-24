@@ -21,10 +21,24 @@ export function createComputerUseTool(appContext) {
   let latestScreenshot = null;
   let latestScreenshotAt = 0;
   let isLoading = false;
+  let unsubscribeConfig = null;
+  let cachedConfig = computerUseApi?.getConfig?.() || {};
 
   function init() {
     if (!dom.computerUseMenuItem || !dom.computerUsePanel) {
       return;
+    }
+
+    if (typeof computerUseApi?.init === 'function') {
+      computerUseApi.init().catch((error) => {
+        console.warn('初始化电脑操作配置失败:', error);
+      }).finally(() => {
+        bindConfigSubscription();
+        setupConfigFields();
+      });
+    } else {
+      bindConfigSubscription();
+      setupConfigFields();
     }
 
     dom.computerUseMenuItem.addEventListener('click', () => {
@@ -39,6 +53,72 @@ export function createComputerUseTool(appContext) {
     dom.computerUseBackButton?.addEventListener('click', closePanel);
     dom.computerUseRunButton?.addEventListener('click', handleRunRequest);
     dom.computerUseCaptureButton?.addEventListener('click', refreshScreenshot);
+  }
+
+  function bindConfigSubscription() {
+    if (typeof computerUseApi?.subscribe !== 'function') return;
+    if (unsubscribeConfig) {
+      unsubscribeConfig();
+    }
+    unsubscribeConfig = computerUseApi.subscribe((config) => {
+      cachedConfig = config || {};
+      populateConfigFields(config || {});
+    });
+  }
+
+  function setupConfigFields() {
+    const { computerUseApiKey, computerUseToggleKey, computerUseModelInput, computerUseTempSlider } = dom;
+
+    computerUseApiKey?.addEventListener('change', () => saveConfig({ apiKey: computerUseApiKey.value.trim() }));
+    computerUseModelInput?.addEventListener('change', () => saveConfig({ modelName: computerUseModelInput.value.trim() }));
+
+    if (computerUseTempSlider) {
+      computerUseTempSlider.addEventListener('input', () => updateTempValue(Number(computerUseTempSlider.value)));
+      computerUseTempSlider.addEventListener('change', () => saveConfig({ temperature: Number(computerUseTempSlider.value) }));
+    }
+
+    computerUseToggleKey?.addEventListener('click', () => {
+      if (!computerUseApiKey) return;
+      const isPassword = computerUseApiKey.getAttribute('type') === 'password';
+      computerUseApiKey.setAttribute('type', isPassword ? 'text' : 'password');
+      const icon = computerUseToggleKey.querySelector('i');
+      if (icon) {
+        if (isPassword) {
+          icon.classList.remove('fa-eye');
+          icon.classList.add('fa-eye-slash');
+        } else {
+          icon.classList.remove('fa-eye-slash');
+          icon.classList.add('fa-eye');
+        }
+      }
+    });
+  }
+
+  function populateConfigFields(config) {
+    if (dom.computerUseApiKey && document.activeElement !== dom.computerUseApiKey) {
+      dom.computerUseApiKey.value = config.apiKey || '';
+    }
+    if (dom.computerUseModelInput && document.activeElement !== dom.computerUseModelInput) {
+      dom.computerUseModelInput.value = config.modelName || 'gemini-2.5-computer-use-preview-10-2025';
+    }
+    updateTempValue(typeof config.temperature === 'number' ? config.temperature : 0.2);
+    if (dom.computerUseTempSlider && document.activeElement !== dom.computerUseTempSlider) {
+      dom.computerUseTempSlider.value = String(typeof config.temperature === 'number' ? config.temperature : 0.2);
+    }
+  }
+
+  function updateTempValue(value) {
+    if (dom.computerUseTempValue) {
+      dom.computerUseTempValue.textContent = value.toFixed(2).replace(/\.00$/, '.0');
+    }
+  }
+
+  function saveConfig(partial) {
+    if (typeof computerUseApi?.saveConfig !== 'function') return;
+    computerUseApi.saveConfig(partial).catch((error) => {
+      console.error('保存电脑操作配置失败:', error);
+      setStatus(error.message || '保存电脑操作配置失败', 'error');
+    });
   }
 
   function openPanel() {
@@ -182,6 +262,12 @@ export function createComputerUseTool(appContext) {
       return;
     }
 
+    if (!cachedConfig?.apiKey) {
+      setStatus('请先在上方填写电脑操作专用 API Key', 'warning');
+      dom.computerUseApiKey?.focus();
+      return;
+    }
+
     try {
       setLoading(true, '正在向 Gemini 请求操作...');
       const screenshot = await ensureScreenshot();
@@ -265,4 +351,3 @@ export function createComputerUseTool(appContext) {
     handleClickResult
   };
 }
-
