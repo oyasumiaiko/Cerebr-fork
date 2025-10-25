@@ -330,10 +330,14 @@ export function createComputerUseTool(appContext) {
       const startResult = await computerUseApi.startSession({ instruction, screenshotDataUrl: screenshot });
       currentSession = startResult.session;
       latestNarration = startResult.narration || '';
-      updatePendingActions(startResult.actions || []);
+      const initialActions = startResult.actions || [];
+      updatePendingActions(initialActions);
       setLoading(false);
 
-      if (!currentSession || startResult.finishReason === 'STOP') {
+      const hasActions = initialActions.length > 0;
+      const shouldStop = !hasActions && startResult.finishReason === 'STOP';
+
+      if (!currentSession || shouldStop) {
         currentSession = null;
         setStatus('电脑操作流程完成。', 'success');
         return;
@@ -341,12 +345,10 @@ export function createComputerUseTool(appContext) {
 
       if (executionMode === MODE_AUTO) {
         await runActionsSequence();
+      } else if (hasActions) {
+        setStatus('已生成操作，请点击 >| 执行下一步。', 'info');
       } else {
-        if (pendingActionQueue.length) {
-          setStatus('已生成操作，请点击 >| 执行下一步。', 'info');
-        } else {
-          setStatus('等待模型返回新动作，稍后点击 >|。', 'info');
-        }
+        setStatus('等待模型返回新动作，稍后点击 >|。', 'info');
       }
     } catch (error) {
       console.error('调用 Gemini Computer Use 失败:', error);
@@ -475,10 +477,14 @@ export function createComputerUseTool(appContext) {
       });
       currentSession = next.session;
       latestNarration = next.narration || '';
-      updatePendingActions(next.actions || []);
+      const newActions = next.actions || [];
+      updatePendingActions(newActions);
       setLoading(false);
 
-      if (!currentSession || next.finishReason === 'STOP') {
+      const hasActions = newActions.length > 0;
+      const shouldStop = !hasActions && next.finishReason === 'STOP';
+
+      if (!currentSession || shouldStop) {
         currentSession = null;
         setStatus('电脑操作流程完成。', 'success');
         return;
@@ -487,7 +493,7 @@ export function createComputerUseTool(appContext) {
       if (triggerAuto && executionMode === MODE_AUTO) {
         await runActionsSequence();
       } else if (executionMode === MODE_MANUAL) {
-        if (pendingActionQueue.length) {
+        if (hasActions) {
           setStatus('已生成新动作，请点击 >| 执行下一步。', 'info');
         } else {
           setStatus('等待模型返回新动作，稍后点击 >|。', 'info');
