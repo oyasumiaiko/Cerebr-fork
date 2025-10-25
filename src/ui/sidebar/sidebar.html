@@ -309,16 +309,12 @@
                 <p class="computer-use-tip">此处配置仅供电脑操作功能使用，不会影响聊天模型。</p>
             </div>
             <div class="computer-use-mode">
-                <span class="mode-label">执行模式</span>
-                <label class="mode-option">
-                    <input type="radio" name="computer-use-mode" id="computer-use-mode-auto" value="auto" checked>
-                    <span>自动</span>
-                </label>
-                <label class="mode-option">
-                    <input type="radio" name="computer-use-mode" id="computer-use-mode-manual" value="manual">
-                    <span>单步</span>
-                </label>
-                <button id="computer-use-step" class="computer-use-step-btn" type="button" title="执行下一步">>|</button>
+                <span class="mode-label">执行状态</span>
+                <span id="computer-use-status-badge" class="computer-use-badge badge-auto">自动执行</span>
+                <div class="mode-actions">
+                    <button id="computer-use-toggle-auto" class="computer-use-btn secondary" type="button">暂停自动</button>
+                    <button id="computer-use-step" class="computer-use-btn secondary" type="button" title="执行下一步">单步执行</button>
+                </div>
             </div>
             <label class="computer-use-label" for="computer-use-instruction">操作指令</label>
             <textarea id="computer-use-instruction" class="computer-use-textarea" rows="3" placeholder="示例：点击页面右上角的登录按钮"></textarea>

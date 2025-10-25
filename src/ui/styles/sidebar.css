@@ -1070,6 +1070,7 @@ input:checked + .slider::before {
 
 .computer-use-mode {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 12px;
     padding: 10px 12px;
@@ -1085,37 +1086,51 @@ input:checked + .slider::before {
     white-space: nowrap;
 }
 
-.computer-use-mode .mode-option {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.9rem;
-    color: var(--cerebr-text-color, #fff);
+.computer-use-badge {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: rgba(46, 204, 113, 0.18);
+    color: #2ecc71;
+    border: 1px solid rgba(46, 204, 113, 0.25);
+    transition: background 0.2s ease, color 0.2s ease, border 0.2s ease;
 }
 
-.computer-use-mode .mode-option input[type="radio"] {
-    accent-color: var(--cerebr-highlight, #2ecc71);
-    cursor: pointer;
+.computer-use-badge.badge-paused {
+    background: rgba(255, 193, 7, 0.18);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.25);
 }
 
-.computer-use-step-btn {
+.computer-use-badge.badge-error {
+    background: rgba(255, 99, 71, 0.18);
+    color: #ff6347;
+    border: 1px solid rgba(255, 99, 71, 0.25);
+}
+
+.mode-actions {
+    display: flex;
+    gap: 8px;
     margin-left: auto;
+}
+
+.mode-actions .computer-use-btn {
+    padding: 6px 12px;
     border-radius: 10px;
     border: 1px solid var(--cerebr-border-color, rgba(255,255,255,0.2));
     background: color-mix(in srgb, var(--cerebr-surface, #20232a) 85%, transparent);
     color: var(--cerebr-text-color, #fff);
-    padding: 6px 12px;
-    font-size: 0.9rem;
     cursor: pointer;
-    display: none;
 }
 
-.computer-use-step-btn:hover:not(:disabled) {
+.mode-actions .computer-use-btn:hover:not(:disabled) {
     background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 35%, transparent);
     border-color: var(--cerebr-highlight, #2ecc71);
 }
 
-.computer-use-step-btn:disabled {
+.mode-actions .computer-use-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

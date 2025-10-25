@@ -105,8 +105,8 @@ export function createSidebarAppContext(isStandalone) {
     computerUseTempValue: document.getElementById('computer-use-temp-value'),
     computerUseDelaySlider: document.getElementById('computer-use-delay'),
     computerUseDelayValue: document.getElementById('computer-use-delay-value'),
-    computerUseModeAuto: document.getElementById('computer-use-mode-auto'),
-    computerUseModeManual: document.getElementById('computer-use-mode-manual'),
+    computerUseStatusBadge: document.getElementById('computer-use-status-badge'),
+    computerUseToggleAuto: document.getElementById('computer-use-toggle-auto'),
     computerUseStepButton: document.getElementById('computer-use-step')
   };
 

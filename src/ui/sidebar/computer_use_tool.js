@@ -18,18 +18,19 @@ export function createComputerUseTool(appContext) {
   let latestScreenshotAt = 0;
   let latestNarration = '';
   let pendingActionQueue = [];
-  let executionMode = MODE_AUTO;
-  let currentSession = null;
-  let isLoading = false;
-  let unsubscribeConfig = null;
-  let cachedConfig = computerUseApi?.getConfig?.() || {};
-  let currentInstruction = '';
-  let actionSettleDelayMs = normalizeDelay(
-    typeof cachedConfig.actionSettleDelayMs === 'number'
-      ? cachedConfig.actionSettleDelayMs
+let executionMode = MODE_AUTO;
+let currentSession = null;
+let isLoading = false;
+let unsubscribeConfig = null;
+let cachedConfig = computerUseApi?.getConfig?.() || {};
+let currentInstruction = '';
+let actionSettleDelayMs = normalizeDelay(
+  typeof cachedConfig.actionSettleDelayMs === 'number'
+    ? cachedConfig.actionSettleDelayMs
       : DEFAULT_ACTION_SETTLE_DELAY_MS
-  );
-  let pendingStateRestore = false;
+);
+let isAutoMode = true;
+let pendingStateRestore = false;
 
   function normalizeDelay(value) {
     const num = Number(value);
@@ -184,8 +185,8 @@ export function createComputerUseTool(appContext) {
       computerUseModelInput,
       computerUseTempSlider,
       computerUseDelaySlider,
-      computerUseModeAuto,
-      computerUseModeManual
+      computerUseToggleAuto,
+      computerUseStatusBadge
     } = dom;
 
     computerUseApiKey?.addEventListener('change', () => saveConfig({ apiKey: computerUseApiKey.value.trim() }));
@@ -203,7 +204,7 @@ export function createComputerUseTool(appContext) {
         actionSettleDelayMs = nextDelay;
         saveConfig({ actionSettleDelayMs: nextDelay });
         if (currentSession) {
-          syncSessionState({ status: 'active', pendingResponses: [] });
+          syncSessionState({ status: isAutoMode ? 'active' : 'paused', pendingResponses: [] });
         }
       });
     }
@@ -219,12 +220,8 @@ export function createComputerUseTool(appContext) {
       }
     });
 
-    computerUseModeAuto?.addEventListener('change', () => {
-      if (computerUseModeAuto.checked) setExecutionMode(MODE_AUTO);
-    });
-    computerUseModeManual?.addEventListener('change', () => {
-      if (computerUseModeManual.checked) setExecutionMode(MODE_MANUAL);
-    });
+    computerUseToggleAuto?.addEventListener('click', toggleAutoMode);
+    if (computerUseStatusBadge) updateStatusBadge();
   }
 
   function populateConfigFields(config) {
@@ -249,7 +246,7 @@ export function createComputerUseTool(appContext) {
       updateDelayValue(actionSettleDelayMs);
     }
 
-    const mode = config.executionMode || executionMode;
+    const mode = config.executionMode || (isAutoMode ? MODE_AUTO : MODE_MANUAL);
     setExecutionMode(mode, { persist: false, updateUI: true });
   }
 
@@ -270,11 +267,7 @@ export function createComputerUseTool(appContext) {
   function setExecutionMode(mode, { persist = true, updateUI = false } = {}) {
     const normalized = mode === MODE_MANUAL ? MODE_MANUAL : MODE_AUTO;
     executionMode = normalized;
-
-    if (updateUI) {
-      if (dom.computerUseModeAuto) dom.computerUseModeAuto.checked = executionMode === MODE_AUTO;
-      if (dom.computerUseModeManual) dom.computerUseModeManual.checked = executionMode === MODE_MANUAL;
-    }
+    isAutoMode = executionMode === MODE_AUTO;
 
     if (persist) {
       saveConfig({ executionMode });
@@ -282,14 +275,15 @@ export function createComputerUseTool(appContext) {
 
     updateStepButtonState();
     renderActionsList();
+    if (updateUI) updateAutoUI();
 
-    if (executionMode === MODE_AUTO) {
+    if (isAutoMode) {
       if (pendingActionQueue.length) {
         runActionsSequence();
       } else if (currentSession) {
         setStatus('等待模型返回新动作...', 'info');
       }
-    } else if (executionMode === MODE_MANUAL) {
+    } else {
       if (pendingActionQueue.length) {
         setStatus('已生成操作，请点击 >| 执行下一步。', 'info');
       } else if (currentSession) {
@@ -298,7 +292,7 @@ export function createComputerUseTool(appContext) {
     }
 
     if (currentSession) {
-      syncSessionState({ status: 'active', pendingResponses: [] });
+      syncSessionState({ status: isAutoMode ? 'active' : 'paused', pendingResponses: [] });
     }
   }
 
@@ -325,13 +319,47 @@ export function createComputerUseTool(appContext) {
   }
 
   function updateStepButtonState() {
-    if (!dom.computerUseStepButton) return;
-    if (executionMode !== MODE_MANUAL) {
-      dom.computerUseStepButton.style.display = 'none';
-      return;
+    if (dom.computerUseStepButton) {
+      dom.computerUseStepButton.disabled = isAutoMode || isLoading || pendingActionQueue.length === 0;
     }
-    dom.computerUseStepButton.style.display = '';
-    dom.computerUseStepButton.disabled = isLoading || pendingActionQueue.length === 0;
+    if (dom.computerUseToggleAuto) {
+      dom.computerUseToggleAuto.textContent = isAutoMode ? '暂停自动' : '恢复自动';
+      dom.computerUseToggleAuto.disabled = isLoading && isAutoMode;
+    }
+    updateStatusBadge();
+  }
+
+  function updateStatusBadge(state) {
+    const badge = dom.computerUseStatusBadge;
+    if (!badge) return;
+    badge.classList.remove('badge-auto', 'badge-paused', 'badge-error');
+    const status = state?.status;
+    if (state?.error || status === 'error') {
+      badge.classList.add('badge-error');
+      badge.textContent = `错误：${state.error}`;
+    } else if (!isAutoMode || status === 'paused') {
+      badge.classList.add('badge-paused');
+      badge.textContent = '已暂停';
+    } else {
+      badge.classList.add('badge-auto');
+      badge.textContent = '自动执行';
+    }
+  }
+
+  function updateAutoUI() {
+    updateStepButtonState();
+    if (!isAutoMode) {
+      setStatus('已暂停自动执行，请手动单步完成操作。', 'info');
+    }
+  }
+
+  function toggleAutoMode() {
+    isAutoMode = !isAutoMode;
+    setExecutionMode(isAutoMode ? MODE_AUTO : MODE_MANUAL, { persist: true, updateUI: true });
+    syncSessionState({ status: isAutoMode ? 'active' : 'paused', pendingResponses: [] });
+    if (isAutoMode && pendingActionQueue.length && currentSession) {
+      runActionsSequence();
+    }
   }
 
   function updatePendingActions(actions = []) {
@@ -352,7 +380,7 @@ export function createComputerUseTool(appContext) {
     if (!pendingActionQueue.length) {
       const empty = document.createElement('div');
       empty.className = 'computer-use-empty';
-      empty.textContent = executionMode === MODE_MANUAL
+      empty.textContent = !isAutoMode
         ? '暂无待执行动作，请等待模型返回。'
         : '暂无待执行动作。';
       list.appendChild(empty);
@@ -484,7 +512,7 @@ export function createComputerUseTool(appContext) {
         return;
       }
 
-      if (executionMode === MODE_AUTO) {
+      if (isAutoMode) {
         await runActionsSequence();
       } else if (hasActions) {
         setStatus('已生成操作，请点击 >| 执行下一步。', 'info');
@@ -609,7 +637,7 @@ export function createComputerUseTool(appContext) {
       updatePendingActions(initialActions);
     }
 
-    while (executionMode === MODE_AUTO && pendingActionQueue.length > 0) {
+    while (isAutoMode && pendingActionQueue.length > 0) {
       syncSessionState({ status: 'executing', pendingResponses: [], note: 'auto-sequence' });
       const action = pendingActionQueue.shift();
       renderActionsList();
@@ -617,10 +645,10 @@ export function createComputerUseTool(appContext) {
       const response = await executeAction(action);
       if (!response) return;
       await advanceSessionWithResponses([response], { triggerAuto: false });
-      if (executionMode !== MODE_AUTO) return;
+      if (!isAutoMode) return;
     }
 
-    if (executionMode === MODE_AUTO && currentSession && pendingActionQueue.length === 0) {
+    if (isAutoMode && currentSession && pendingActionQueue.length === 0) {
       setStatus('等待模型返回新动作...', 'info');
     }
 
@@ -629,7 +657,7 @@ export function createComputerUseTool(appContext) {
     }
   }
 
-  async function advanceSessionWithResponses(responses, { triggerAuto = executionMode === MODE_AUTO } = {}) {
+  async function advanceSessionWithResponses(responses, { triggerAuto = isAutoMode } = {}) {
     if (!currentSession) return;
     try {
       setLoading(true, '正在请求下一步动作...');
@@ -654,9 +682,9 @@ export function createComputerUseTool(appContext) {
         return;
       }
 
-      if (triggerAuto && executionMode === MODE_AUTO) {
+      if (triggerAuto && isAutoMode) {
         await runActionsSequence();
-      } else if (executionMode === MODE_MANUAL) {
+      } else if (!isAutoMode) {
         if (hasActions) {
           setStatus('已生成新动作，请点击 >| 执行下一步。', 'info');
         } else {
@@ -676,7 +704,7 @@ export function createComputerUseTool(appContext) {
   }
 
   async function handleStepExecution() {
-    if (executionMode !== MODE_MANUAL || isLoading) return;
+    if (isAutoMode || isLoading) return;
     if (!currentSession) {
       setStatus('请先点击“生成操作”。', 'warning');
       return;
@@ -791,7 +819,7 @@ export function createComputerUseTool(appContext) {
     const pendingResponses = Array.isArray(state.pendingResponses) ? state.pendingResponses : [];
 
     if (status === 'active') {
-      if (executionMode === MODE_AUTO && pendingActionQueue.length > 0) {
+      if (isAutoMode && pendingActionQueue.length > 0) {
         setStatus('导航完成，继续执行自动操作...', 'info');
         setTimeout(() => {
           runActionsSequence();
@@ -814,7 +842,7 @@ export function createComputerUseTool(appContext) {
     if (pendingResponses.length > 0 && currentSession) {
       // 去重：防止重复提交
       syncSessionState({ status: 'continuing', pendingResponses, note: 'restoring-responses' });
-      advanceSessionWithResponses(pendingResponses, { triggerAuto: executionMode === MODE_AUTO }).catch((error) => {
+      advanceSessionWithResponses(pendingResponses, { triggerAuto: isAutoMode }).catch((error) => {
         console.error('恢复电脑操作 pendingResponses 失败:', error);
         setStatus(error?.message || '恢复操作失败，请重新生成', 'error');
         syncSessionState({ status: 'error', note: 'restore-failed' });
