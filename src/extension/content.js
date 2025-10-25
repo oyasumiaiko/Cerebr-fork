@@ -106,6 +106,7 @@ class CerebrSidebar {
     this.initializeSidebar();
     this.setupUrlChangeListener();
     this.setupDragAndDrop();
+    this.tryRestoreComputerUseSession();
   }
 
   // 添加统一的宽度更新方法
@@ -232,6 +233,28 @@ class CerebrSidebar {
     setInterval(handleUrlChange, 1000);
 
     emitNavEvent('loaded');
+  }
+
+  async tryRestoreComputerUseSession() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'COMPUTER_USE_REQUEST_STATE' });
+      const payload = response?.payload;
+      if (!payload || !payload.session) return;
+      const terminalStatuses = ['completed'];
+      if (terminalStatuses.includes(payload.status)) return;
+      const hasWork = (Array.isArray(payload.pendingActions) && payload.pendingActions.length > 0) ||
+        (Array.isArray(payload.pendingResponses) && payload.pendingResponses.length > 0) ||
+        payload.awaitingRecovery;
+      if (!hasWork) return;
+
+      this.toggle(true);
+      const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+      if (!iframe) return;
+      iframe.contentWindow.postMessage({ type: 'COMPUTER_USE_FORCE_OPEN' }, '*');
+      iframe.contentWindow.postMessage({ type: 'COMPUTER_USE_SESSION_STATE', ok: true, payload }, '*');
+    } catch (error) {
+      console.warn('尝试恢复电脑操作会话失败:', error);
+    }
   }
 
   async initializeSidebar() {
@@ -562,7 +585,6 @@ class CerebrSidebar {
               await chrome.runtime.sendMessage({
                 type: 'COMPUTER_USE_SYNC_STATE',
                 payload: {
-                  tabId: event.data.payload?.tabId || null,
                   status: event.data.payload?.status || 'unknown',
                   lastUrl: window.location.href,
                   title: document.title,
@@ -606,6 +628,12 @@ class CerebrSidebar {
           chrome.runtime.sendMessage({ type: 'COMPUTER_USE_CLEAR_STATE' }).catch((error) => {
             console.warn('清理电脑操作会话失败:', error);
           });
+          break;
+        }
+        case 'COMPUTER_USE_FORCE_OPEN': {
+          const iframeEl = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+          if (!iframeEl) break;
+          iframeEl.contentWindow.postMessage({ type: 'COMPUTER_USE_FORCE_OPEN' }, '*');
           break;
         }
         case 'REQUEST_COMPUTER_USE_SNAPSHOT':

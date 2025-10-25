@@ -547,6 +547,10 @@ function setupWindowMessageHandlers(appContext) {
       case 'COMPUTER_USE_SESSION_STATE':
         appContext.services.computerUseTool?.handleSessionState?.(data);
         break;
+      case 'COMPUTER_USE_FORCE_OPEN':
+        appContext.utils.closeExclusivePanels?.();
+        appContext.services.computerUseTool?.openPanel?.();
+        break;
       default:
         break;
     }

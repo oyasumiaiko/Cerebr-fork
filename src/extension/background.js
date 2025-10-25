@@ -14,7 +14,8 @@ console.log('Background script loaded at:', new Date().toISOString());
 
 const computerUseSessions = new Map();
 const COMPUTER_USE_STORAGE_PREFIX = 'computerUseSession:';
-const hasSessionStorage = !!chrome.storage?.session;
+const storageArea = chrome.storage?.local;
+const hasPersistentStorage = !!storageArea;
 
 function getTabId(sender) {
   return sender?.tab?.id ?? null;
@@ -38,13 +39,13 @@ function cloneValue(value) {
 }
 
 async function persistSessionState(tabId, state) {
-  if (!hasSessionStorage) return;
+  if (!hasPersistentStorage) return;
   const key = `${COMPUTER_USE_STORAGE_PREFIX}${tabId}`;
   try {
     if (!state) {
-      await chrome.storage.session.remove(key);
+      await storageArea.remove(key);
     } else {
-      await chrome.storage.session.set({ [key]: state });
+      await storageArea.set({ [key]: state });
     }
   } catch (error) {
     console.warn('同步电脑操作会话存储失败:', error);
@@ -52,9 +53,9 @@ async function persistSessionState(tabId, state) {
 }
 
 async function loadPersistedSessions() {
-  if (!hasSessionStorage) return;
+  if (!hasPersistentStorage) return;
   try {
-    const items = await chrome.storage.session.get(null);
+    const items = await storageArea.get(null);
     for (const [key, value] of Object.entries(items)) {
       if (!key.startsWith(COMPUTER_USE_STORAGE_PREFIX)) continue;
       if (!value || typeof value !== 'object') continue;
@@ -217,8 +218,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ...payload,
         updatedAt: Date.now()
       });
-      computerUseSessions.set(tabId, cloned);
-      persistSessionState(tabId, cloned);
+      const stored = { tabId, ...cloned };
+      computerUseSessions.set(tabId, stored);
+      persistSessionState(tabId, stored);
     }
     sendResponse?.({ ok: true });
     return true;

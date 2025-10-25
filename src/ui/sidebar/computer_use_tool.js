@@ -81,14 +81,22 @@ let pendingStateRestore = false;
     postToParent('COMPUTER_USE_CLEAR_STATE', { reason });
   }
 
+  function ensureSessionKey() {
+    if (currentSession && !currentSession.sessionKey) {
+      currentSession.sessionKey = generateRequestId('csess');
+    }
+  }
+
   function syncSessionState(overrides = {}) {
     const {
       status = 'active',
       finishReason = null,
       pendingResponses = undefined,
       note = undefined,
-      awaitingRecovery = status === 'closing'
+      awaitingRecovery = status === 'closing' || status === 'waiting-navigation'
     } = overrides;
+
+    updateStatusBadge({ status, error: status === 'error' ? note : undefined });
 
     if (!currentSession) {
       postToParent('COMPUTER_USE_SYNC_STATE', {
@@ -103,6 +111,7 @@ let pendingStateRestore = false;
       return;
     }
 
+    ensureSessionKey();
     const payload = {
       status,
       finishReason,
@@ -308,6 +317,9 @@ let pendingStateRestore = false;
     if (!dom.computerUseStatus) return;
     dom.computerUseStatus.textContent = text || '';
     dom.computerUseStatus.dataset.statusType = type;
+    if (type === 'error') {
+      updateStatusBadge({ status: 'error', error: text });
+    }
   }
 
   function setLoading(next, message) {
@@ -790,6 +802,9 @@ let pendingStateRestore = false;
     if (!state || !state.session) return;
     if (currentSession) return;
 
+    appContext.utils?.closeExclusivePanels?.();
+    openPanel();
+
     currentSession = state.session;
     latestNarration = state.narration || '';
     currentInstruction = state.instruction || currentInstruction || '';
@@ -817,6 +832,7 @@ let pendingStateRestore = false;
 
     const status = state.status || 'active';
     const pendingResponses = Array.isArray(state.pendingResponses) ? state.pendingResponses : [];
+    updateStatusBadge({ status });
 
     if (status === 'active') {
       if (isAutoMode && pendingActionQueue.length > 0) {
