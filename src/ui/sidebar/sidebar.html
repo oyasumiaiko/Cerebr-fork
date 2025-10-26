@@ -279,64 +279,67 @@
             <span class="settings-title">Gemini 电脑操作</span>
         </div>
         <div class="computer-use-body">
-            <p class="computer-use-hint">通过计算机操作模型生成准确的页面交互步骤。目前支持基础点击操作。</p>
-            <div class="computer-use-config">
-                <div class="config-group">
-                    <label for="computer-use-api-key">Gemini API Key（仅用于电脑操作）</label>
-                    <div class="config-input-wrapper">
-                        <input type="password" id="computer-use-api-key" placeholder="输入Computer Use专用Key">
-                        <button id="computer-use-toggle-key" type="button" aria-label="显示或隐藏电脑操作API Key">
-                            <i class="far fa-eye"></i>
-                        </button>
+            <div class="computer-use-control-grid">
+                <details class="computer-use-config">
+                    <summary class="config-summary">
+                        <span>高级设置</span>
+                        <i class="far fa-chevron-down" aria-hidden="true"></i>
+                    </summary>
+                    <div class="config-inner">
+                        <div class="config-row">
+                            <div class="config-group">
+                                <label for="computer-use-api-key">Gemini API Key（仅用于电脑操作）</label>
+                                <div class="config-input-wrapper">
+                                    <input type="password" id="computer-use-api-key" placeholder="输入Computer Use专用Key">
+                                    <button id="computer-use-toggle-key" type="button" aria-label="显示或隐藏电脑操作API Key">
+                                        <i class="far fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="config-group">
+                                <label for="computer-use-model">模型名称</label>
+                                <input type="text" id="computer-use-model" placeholder="gemini-2.5-computer-use-preview-10-2025">
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="config-group temperature-group">
+                                <label for="computer-use-temperature">Temperature <span id="computer-use-temp-value">0.2</span></label>
+                                <input type="range" id="computer-use-temperature" min="0" max="1" step="0.05" value="0.2">
+                            </div>
+                            <div class="config-group delay-group">
+                                <label for="computer-use-delay">执行后等待时间 <span id="computer-use-delay-value">1000ms</span></label>
+                                <input type="range" id="computer-use-delay" min="0" max="4000" step="100" value="1000">
+                            </div>
+                        </div>
+                        <p class="computer-use-tip">此处配置仅供电脑操作功能使用，不会影响聊天模型。</p>
                     </div>
+                </details>
+
+                <div class="computer-use-control-right">
+                    <div class="computer-use-toolbar">
+                        <div class="toolbar-left">
+                            <span class="mode-label">执行状态</span>
+                            <span id="computer-use-status-badge" class="computer-use-badge badge-auto">自动执行</span>
+                        </div>
+                        <div class="toolbar-actions">
+                            <button id="computer-use-run" class="computer-use-btn primary" type="button">执行指令</button>
+                            <button id="computer-use-toggle-auto" class="computer-use-btn secondary" type="button">暂停自动</button>
+                            <button id="computer-use-step" class="computer-use-btn secondary" type="button" title="执行下一步">单步执行</button>
+                            <button id="computer-use-capture" class="computer-use-btn secondary" type="button">更新截图</button>
+                        </div>
+                    </div>
+
+                    <div class="computer-use-meta-row">
+                        <span class="computer-use-instruction-tip">指令请在下方主输入框输入，执行历史会自动记录。</span>
+                        <span id="computer-use-snapshot-label" class="computer-use-meta">当前截图：尚未生成</span>
+                    </div>
+
+                    <div id="computer-use-status" class="computer-use-status"></div>
                 </div>
-                <div class="config-row">
-                    <div class="config-group">
-                        <label for="computer-use-model">模型名称</label>
-                        <input type="text" id="computer-use-model" placeholder="gemini-2.5-computer-use-preview-10-2025">
-                    </div>
-                    <div class="config-group temperature-group">
-                        <label for="computer-use-temperature">Temperature <span id="computer-use-temp-value">0.2</span></label>
-                        <input type="range" id="computer-use-temperature" min="0" max="1" step="0.05" value="0.2">
-                    </div>
-                </div>
-                <div class="config-row">
-                    <div class="config-group delay-group">
-                        <label for="computer-use-delay">执行后等待时间 <span id="computer-use-delay-value">1000ms</span></label>
-                        <input type="range" id="computer-use-delay" min="0" max="4000" step="100" value="1000">
-                    </div>
-                </div>
-                <p class="computer-use-tip">此处配置仅供电脑操作功能使用，不会影响聊天模型。</p>
             </div>
-            <div class="computer-use-mode">
-                <span class="mode-label">执行状态</span>
-                <span id="computer-use-status-badge" class="computer-use-badge badge-auto">自动执行</span>
-                <div class="mode-actions">
-                    <button id="computer-use-toggle-auto" class="computer-use-btn secondary" type="button">暂停自动</button>
-                    <button id="computer-use-step" class="computer-use-btn secondary" type="button" title="执行下一步">单步执行</button>
-                </div>
-            </div>
-            <label class="computer-use-label" for="computer-use-instruction">操作指令</label>
-            <textarea id="computer-use-instruction" class="computer-use-textarea" rows="3" placeholder="示例：点击页面右上角的登录按钮"></textarea>
-            <div class="computer-use-controls">
-                <button id="computer-use-capture" class="computer-use-btn secondary">更新截图</button>
-                <button id="computer-use-run" class="computer-use-btn primary">生成操作</button>
-            </div>
-            <div id="computer-use-snapshot-label" class="computer-use-meta">当前截图：尚未生成</div>
-            <div id="computer-use-status" class="computer-use-status"></div>
-            <div class="computer-use-result">
-                <div class="result-section">
-                    <div class="section-title">模型推理</div>
-                    <div id="computer-use-narration" class="computer-use-narration">尚无内容</div>
-                </div>
-                <div class="result-section">
-                    <div class="section-title">操作列表</div>
-                    <div id="computer-use-actions" class="computer-use-action-list"></div>
-                </div>
-                <div class="result-section">
-                    <div class="section-title">执行历史</div>
-                    <div id="computer-use-history" class="computer-use-history-list"></div>
-                </div>
+
+            <div class="computer-use-history-container">
+                <div id="computer-use-history" class="computer-use-history-list"></div>
             </div>
         </div>
     </div>

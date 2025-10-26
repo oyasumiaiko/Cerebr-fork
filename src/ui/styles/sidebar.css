@@ -979,13 +979,69 @@ input:checked + .slider::before {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    flex: 1;
+    min-height: 0;
+}
+
+.computer-use-control-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) minmax(360px, 1fr);
+    gap: 14px;
+    align-items: flex-start;
+}
+
+@media (max-width: 1080px) {
+    .computer-use-control-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .computer-use-config {
-    border: 1px solid color-mix(in srgb, var(--cerebr-border-color, rgba(255, 255, 255, 0.15)) 80%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color, rgba(255,255,255,0.15)) 80%, transparent);
     border-radius: 14px;
-    padding: 12px;
     background: color-mix(in srgb, var(--cerebr-surface, #181a1f) 92%, transparent);
+    overflow: hidden;
+}
+
+.computer-use-config:not([open]) .config-inner {
+    display: none;
+}
+
+.computer-use-control-right {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.computer-use-config summary {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--cerebr-text-color, #fff);
+    font-weight: 600;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.computer-use-config summary::-webkit-details-marker {
+    display: none;
+}
+
+.computer-use-config summary i {
+    font-size: 0.85rem;
+    color: var(--cerebr-secondary-text, #9aa0a6);
+    transition: transform 0.2s ease;
+}
+
+.computer-use-config[open] summary i {
+    transform: rotate(180deg);
+}
+
+.computer-use-config .config-inner {
+    padding: 0 16px 16px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1068,30 +1124,37 @@ input:checked + .slider::before {
     color: var(--cerebr-secondary-text, #8a8f99);
 }
 
-.computer-use-mode {
+.computer-use-toolbar {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
-    padding: 10px 12px;
+    gap: 16px;
+    padding: 12px 16px;
     border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color, rgba(255,255,255,0.15)) 80%, transparent);
     background: color-mix(in srgb, var(--cerebr-surface, #1f2229) 92%, transparent);
-    margin-bottom: 8px;
+    flex-wrap: wrap;
 }
 
-.computer-use-mode .mode-label {
-    font-size: 0.85rem;
+.toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.toolbar-left .mode-label {
+    font-size: 0.82rem;
     color: var(--cerebr-secondary-text, #9aa0a6);
     white-space: nowrap;
+    letter-spacing: 0.02em;
 }
 
 .computer-use-badge {
-    padding: 4px 10px;
+    padding: 4px 12px;
     border-radius: 999px;
-    font-size: 0.75rem;
+    font-size: 0.76rem;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
     background: rgba(46, 204, 113, 0.18);
     color: #2ecc71;
     border: 1px solid rgba(46, 204, 113, 0.25);
@@ -1110,29 +1173,95 @@ input:checked + .slider::before {
     border: 1px solid rgba(255, 99, 71, 0.25);
 }
 
-.mode-actions {
+.toolbar-actions {
     display: flex;
     gap: 8px;
     margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
-.mode-actions .computer-use-btn {
-    padding: 6px 12px;
+.toolbar-actions .computer-use-btn {
+    padding: 7px 14px;
     border-radius: 10px;
     border: 1px solid var(--cerebr-border-color, rgba(255,255,255,0.2));
     background: color-mix(in srgb, var(--cerebr-surface, #20232a) 85%, transparent);
     color: var(--cerebr-text-color, #fff);
     cursor: pointer;
+    flex: 0 0 auto;
+    min-width: 110px;
 }
 
-.mode-actions .computer-use-btn:hover:not(:disabled) {
+.toolbar-actions .computer-use-btn.primary {
+    background: var(--cerebr-highlight, #2ecc71);
+    border-color: var(--cerebr-highlight, #2ecc71);
+    color: #0f1c11;
+    box-shadow: 0 4px 16px rgba(46, 204, 113, 0.3);
+}
+
+.toolbar-actions .computer-use-btn:hover:not(:disabled) {
     background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 35%, transparent);
     border-color: var(--cerebr-highlight, #2ecc71);
 }
 
-.mode-actions .computer-use-btn:disabled {
+.toolbar-actions .computer-use-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    box-shadow: none;
+}
+
+.computer-use-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 4px 2px 0;
+}
+
+.computer-use-meta-row .computer-use-instruction-tip {
+    font-size: 0.82rem;
+    color: var(--cerebr-secondary-text, #9aa0a6);
+    flex: 1 1 auto;
+    min-width: 220px;
+}
+
+.computer-use-meta {
+    font-size: 0.78rem;
+    color: var(--cerebr-secondary-text, #9aa0a6);
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+.computer-use-history-container {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color, rgba(255,255,255,0.12)) 75%, transparent);
+    background: color-mix(in srgb, var(--cerebr-surface, #181b22) 90%, transparent);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+}
+
+.computer-use-history-list {
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.computer-use-history-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.computer-use-history-list::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cerebr-border-color, rgba(255,255,255,0.12)) 70%, transparent);
+}
+
+.computer-use-history-list::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 .computer-use-hint {
@@ -1194,11 +1323,6 @@ input:checked + .slider::before {
     opacity: 0.6;
     cursor: not-allowed;
     box-shadow: none;
-}
-
-.computer-use-meta {
-    font-size: 0.82rem;
-    color: var(--cerebr-secondary-text, #9aa0a6);
 }
 
 .computer-use-status {
@@ -5091,3 +5215,7 @@ html.fullscreen-mode::before {
   /* max-height: 100%; */
   /* object-fit: contain; */
 }
+
+
+
+
