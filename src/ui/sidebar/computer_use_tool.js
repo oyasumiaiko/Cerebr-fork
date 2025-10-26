@@ -31,6 +31,28 @@ let actionSettleDelayMs = normalizeDelay(
 );
 let isAutoMode = true;
 let pendingStateRestore = false;
+let historyEntries = [];
+
+  function getPageInfo() {
+    const info = appContext.state?.pageInfo;
+    if (info && info.url) return info;
+    const fallback = typeof window.cerebr === 'object' ? window.cerebr?.pageInfo : null;
+    return fallback || {};
+  }
+
+  function getPageUrl() {
+    const info = getPageInfo();
+    if (info.url) return info.url;
+    if (Array.isArray(historyEntries) && historyEntries.length) {
+      const last = historyEntries[historyEntries.length - 1];
+      if (last?.url) return last.url;
+    }
+    return '';
+  }
+
+  function getPageTitle() {
+    return getPageInfo().title || document.title;
+  }
 
   function normalizeDelay(value) {
     const num = Number(value);
@@ -79,6 +101,8 @@ let pendingStateRestore = false;
 
   function clearSessionState(reason = 'clear') {
     postToParent('COMPUTER_USE_CLEAR_STATE', { reason });
+    historyEntries = [];
+    renderHistory();
   }
 
   function ensureSessionKey() {
@@ -106,7 +130,8 @@ let pendingStateRestore = false;
         note,
         session: null,
         updatedAt: Date.now(),
-        awaitingRecovery
+        awaitingRecovery,
+        history: cloneForTransport(historyEntries)
       });
       return;
     }
@@ -124,10 +149,11 @@ let pendingStateRestore = false;
       executionMode,
       latestScreenshotAt,
       actionSettleDelayMs,
-      url: window.location.href,
-      title: document.title,
+      url: getPageUrl(),
+      title: getPageTitle(),
       updatedAt: Date.now(),
-      awaitingRecovery
+      awaitingRecovery,
+      history: cloneForTransport(historyEntries)
     };
     postToParent('COMPUTER_USE_SYNC_STATE', payload);
   }
@@ -173,6 +199,7 @@ let pendingStateRestore = false;
 
     executionMode = cachedConfig.executionMode || MODE_AUTO;
     setExecutionMode(executionMode, { persist: false, updateUI: true });
+    renderHistory();
   }
 
   function bindConfigSubscription() {
@@ -230,7 +257,8 @@ let pendingStateRestore = false;
     });
 
     computerUseToggleAuto?.addEventListener('click', toggleAutoMode);
-    if (computerUseStatusBadge) updateStatusBadge();
+    updateStatusBadge();
+    renderHistory();
   }
 
   function populateConfigFields(config) {
@@ -380,6 +408,118 @@ let pendingStateRestore = false;
     updateStepButtonState();
   }
 
+  function limitHistory() {
+    const LIMIT = 100;
+    if (historyEntries.length > LIMIT) {
+      historyEntries = historyEntries.slice(historyEntries.length - LIMIT);
+    }
+  }
+
+  function appendHistoryEntry(entry) {
+    const enriched = {
+      id: generateRequestId('hist'),
+      timestamp: Date.now(),
+      ...entry
+    };
+    historyEntries.push(enriched);
+    limitHistory();
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const list = dom.computerUseHistoryList;
+    if (!list) return;
+    list.innerHTML = '';
+    if (!historyEntries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'computer-use-history-entry';
+      empty.textContent = '暂无历史记录';
+      list.appendChild(empty);
+      return;
+    }
+
+    historyEntries.forEach((item, index) => {
+      const entry = document.createElement('div');
+      entry.className = 'computer-use-history-entry';
+
+      const header = document.createElement('div');
+      header.className = 'history-entry-header';
+
+      const title = document.createElement('span');
+      title.className = 'history-entry-title';
+      title.textContent = item.title || (item.type === 'model_response' ? '模型响应' : item.type === 'action_result' ? '动作执行' : '事件');
+      header.appendChild(title);
+
+      const time = document.createElement('span');
+      time.className = 'history-entry-meta';
+      time.textContent = new Date(item.timestamp).toLocaleTimeString();
+      header.appendChild(time);
+
+      entry.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'history-entry-body';
+
+      if (item.narration) {
+        const p = document.createElement('div');
+        p.textContent = item.narration;
+        body.appendChild(p);
+      }
+
+      if (Array.isArray(item.actions) && item.actions.length) {
+        const ul = document.createElement('ul');
+        ul.className = 'history-entry-actions';
+        item.actions.forEach((action) => {
+          const li = document.createElement('li');
+          const argsText = action.args ? ` ${JSON.stringify(action.args)}` : '';
+          li.textContent = `${action.name}${argsText}`;
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+      }
+
+      if (item.action) {
+        const actionInfo = document.createElement('div');
+        actionInfo.textContent = `动作：${item.action.name}`;
+        body.appendChild(actionInfo);
+      }
+
+      if (item.url) {
+        const urlInfo = document.createElement('div');
+        urlInfo.className = 'history-entry-meta';
+        urlInfo.textContent = item.url;
+        body.appendChild(urlInfo);
+      }
+
+      if (item.screenshot) {
+        const img = document.createElement('img');
+        img.className = 'history-entry-screenshot';
+        img.src = item.screenshot;
+        img.alt = '截图';
+        body.appendChild(img);
+      }
+
+      if (item.note) {
+        const note = document.createElement('div');
+        note.className = 'history-entry-meta';
+        note.textContent = item.note;
+        body.appendChild(note);
+      }
+
+      entry.appendChild(body);
+
+      const nextItem = historyEntries[index + 1];
+      if (nextItem && nextItem.type === 'model_response') {
+        const divider = document.createElement('div');
+        divider.className = 'history-entry-divider';
+        entry.appendChild(divider);
+      }
+
+      list.appendChild(entry);
+    });
+    list.scrollTop = list.scrollHeight;
+  }
+
   function renderActionsList() {
     if (dom.computerUseNarration) {
       dom.computerUseNarration.textContent = latestNarration || '尚无内容';
@@ -512,6 +652,14 @@ let pendingStateRestore = false;
       const initialActions = startResult.actions || [];
       updatePendingActions(initialActions);
       setLoading(false);
+      appendHistoryEntry({
+        type: 'model_response',
+        title: '模型响应',
+        narration: latestNarration,
+        actions: initialActions,
+        url: getPageUrl(),
+        screenshot: latestScreenshot
+      });
       syncSessionState({ status: 'active', pendingResponses: [] });
 
       const hasActions = initialActions.length > 0;
@@ -613,7 +761,7 @@ let pendingStateRestore = false;
       const base64 = extractBase64(latestScreenshot);
       const responsePayload = {
         success: true,
-        url: result.url || window.location.href
+        url: result.url || getPageUrl()
       };
       if (result.navigation) responsePayload.navigation = true;
       if (result.selector) responsePayload.selector = result.selector;
@@ -628,6 +776,15 @@ let pendingStateRestore = false;
         response: responsePayload,
         parts: base64 ? [{ inline_data: { mime_type: 'image/png', data: base64 } }] : []
       };
+
+      appendHistoryEntry({
+        type: 'action_result',
+        title: `动作：${workingAction.name}`,
+        action: workingAction,
+        result: responsePayload,
+        url: responsePayload.url,
+        screenshot: latestScreenshot
+      });
 
       syncSessionState({
         status: result.navigation ? 'waiting-navigation' : 'pending-response',
@@ -682,6 +839,13 @@ let pendingStateRestore = false;
       const newActions = next.actions || [];
       updatePendingActions(newActions);
       setLoading(false);
+      appendHistoryEntry({
+        type: 'model_response',
+        title: '模型响应',
+        narration: latestNarration,
+        actions: newActions,
+        url: getPageUrl()
+      });
       syncSessionState({ status: 'active', pendingResponses: [] });
 
       const hasActions = newActions.length > 0;
@@ -810,6 +974,8 @@ let pendingStateRestore = false;
     currentInstruction = state.instruction || currentInstruction || '';
     actionSettleDelayMs = normalizeDelay(state.actionSettleDelayMs ?? actionSettleDelayMs);
     latestScreenshotAt = state.latestScreenshotAt || latestScreenshotAt;
+    historyEntries = Array.isArray(state.history) ? state.history : [];
+    renderHistory();
 
     if (dom.computerUseInstruction && currentInstruction) {
       dom.computerUseInstruction.value = currentInstruction;

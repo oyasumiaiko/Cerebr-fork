@@ -98,6 +98,7 @@ export function createSidebarAppContext(isStandalone) {
     computerUseStatus: document.getElementById('computer-use-status'),
     computerUseNarration: document.getElementById('computer-use-narration'),
     computerUseActionList: document.getElementById('computer-use-actions'),
+    computerUseHistoryList: document.getElementById('computer-use-history'),
     computerUseApiKey: document.getElementById('computer-use-api-key'),
     computerUseToggleKey: document.getElementById('computer-use-toggle-key'),
     computerUseModelInput: document.getElementById('computer-use-model'),
