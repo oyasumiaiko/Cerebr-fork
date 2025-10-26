@@ -33,6 +33,8 @@ let isAutoMode = true;
 let pendingStateRestore = false;
 let historyEntries = [];
 let currentRoundId = null;
+let currentInstructionEntryId = null;
+let currentRequestAbortController = null;
 let chatInputDraft = { text: '', images: '' };
 let computerUseDraft = { text: '', images: '' };
 let originalPlaceholder = '';
@@ -92,6 +94,30 @@ let isComputerUseInputActive = false;
     if (!inputEl) return;
     const event = new Event('input', { bubbles: true });
     inputEl.dispatchEvent(event);
+  }
+
+  function beginRequest(type) {
+    abortCurrentRequest(type);
+    const controller = new AbortController();
+    currentRequestAbortController = controller;
+    return controller;
+  }
+
+  function endRequest(controller) {
+    if (currentRequestAbortController === controller) {
+      currentRequestAbortController = null;
+    }
+  }
+
+  function abortCurrentRequest() {
+    if (!currentRequestAbortController) return;
+    try {
+      currentRequestAbortController.abort();
+    } catch (error) {
+      console.warn('终止电脑操作请求失败:', error);
+    } finally {
+      currentRequestAbortController = null;
+    }
   }
 
   function getRawInputText() {
@@ -194,13 +220,14 @@ let isComputerUseInputActive = false;
 
   function startInstructionRound(instruction) {
     currentRoundId = generateRequestId('round');
-    appendHistoryEntry({
+    const entry = appendHistoryEntry({
       type: 'instruction',
       title: '用户指令',
       role: 'user',
       content: instruction,
       roundId: currentRoundId
     });
+    currentInstructionEntryId = entry.id;
   }
 
   function startFollowupRound(label) {
@@ -212,6 +239,16 @@ let isComputerUseInputActive = false;
         roundId: currentRoundId
       });
     }
+    currentInstructionEntryId = null;
+  }
+
+  function attachScreenshotToInstruction(dataUrl) {
+    if (!dataUrl || !currentInstructionEntryId) return;
+    const entry = historyEntries.find((item) => item.id === currentInstructionEntryId);
+    if (!entry) return;
+    entry.screenshot = dataUrl;
+    entry.url = getPageUrl();
+    renderHistory();
   }
 
 
@@ -245,9 +282,11 @@ let isComputerUseInputActive = false;
     if (reason && reason !== 'restart') {
       historyEntries = [];
       currentRoundId = null;
+      currentInstructionEntryId = null;
       renderHistory();
     } else {
       currentRoundId = null;
+      currentInstructionEntryId = null;
     }
   }
 
@@ -499,6 +538,7 @@ let isComputerUseInputActive = false;
 
   function closePanel() {
     if (!dom.computerUsePanel) return;
+    abortCurrentRequest();
     if (isComputerUseInputActive) {
       computerUseDraft = captureInputDraft();
       applyInputDraft(chatInputDraft, { focus: false, allowImages: true });
@@ -532,8 +572,8 @@ let isComputerUseInputActive = false;
       dom.computerUseStepButton.disabled = isAutoMode || isLoading || pendingActionQueue.length === 0;
     }
     if (dom.computerUseToggleAuto) {
-      dom.computerUseToggleAuto.textContent = isAutoMode ? '暂停自动' : '恢复自动';
-      dom.computerUseToggleAuto.disabled = isLoading && isAutoMode;
+      dom.computerUseToggleAuto.textContent = isAutoMode ? '暂停执行' : '继续执行';
+      dom.computerUseToggleAuto.disabled = false;
     }
     updateStatusBadge();
   }
@@ -551,22 +591,26 @@ let isComputerUseInputActive = false;
       badge.textContent = '已暂停';
     } else {
       badge.classList.add('badge-auto');
-      badge.textContent = '自动执行';
+      badge.textContent = '执行中';
     }
   }
 
   function updateAutoUI() {
     updateStepButtonState();
     if (!isAutoMode) {
-      setStatus('已暂停自动执行，请手动单步完成操作。', 'info');
+      setStatus('已暂停执行，可继续或单步执行。', 'info');
     }
   }
 
   function toggleAutoMode() {
-    isAutoMode = !isAutoMode;
-    setExecutionMode(isAutoMode ? MODE_AUTO : MODE_MANUAL, { persist: true, updateUI: true });
-    syncSessionState({ status: isAutoMode ? 'active' : 'paused', pendingResponses: [] });
-    if (isAutoMode && pendingActionQueue.length && currentSession) {
+    const nextMode = isAutoMode ? MODE_MANUAL : MODE_AUTO;
+    if (isAutoMode) {
+      abortCurrentRequest();
+      setStatus('已暂停执行，可继续或单步操作。', 'info');
+    }
+    setExecutionMode(nextMode, { persist: true, updateUI: true });
+    syncSessionState({ status: nextMode === MODE_AUTO ? 'active' : 'paused', pendingResponses: [] });
+    if (nextMode === MODE_AUTO && pendingActionQueue.length && currentSession) {
       runActionsSequence();
     }
   }
@@ -597,7 +641,9 @@ let isComputerUseInputActive = false;
     renderHistory();
     if (entry?.type === 'model_response' || entry?.endRound) {
       currentRoundId = null;
+      currentInstructionEntryId = null;
     }
+    return enriched;
   }
 
   function renderHistory() {
@@ -632,6 +678,19 @@ let isComputerUseInputActive = false;
         content: item.content,
         time: item.timestamp
       });
+      if (item.url) {
+        const meta = document.createElement('div');
+        meta.className = 'history-entry-meta';
+        meta.textContent = item.url;
+        bubble.appendChild(meta);
+      }
+      if (item.screenshot) {
+        const img = document.createElement('img');
+        img.className = 'history-entry-screenshot';
+        img.src = item.screenshot;
+        img.alt = '指令附带截图';
+        bubble.appendChild(img);
+      }
       entryEl.appendChild(bubble);
     } else if (item.type === 'model_response') {
       const bubble = createHistoryBubble({
@@ -650,13 +709,6 @@ let isComputerUseInputActive = false;
           actionList.appendChild(li);
         });
         bubble.appendChild(actionList);
-      }
-      if (item.screenshot) {
-        const img = document.createElement('img');
-        img.className = 'history-entry-screenshot';
-        img.src = item.screenshot;
-        img.alt = '最新截图';
-        bubble.appendChild(img);
       }
       entryEl.appendChild(bubble);
     } else if (item.type === 'action_result') {
@@ -849,6 +901,7 @@ let isComputerUseInputActive = false;
       return;
     }
 
+    let controller = null;
     try {
       pendingStateRestore = false;
       currentInstruction = instruction;
@@ -866,27 +919,25 @@ let isComputerUseInputActive = false;
       await refreshScreenshot({ silent: true });
       const screenshot = latestScreenshot;
       if (!screenshot) throw new Error('截图失败，无法构建请求');
-      appendHistoryEntry({
-        type: 'screenshot',
-        title: '页面截图',
-        screenshot,
-        url: getPageUrl(),
-        roundId: currentRoundId
-      });
+      attachScreenshotToInstruction(screenshot);
+
+      controller = beginRequest('start');
       setLoading(true, '正在向 Gemini 请求操作...');
-      const startResult = await computerUseApi.startSession({ instruction, screenshotDataUrl: screenshot });
+      const startResult = await computerUseApi.startSession({
+        instruction,
+        screenshotDataUrl: screenshot,
+        signal: controller.signal
+      });
       currentSession = startResult.session;
       latestNarration = startResult.narration || '';
       const initialActions = startResult.actions || [];
       updatePendingActions(initialActions);
-      setLoading(false);
       appendHistoryEntry({
         type: 'model_response',
         title: '模型响应',
         narration: latestNarration,
         actions: initialActions,
         url: getPageUrl(),
-        screenshot: latestScreenshot,
         roundId: currentRoundId
       });
       syncSessionState({ status: 'active', pendingResponses: [] });
@@ -909,10 +960,16 @@ let isComputerUseInputActive = false;
         setStatus('等待模型返回新动作，稍后点击 >|。', 'info');
       }
     } catch (error) {
-      console.error('调用 Gemini Computer Use 失败:', error);
-      setStatus(error.message || '请求失败，请检查控制台日志', 'error');
+      if (error?.name === 'AbortError') {
+        setStatus('已暂停执行，等待继续。', 'info');
+      } else {
+        console.error('调用 Gemini Computer Use 失败:', error);
+        setStatus(error.message || '请求失败，请检查控制台日志', 'error');
+        clearSessionState('error');
+      }
+    } finally {
+      endRequest(controller);
       setLoading(false);
-      clearSessionState('error');
     }
   }
 
@@ -1059,27 +1116,28 @@ let isComputerUseInputActive = false;
 
   async function advanceSessionWithResponses(responses, { triggerAuto = isAutoMode } = {}) {
     if (!currentSession) return;
+    let controller = null;
     try {
       if (!currentRoundId) {
         startFollowupRound(triggerAuto ? '自动继续' : '手动继续');
       }
+      controller = beginRequest('continue');
       setLoading(true, '正在请求下一步动作...');
       const next = await computerUseApi.continueSession({
         session: currentSession,
-        functionResponses: responses
+        functionResponses: responses,
+        signal: controller.signal
       });
       currentSession = next.session;
       latestNarration = next.narration || '';
       const newActions = next.actions || [];
       updatePendingActions(newActions);
-      setLoading(false);
       appendHistoryEntry({
         type: 'model_response',
         title: '模型响应',
         narration: latestNarration,
         actions: newActions,
         url: getPageUrl(),
-        screenshot: latestScreenshot,
         roundId: currentRoundId
       });
       syncSessionState({ status: 'active', pendingResponses: [] });
@@ -1104,14 +1162,20 @@ let isComputerUseInputActive = false;
         }
       }
     } catch (error) {
-      console.error('继续电脑操作流程失败:', error);
-      setStatus(error.message || '继续执行失败', 'error');
+      if (error?.name === 'AbortError') {
+        setStatus('已暂停执行，等待继续。', 'info');
+      } else {
+        console.error('继续电脑操作流程失败:', error);
+        setStatus(error.message || '继续执行失败', 'error');
+        syncSessionState({
+          status: 'error',
+          pendingResponses: cloneForTransport(responses),
+          note: error?.message || 'continue-failed'
+        });
+      }
+    } finally {
+      endRequest(controller);
       setLoading(false);
-      syncSessionState({
-        status: 'error',
-        pendingResponses: cloneForTransport(responses),
-        note: error?.message || 'continue-failed'
-      });
     }
   }
 
@@ -1201,6 +1265,14 @@ let isComputerUseInputActive = false;
     historyEntries = Array.isArray(state.history) ? state.history : [];
     renderHistory();
     currentRoundId = historyEntries.length ? historyEntries[historyEntries.length - 1].roundId : null;
+    currentInstructionEntryId = null;
+    if (historyEntries.length) {
+      const lastRound = currentRoundId;
+      const candidate = [...historyEntries].reverse().find((item) => item.type === 'instruction' && (!lastRound || item.roundId === lastRound));
+      if (candidate) {
+        currentInstructionEntryId = candidate.id;
+      }
+    }
 
     if (isComputerUseInputActive) {
       setInstructionTextToInput(currentInstruction || '');

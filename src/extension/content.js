@@ -1759,6 +1759,46 @@ function getViewportPoint(normalizedX, normalizedY) {
   return { clientX, clientY };
 }
 
+function getSidebarElementsForHitTest() {
+  const elements = [];
+  if (sidebar?.sidebar) elements.push(sidebar.sidebar);
+  const iframe = document.querySelector('iframe.cerebr-sidebar__iframe');
+  if (iframe) elements.push(iframe);
+  return elements;
+}
+
+function isSidebarHit(element) {
+  if (!element) return false;
+  const candidates = getSidebarElementsForHitTest();
+  return candidates.some((node) => node && (element === node || node.contains(element)));
+}
+
+function getClickableTarget(clientX, clientY) {
+  let target = document.elementFromPoint(clientX, clientY);
+  if (!target) return null;
+  if (!isSidebarHit(target)) {
+    return target;
+  }
+
+  const elementsToHide = getSidebarElementsForHitTest();
+  const restoreRecords = elementsToHide.map((el) => ({ el, visibility: el.style.visibility }));
+  try {
+    restoreRecords.forEach(({ el }) => {
+      if (el) el.style.visibility = 'hidden';
+    });
+    target = document.elementFromPoint(clientX, clientY);
+  } finally {
+    restoreRecords.forEach(({ el, visibility }) => {
+      if (el) el.style.visibility = visibility || '';
+    });
+  }
+
+  if (isSidebarHit(target)) {
+    return null;
+  }
+  return target;
+}
+
 function performNormalizedClick(normalizedX, normalizedY) {
   return withSidebarHidden(() => {
     const point = getViewportPoint(normalizedX, normalizedY);
@@ -1766,7 +1806,7 @@ function performNormalizedClick(normalizedX, normalizedY) {
       return { success: false, error: '无法获取视口尺寸' };
     }
     const { clientX, clientY } = point;
-    const target = document.elementFromPoint(clientX, clientY);
+    const target = getClickableTarget(clientX, clientY);
     if (!target) {
       return { success: false, error: '未找到可点击元素' };
     }
@@ -1799,7 +1839,7 @@ function performHoverAt(normalizedX, normalizedY) {
       return { success: false, error: '无法获取视口尺寸' };
     }
     const { clientX, clientY } = point;
-    const target = document.elementFromPoint(clientX, clientY);
+    const target = getClickableTarget(clientX, clientY);
     if (!target) {
       return { success: false, error: '未找到目标元素' };
     }
@@ -1866,7 +1906,7 @@ function performTypeTextAt(args = {}) {
       return { success: false, error: '无法获取视口尺寸' };
     }
     const { clientX, clientY } = point;
-    const target = document.elementFromPoint(clientX, clientY);
+    const target = getClickableTarget(clientX, clientY);
     if (!target) {
       return { success: false, error: '未找到目标元素' };
     }
@@ -1986,7 +2026,7 @@ function performScrollAt(args = {}) {
   }
   return withSidebarHidden(() => {
     const { clientX, clientY } = point;
-    const target = document.elementFromPoint(clientX, clientY);
+    const target = getClickableTarget(clientX, clientY);
     if (!target) {
       return { success: false, error: '未找到目标元素' };
     }
@@ -2033,7 +2073,7 @@ function performDragAndDrop(args = {}) {
     return { success: false, error: '拖拽坐标无效' };
   }
   return withSidebarHidden(() => {
-    const source = document.elementFromPoint(startPoint.clientX, startPoint.clientY);
+    const source = getClickableTarget(startPoint.clientX, startPoint.clientY);
     if (!source) {
       return { success: false, error: '未找到拖拽起始元素' };
     }

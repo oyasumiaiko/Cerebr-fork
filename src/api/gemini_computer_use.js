@@ -269,11 +269,12 @@ export function createComputerUseApi(appContext) {
    * @param {Object} body
    * @returns {Promise<Object>}
    */
-  async function callGemini(endpoint, body) {
+  async function callGemini(endpoint, body, { signal } = {}) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {
@@ -364,7 +365,7 @@ export function createComputerUseApi(appContext) {
    * @param {string} options.screenshotDataUrl - 当前页面的截图（dataURL）
    * @returns {Promise<{ narration: string, actions: Array<Object>, candidate: Object }>}
    */
-  async function startSession({ instruction, screenshotDataUrl }) {
+  async function startSession({ instruction, screenshotDataUrl, signal }) {
     if (!instruction || !instruction.trim()) {
       throw new Error('请输入要执行的操作指令');
     }
@@ -401,7 +402,7 @@ export function createComputerUseApi(appContext) {
 
     try {
       const requestBody = buildRequestBody([initialContent], temperature);
-      const payload = await callGemini(endpoint, requestBody);
+      const payload = await callGemini(endpoint, requestBody, { signal });
       const parsed = normalizeResponse(payload);
       const sessionContext = createSessionContext([initialContent], payload);
       const sessionMeta = {
@@ -421,7 +422,7 @@ export function createComputerUseApi(appContext) {
     }
   }
 
-  async function continueSession({ session, functionResponses }) {
+  async function continueSession({ session, functionResponses, signal }) {
     if (!session || !Array.isArray(session?.contents) || session.contents.length === 0) {
       throw new Error('缺少会话信息，无法继续电脑操作流程');
     }
@@ -459,7 +460,7 @@ export function createComputerUseApi(appContext) {
     const requestBody = buildRequestBody(nextContents, temperature);
 
     try {
-      const payload = await callGemini(endpoint, requestBody);
+      const payload = await callGemini(endpoint, requestBody, { signal });
       const parsed = normalizeResponse(payload);
       const sessionContext = createSessionContext(nextContents, payload);
       const updatedSession = {
