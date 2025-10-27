@@ -1797,9 +1797,17 @@ function captureScreenshotForComputerUse() {
 
 function buildCssSelector(element) {
   if (!element || !(element instanceof Element)) return '';
+  const sidebarIframe = getSidebarElementsForHitTest().find((node) => node instanceof HTMLIFrameElement);
+  if (sidebarIframe && (element === sidebarIframe || sidebarIframe.contains(element))) {
+    return 'window-content';
+  }
   const path = [];
   let current = element;
   while (current && current.nodeType === Node.ELEMENT_NODE) {
+    if (sidebarIframe && current === sidebarIframe) {
+      path.unshift('window-content');
+      break;
+    }
     let selector = current.tagName.toLowerCase();
     if (current.id) {
       selector += `#${current.id}`;
