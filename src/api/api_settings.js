@@ -27,8 +27,8 @@ export function createApiManager(appContext) {
   let selectedConfigIndex = 0;
   // 用于存储每个配置下次应使用的 API Key 索引 (内存中)
   const apiKeyUsageIndex = {};
-  // API Key 黑名单（本地持久化），key => 过期时间戳(ms)
-  // 设计：成功的 key 不轮换；遇到 429 将该 key 拉入黑名单 24 小时；遇到 400 删除该 key
+  // API Key 黑名单（本地持久化），结构为 Map<key, expiresAtMs>
+  // 约定：429 时加入黑名单 24 小时；400/403 等不可恢复错误写入 -1 表示永久失效
   const BLACKLIST_STORAGE_KEY = 'apiKeyBlacklist';
   let apiKeyBlacklist = {};
 
@@ -80,11 +80,19 @@ export function createApiManager(appContext) {
     try {
       const data = await chrome.storage.local.get([BLACKLIST_STORAGE_KEY]);
       const stored = data[BLACKLIST_STORAGE_KEY] || {};
-      // 清理已过期条目
       const now = Date.now();
       const cleaned = {};
       for (const k in stored) {
-        if (typeof stored[k] === 'number' && stored[k] > now) cleaned[k] = stored[k];
+        const raw = stored[k];
+        const value = Number(raw);
+        if (!Number.isFinite(value) && value !== -1) continue;
+        if (value === -1) {
+          cleaned[k] = -1;
+          continue;
+        }
+        if (value > now) {
+          cleaned[k] = value;
+        }
       }
       apiKeyBlacklist = cleaned;
       if (Object.keys(stored).length !== Object.keys(cleaned).length) {
@@ -105,12 +113,15 @@ export function createApiManager(appContext) {
   }
 
   function isKeyBlacklisted(key) {
-    if (!key) return false;
-    const exp = apiKeyBlacklist[key];
-    if (!exp) return false;
+    const normalizedKey = (key || '').trim();
+    if (!normalizedKey) return false;
+    const expRaw = apiKeyBlacklist[normalizedKey];
+    const exp = Number(expRaw);
+    if (!Number.isFinite(exp) && exp !== -1) return false;
+    if (exp === -1) return true;
     if (exp <= Date.now()) {
       // 过期清理（惰性）
-      delete apiKeyBlacklist[key];
+      delete apiKeyBlacklist[normalizedKey];
       // 异步落盘但不 await，避免阻塞调用方
       saveApiKeyBlacklist();
       return false;
@@ -119,9 +130,18 @@ export function createApiManager(appContext) {
   }
 
   async function blacklistKey(key, durationMs) {
-    if (!key) return;
-    const until = Date.now() + Math.max(0, Number(durationMs) || 0);
-    apiKeyBlacklist[key] = until;
+    const normalizedKey = (key || '').trim();
+    if (!normalizedKey) return;
+    let expiresAt = -1;
+    const durationNumber = Number(durationMs);
+    if (Number.isFinite(durationNumber) && durationNumber >= 0) {
+      expiresAt = Date.now() + durationNumber;
+    } else if (durationNumber === -1) {
+      expiresAt = -1;
+    } else {
+      expiresAt = Date.now();
+    }
+    apiKeyBlacklist[normalizedKey] = expiresAt;
     await saveApiKeyBlacklist();
   }
 
@@ -137,22 +157,6 @@ export function createApiManager(appContext) {
       if (!isKeyBlacklisted(candidate)) return candidateIndex;
     }
     return -1;
-  }
-
-  function removeKeyFromConfig(config, keyToRemove) {
-    if (!config) return false;
-    if (Array.isArray(config.apiKey)) {
-      const beforeLen = config.apiKey.length;
-      config.apiKey = config.apiKey.filter(k => (k || '').trim() && k !== keyToRemove);
-      return config.apiKey.length !== beforeLen;
-    }
-    if (typeof config.apiKey === 'string') {
-      if (config.apiKey === keyToRemove) {
-        config.apiKey = '';
-        return true;
-      }
-    }
-    return false;
   }
 
   async function saveConfigsToSyncChunked(configs) {
@@ -1017,7 +1021,7 @@ export function createApiManager(appContext) {
       try { await loadApiKeyBlacklist(); } catch (_) {}
     }
 
-    // 选择可用的 Key：成功不轮换；429 才轮换；400 直接删除该 key
+    // 选择可用的 Key：成功不轮换；429 临时黑名单；400/403 永久黑名单
     const tried = new Set();
     let lastErrorResponse = null;
 
@@ -1033,7 +1037,7 @@ export function createApiManager(appContext) {
     if (!isArrayKeys) {
       const singleKey = keysArray[0];
       if (isKeyBlacklisted(singleKey)) {
-        throw new Error('当前 API Key 因 429 已进入黑名单，24 小时内不可用');
+        throw new Error('当前 API Key 已被标记为不可用，请更新配置后重试');
       }
     }
 
@@ -1106,30 +1110,20 @@ export function createApiManager(appContext) {
         return response;
       }
 
-      // 处理 400：认为 key 无效，直接删除，并尝试下一个 key
+      // 处理 400/403：标记 key 永久不可用
       if (response.status === 400 || response.status === 403) {
         lastErrorResponse = response;
-        const removed = removeKeyFromConfig(config, selectedKey);
-        if (removed) {
-          // 如果删除的是当前索引位置的 key，需要修正索引
-          if (isArrayKeys) {
-            // 若删除后数组变短，当前索引向后取模
-            const len = Array.isArray(config.apiKey) ? config.apiKey.length : 0;
-            if (len > 0) {
-              apiKeyUsageIndex[configId] = Math.min(apiKeyUsageIndex[configId] || 0, len - 1);
-            } else {
-              apiKeyUsageIndex[configId] = 0;
-            }
-          }
-          try { await saveAPIConfigs(); } catch (_) {}
-        }
-        // 标记该 key 已尝试
         tried.add(selectedKey);
-        // 若还有其它 key，继续；否则返回响应
+        try { await blacklistKey(selectedKey, -1); } catch (_) {}
         if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
-          continue; // 尝试下一个
+          const nextIdx = getNextUsableKeyIndex(config, (selectedIndex + 1) % config.apiKey.length, tried);
+          if (nextIdx === -1) {
+            return response;
+          }
+          apiKeyUsageIndex[configId] = nextIdx;
+          continue;
         }
-        return response; // 无剩余 key
+        return response;
       }
 
       // 其他错误：直接返回给上层处理（不更改轮换状态）
