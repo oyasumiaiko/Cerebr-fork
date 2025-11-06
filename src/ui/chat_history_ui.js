@@ -906,6 +906,33 @@ export function createChatHistoryUI(appContext) {
     });
     menu.appendChild(renameOption); // 添加重命名选项
 
+    // 转到对话 URL 选项
+    const openUrlOption = document.createElement('div');
+    openUrlOption.textContent = '转到对话 URL';
+    openUrlOption.classList.add('chat-history-context-menu-option');
+    openUrlOption.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      menu.remove();
+      try {
+        const conversation = await getConversationFromCacheOrLoad(conversationId);
+        const url = typeof conversation?.url === 'string' ? conversation.url.trim() : '';
+        if (url && /^https?:\/\//i.test(url)) {
+          try {
+            window.open(url, '_blank', 'noopener');
+          } catch (err) {
+            console.error('打开对话 URL 失败:', err);
+            showNotification({ message: '无法打开链接，请检查浏览器设置', type: 'error', duration: 2200 });
+          }
+        } else {
+          showNotification({ message: '该对话没有关联 URL', duration: 2200 });
+        }
+      } catch (error) {
+        console.error('获取对话 URL 失败:', error);
+        showNotification({ message: '无法打开对话 URL，请重试', type: 'error', duration: 2200 });
+      }
+    });
+    menu.appendChild(openUrlOption);
+
     // 复制聊天记录选项
     const copyOption = document.createElement('div');
     copyOption.textContent = '以 JSON 格式复制';
