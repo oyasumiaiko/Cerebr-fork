@@ -81,6 +81,15 @@ function splitByCodeFences(text) {
 }
 
 /**
+ * 生成数学占位符，使用纯 ASCII 避免在 DOMPurify 过程中被实体化。
+ * @param {number} index - 自增索引
+ * @returns {string}
+ */
+function createMathPlaceholder(index) {
+  return `CEREBRMATHPLACEHOLDER${index}END`;
+}
+
+/**
  * 在非代码段中提取数学表达式为占位符。
  * 支持：
  * - \(...\) 行内
@@ -98,21 +107,21 @@ function extractMathPlaceholders(text) {
 
   // 1) \\[…\\] 块级
   work = work.replace(/\\\[([\s\S]+?)\\\]/g, (m, inner) => {
-    const placeholder = `\u2063MATH_${counter++}\u2063`;
+    const placeholder = createMathPlaceholder(counter++);
     mathTokens.push({ placeholder, content: inner, display: true });
     return placeholder;
   });
 
   // 2) \\\\\(...\\) 行内
   work = work.replace(/\\\(([\s\S]+?)\\\)/g, (m, inner) => {
-    const placeholder = `\u2063MATH_${counter++}\u2063`;
+    const placeholder = createMathPlaceholder(counter++);
     mathTokens.push({ placeholder, content: inner, display: false });
     return placeholder;
   });
 
   // 3) $$...$$ 块级（不跨越代码块，此函数只在纯文本段落上调用）
   work = work.replace(/\$\$([\s\S]+?)\$\$/g, (m, inner) => {
-    const placeholder = `\u2063MATH_${counter++}\u2063`;
+    const placeholder = createMathPlaceholder(counter++);
     mathTokens.push({ placeholder, content: inner.trim(), display: true });
     return placeholder;
   });
@@ -123,7 +132,7 @@ function extractMathPlaceholders(text) {
 //     const invalidPre = /[\d\s]$/.test(pre);
 //     const looksLikeMath = /[A-Za-z\\^_{}\\\\]/.test(inner);
 //     if (invalidPre || !looksLikeMath) return m; // 放弃替换
-//     const placeholder = `\u2063MATH_${counter++}\u2063`;
+//     const placeholder = createMathPlaceholder(counter++);
 //     mathTokens.push({ placeholder, content: inner.trim(), display: false });
 //     return `${pre}${placeholder}`;
 //   });
@@ -248,16 +257,13 @@ export function renderMarkdownSafe(markdownText, options = {}) {
 
   let html = marked.parse(rebuilt);
 
-  // 4) 恢复数学（KaTeX 渲染）
-  html = restoreMath(html, collectedMathTokens);
-
-  // 5) DOMPurify 清洗（严格白名单）
+  // 4) DOMPurify 清洗（严格白名单）
   const purifyConfig = { ...DEFAULT_PURIFY_CONFIG };
   if (!allowDetails) {
     purifyConfig.FORBID_TAGS = Array.from(new Set([...(purifyConfig.FORBID_TAGS || []), 'details', 'summary']));
   }
   const safe = DOMPurify.sanitize(html, purifyConfig);
-  return safe;
+
+  // 5) 恢复数学（KaTeX 渲染）；KaTeX 输出不再经过二次清洗，确保保留其必需样式
+  return restoreMath(safe, collectedMathTokens);
 }
-
-
