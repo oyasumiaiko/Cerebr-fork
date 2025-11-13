@@ -98,6 +98,9 @@ export function composeMessages(args) {
     }
   }
 
+  // 为连续用户消息插入额外换行，提升上下文可读性
+  effectiveChain = insertSpacingBetweenUserMessages(effectiveChain);
+
   if (sendChatHistory) {
     // 当 maxHistory 为 0 时，不发送任何历史消息
     if (maxHistory === 0) {
@@ -145,6 +148,27 @@ function mapRole(role) {
   // 兼容历史记录内部命名
   if (role === 'ai') return 'assistant';
   return 'user';
+}
+
+/**
+ * 在连续的用户消息之间追加三个换行符，避免语义段落相互粘连。
+ * @param {ConversationNode[]} chain - 已按时间排序的消息链
+ * @returns {ConversationNode[]} - 内容已格式化的新数组
+ */
+function insertSpacingBetweenUserMessages(chain) {
+  if (!Array.isArray(chain) || chain.length === 0) {
+    return [];
+  }
+
+  const normalizedChain = chain.map((node) => ({ ...node }));
+  for (let i = 1; i < normalizedChain.length; i++) {
+    const previous = normalizedChain[i - 1];
+    const current = normalizedChain[i];
+    if (previous.role === 'user' && current.role === 'user') {
+      previous.content = `${previous.content || ''}\n\n\n`;
+    }
+  }
+  return normalizedChain;
 }
 
 
