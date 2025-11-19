@@ -607,12 +607,14 @@ export function createMessageSender(appContext) {
     }
     const reader = response.body.getReader();
     let hasStartedResponse = false;
-    let aiResponse = ''; // Accumulates the AI's textual response over multiple events
+    // 累积AI的主回答文本（仅文本部分，包含代码块等Markdown内容）
+    let aiResponse = '';
+    // 标记是否为 Gemini 流式接口
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') && !response.url.includes('openai');
-    
+    // SSE 行缓冲
     let incomingDataBuffer = ''; 
     const decoder = new TextDecoder();
-    let currentEventDataLines = []; // Store all "data: xxx" contents for the current event
+    let currentEventDataLines = []; // 当前事件中的所有 data: 行内容
 
     while (true) {
       const { done, value } = await reader.read();
@@ -655,13 +657,13 @@ export function createMessageSender(appContext) {
     }
 
     function processEvent() {
-      // Join with newlines as per SSE spec for multi-line data fields
+      // 将当前事件的多行 data 合并为一个 JSON 字符串
       const fullEventData = currentEventDataLines.join('\n'); 
-      currentEventDataLines = []; // Reset for next event
+      currentEventDataLines = []; // 重置，准备下一个事件
 
-      if (fullEventData.trim() === '') return; // Nothing to process
+      if (fullEventData.trim() === '') return; // 空事件直接跳过
 
-      // OpenAI specific [DONE] signal check
+      // OpenAI 特有的 [DONE] 结束标记
       if (!isGeminiApi && fullEventData.trim() === '[DONE]') {
         return;
       }
@@ -680,74 +682,158 @@ export function createMessageSender(appContext) {
       }
     }
 
+    /**
+     * 为指定 AI 消息追加图片标签（只操作 DOM，不做去重逻辑以外的处理）
+     * @param {string} messageId - 消息ID
+     * @param {string[]} dataUrls - 需要追加的 dataURL 列表
+     */
+    function appendImagesToAiMessage(messageId, dataUrls) {
+      if (!dataUrls || dataUrls.length === 0) return;
+      const messageDiv = chatContainer.querySelector(`[data-message-id="${messageId}"]`);
+      if (!messageDiv) return;
+
+      let imageContentDiv = messageDiv.querySelector('.image-content');
+      if (!imageContentDiv) {
+        imageContentDiv = document.createElement('div');
+        imageContentDiv.classList.add('image-content');
+        const textContentDiv = messageDiv.querySelector('.text-content');
+        if (textContentDiv && textContentDiv.parentNode) {
+          messageDiv.insertBefore(imageContentDiv, textContentDiv);
+        } else {
+          messageDiv.appendChild(imageContentDiv);
+        }
+      }
+
+      // 使用现有的 image-tag 结构，避免重复图片
+      const existingTags = Array.from(imageContentDiv.querySelectorAll('.image-tag'));
+      const existingDataSet = new Set(existingTags.map(tag => tag.getAttribute('data-image')));
+
+      dataUrls.forEach((url) => {
+        if (!url || existingDataSet.has(url)) return;
+        const tag = imageHandler.createImageTag(url, null);
+        imageContentDiv.appendChild(tag);
+        existingDataSet.add(url);
+      });
+    }
+
+    /**
+     * 处理 Gemini SSE 事件（包括文本、思考过程、代码执行与图片）
+     * @param {Object} data - 从SSE事件中解析出的JSON对象
+     */
     function handleGeminiEvent(data) {
       if (data.error) {
         const errorMessage = data.error.message || 'Unknown Gemini error';
         console.error('Gemini API error:', data.error);
         // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
-        throw new Error(errorMessage); // Propagates to sendMessage's catch block
+        throw new Error(errorMessage);
       }
 
-      // Accumulators for the current event's content parts
+      // 本事件的增量内容
       let currentEventAnswerDelta = '';
       let currentEventThoughtsDelta = '';
       let groundingMetadata = null;
+      const newInlineImageUrls = [];
 
       if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
-        if (candidate.content && candidate.content.parts) {
+        if (candidate.content && Array.isArray(candidate.content.parts)) {
           candidate.content.parts.forEach(part => {
-            if (part.text) {
+            // 1) 普通文本与思考过程
+            if (typeof part.text === 'string') {
               if (part.thought) {
                 currentEventThoughtsDelta += part.text;
               } else {
                 currentEventAnswerDelta += part.text;
+              }
+              return;
+            }
+
+            // 2) 可执行代码块 - 转为 Markdown 代码块
+            if (part.executableCode && typeof part.executableCode.code === 'string') {
+              const lang = (part.executableCode.language || 'python').toString().toLowerCase();
+              const code = part.executableCode.code;
+              currentEventAnswerDelta += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+              return;
+            }
+
+            // 3) 代码执行结果 - 以代码块形式展示
+            if (part.codeExecutionResult && typeof part.codeExecutionResult.output === 'string') {
+              const outcome = part.codeExecutionResult.outcome || '';
+              const outcomeLabel = outcome ? ` (${outcome})` : '';
+              const output = part.codeExecutionResult.output;
+              currentEventAnswerDelta += `\n\`\`\`text\n# 代码执行结果${outcomeLabel}\n${output}\n\`\`\`\n`;
+              return;
+            }
+
+            // 4) 内联图片数据 - 转为 dataURL，稍后生成 image-tag
+            const inline = part.inlineData || part.inline_data;
+            if (inline && inline.mimeType && inline.data) {
+              if (String(inline.mimeType).startsWith('image/')) {
+                const dataUrl = `data:${inline.mimeType};base64,${inline.data}`;
+                newInlineImageUrls.push(dataUrl);
               }
             }
           });
         }
         groundingMetadata = candidate.groundingMetadata;
       }
-      
-      // Only proceed if there's actual content (answer or thoughts)
-      if (currentEventAnswerDelta || currentEventThoughtsDelta) {
-        // Update global accumulators
-        aiResponse += currentEventAnswerDelta; // aiResponse now specifically tracks the main answer
-        aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta; // Accumulate thoughts separately
 
-        if (!hasStartedResponse) {
-          if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-          hasStartedResponse = true;
-          // 流式开始：更醒目的输入容器提示
-          try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
-          
-          // First event with content: create the message element
-          // Pass both accumulated answer and thoughts to appendMessage
-          const newAiMessageDiv = messageProcessor.appendMessage(
-            aiResponse, // Initial answer content
-            'ai',
-            false, // skipHistory = false, to create history node
-            null,  // fragment = null
-            null,  // imagesHTML = null
-            aiThoughtsRaw, // Initial thoughts content
-            null   // messageIdToUpdate = null for new message
-          );
-          if (newAiMessageDiv) {
-            currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
-            // 记录 API 元信息并渲染 footer
-            applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
-          }
-          scrollToBottom();
-        } else if (currentAiMessageId) {
-          // Subsequent events: update the existing message element
-          messageProcessor.updateAIMessage(
-            currentAiMessageId, 
-            aiResponse, // Full current answer
-            aiThoughtsRaw, // Full current thoughts
-            groundingMetadata // Pass grounding metadata for each update
-          );
-          // scrollToBottom() is called within updateAIMessage
+      const hasTextDelta = !!(currentEventAnswerDelta || currentEventThoughtsDelta);
+      const hasNewImages = newInlineImageUrls.length > 0;
+
+      // 没有任何可见增量内容时直接返回
+      if (!hasTextDelta && !hasNewImages) return;
+
+      // 累积主回答与思考过程
+      aiResponse += currentEventAnswerDelta;
+      aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta;
+
+      if (!hasStartedResponse) {
+        // 首次收到内容（文本或图片）：移除“正在处理...”提示
+        if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+        hasStartedResponse = true;
+        try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
+
+        // 首次事件：构造图片 HTML，交由 appendMessage 一次性创建消息与历史记录
+        let imagesHTML = null;
+        if (hasNewImages) {
+          const container = document.createElement('div');
+          newInlineImageUrls.forEach((url, index) => {
+            const tag = imageHandler.createImageTag(url, `gemini-image-${index + 1}`);
+            container.appendChild(tag);
+          });
+          imagesHTML = container.innerHTML;
         }
+
+        const newAiMessageDiv = messageProcessor.appendMessage(
+          aiResponse,      // 初始完整回答文本
+          'ai',
+          false,           // skipHistory = false, 创建历史节点
+          null,            // fragment = null
+          imagesHTML,      // 初始图片（如有）
+          aiThoughtsRaw,   // 初始思考过程
+          null             // messageIdToUpdate = null
+        );
+
+        if (newAiMessageDiv) {
+          currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+          // 记录 API 元信息并渲染 footer
+          applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
+        }
+        scrollToBottom();
+      } else if (currentAiMessageId) {
+        // 后续事件：先将新图片追加到 DOM，再统一更新文本与历史记录
+        if (hasNewImages) {
+          appendImagesToAiMessage(currentAiMessageId, newInlineImageUrls);
+        }
+
+        messageProcessor.updateAIMessage(
+          currentAiMessageId,
+          aiResponse,       // 当前累积完整回答
+          aiThoughtsRaw,    // 当前累积思考过程
+          groundingMetadata // 引用元数据
+        );
+        // scrollToBottom() 在 updateAIMessage 内部调用
       }
     }
 
@@ -903,16 +989,55 @@ export function createMessageSender(appContext) {
     }
 
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
+    let imagesHTML = null;
     if (isGeminiApi) {
-      // Google GenAI 非流式格式
+      // Google GenAI 非流式格式（支持代码执行与内联图片）
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
       const candidate = candidates[0] || null;
       const parts = candidate?.content?.parts || [];
+      const inlineImageUrls = [];
+
       parts.forEach(part => {
         if (typeof part?.text === 'string') {
           if (part.thought) thoughts += part.text; else answer += part.text;
+          return;
+        }
+
+        // 可执行代码块 -> Markdown 代码块
+        if (part.executableCode && typeof part.executableCode.code === 'string') {
+          const lang = (part.executableCode.language || 'python').toString().toLowerCase();
+          const code = part.executableCode.code;
+          answer += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+          return;
+        }
+
+        // 代码执行结果 -> Markdown 代码块
+        if (part.codeExecutionResult && typeof part.codeExecutionResult.output === 'string') {
+          const outcome = part.codeExecutionResult.outcome || '';
+          const outcomeLabel = outcome ? ` (${outcome})` : '';
+          const output = part.codeExecutionResult.output;
+          answer += `\n\`\`\`text\n# 代码执行结果${outcomeLabel}\n${output}\n\`\`\`\n`;
+          return;
+        }
+
+        // 内联图片 -> dataURL，后续创建 image-tag
+        const inline = part.inlineData || part.inline_data;
+        if (inline && inline.mimeType && inline.data) {
+          if (String(inline.mimeType).startsWith('image/')) {
+            const dataUrl = `data:${inline.mimeType};base64,${inline.data}`;
+            inlineImageUrls.push(dataUrl);
+          }
         }
       });
+
+      if (inlineImageUrls.length > 0) {
+        const container = document.createElement('div');
+        inlineImageUrls.forEach((url, index) => {
+          const tag = imageHandler.createImageTag(url, `gemini-nonstream-image-${index + 1}`);
+          container.appendChild(tag);
+        });
+        imagesHTML = container.innerHTML;
+      }
     } else {
       // OpenAI 兼容 非流式
       const choice = Array.isArray(json?.choices) ? json.choices[0] : null;
@@ -930,7 +1055,7 @@ export function createMessageSender(appContext) {
       'ai',
       false,
       null,
-      null,
+      imagesHTML,    // 对 Gemini 非流式响应，带上图片
       thoughts || '',
       null
     );

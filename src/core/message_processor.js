@@ -294,11 +294,23 @@ export function createMessageProcessor(appContext) {
     }
 
     messageDiv.setAttribute('data-original-text', newAnswerContent);
-    // newThoughtsRaw is handled by setupThoughtsDisplay
-    
-    node.content = newAnswerContent;
-    if (newThoughtsRaw !== undefined) { // Allow setting thoughts to null/empty explicitly
-        node.thoughtsRaw = newThoughtsRaw;
+    // 思考过程文本由 setupThoughtsDisplay 统一处理
+
+    // --- 同步历史记录中的内容结构（支持图片 + 文本的混合内容） ---
+    try {
+      // 提取当前消息中已有的图片 HTML（如果存在）
+      const imageContentDiv = messageDiv.querySelector('.image-content');
+      const imagesHTML = imageContentDiv ? imageContentDiv.innerHTML : null;
+      // 使用与 appendMessage 相同的逻辑，将文本和图片转换为统一的消息内容格式
+      const processedContent = imageHandler.processImageTags(newAnswerContent, imagesHTML || '');
+      node.content = processedContent;
+    } catch (e) {
+      console.warn('updateAIMessage: 处理图片标签失败，回退为纯文本内容:', e);
+      node.content = newAnswerContent;
+    }
+
+    if (newThoughtsRaw !== undefined) { // 允许显式将思考过程设置为 null/空字符串
+      node.thoughtsRaw = newThoughtsRaw;
     }
 
     // Setup/Update thoughts display
