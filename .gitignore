@@ -22,3 +22,5 @@ Thumbs.db
 *.sublime-workspace
 
 # 注意：不要忽略 fontawesome 子模块目录，因为它在 .gitmodules 中记录
+sse.txt
+sse2.txt

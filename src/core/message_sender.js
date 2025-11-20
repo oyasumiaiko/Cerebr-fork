@@ -607,7 +607,7 @@ export function createMessageSender(appContext) {
     }
     const reader = response.body.getReader();
     let hasStartedResponse = false;
-    // 累积AI的主回答文本（仅文本部分，包含代码块等Markdown内容）
+    // 累积AI的主回答文本（仅文本部分，包含代码块、内联图片等 Markdown/HTML 内容）
     let aiResponse = '';
     // 标记是否为 Gemini 流式接口
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') && !response.url.includes('openai');
@@ -683,40 +683,6 @@ export function createMessageSender(appContext) {
     }
 
     /**
-     * 为指定 AI 消息追加图片标签（只操作 DOM，不做去重逻辑以外的处理）
-     * @param {string} messageId - 消息ID
-     * @param {string[]} dataUrls - 需要追加的 dataURL 列表
-     */
-    function appendImagesToAiMessage(messageId, dataUrls) {
-      if (!dataUrls || dataUrls.length === 0) return;
-      const messageDiv = chatContainer.querySelector(`[data-message-id="${messageId}"]`);
-      if (!messageDiv) return;
-
-      let imageContentDiv = messageDiv.querySelector('.image-content');
-      if (!imageContentDiv) {
-        imageContentDiv = document.createElement('div');
-        imageContentDiv.classList.add('image-content');
-        const textContentDiv = messageDiv.querySelector('.text-content');
-        if (textContentDiv && textContentDiv.parentNode) {
-          messageDiv.insertBefore(imageContentDiv, textContentDiv);
-        } else {
-          messageDiv.appendChild(imageContentDiv);
-        }
-      }
-
-      // 使用现有的 image-tag 结构，避免重复图片
-      const existingTags = Array.from(imageContentDiv.querySelectorAll('.image-tag'));
-      const existingDataSet = new Set(existingTags.map(tag => tag.getAttribute('data-image')));
-
-      dataUrls.forEach((url) => {
-        if (!url || existingDataSet.has(url)) return;
-        const tag = imageHandler.createImageTag(url, null);
-        imageContentDiv.appendChild(tag);
-        existingDataSet.add(url);
-      });
-    }
-
-    /**
      * 处理 Gemini SSE 事件（包括文本、思考过程、代码执行与图片）
      * @param {Object} data - 从SSE事件中解析出的JSON对象
      */
@@ -778,11 +744,21 @@ export function createMessageSender(appContext) {
         groundingMetadata = candidate.groundingMetadata;
       }
 
+      // 将本事件中的图片转为内联 img 元素，直接插入到答案增量中
+      if (newInlineImageUrls.length > 0) {
+        const inlineHtmlChunks = newInlineImageUrls.map((url, index) => {
+          const safeUrl = (url || '').replace(/"/g, '&quot;');
+          const title = '模型生成图片';
+          const safeTitle = title.replace(/"/g, '&quot;');
+          return `\n<img class="ai-inline-image" src="${safeUrl}" alt="${safeTitle}" />\n`;
+        });
+        currentEventAnswerDelta += inlineHtmlChunks.join('');
+      }
+
       const hasTextDelta = !!(currentEventAnswerDelta || currentEventThoughtsDelta);
-      const hasNewImages = newInlineImageUrls.length > 0;
 
       // 没有任何可见增量内容时直接返回
-      if (!hasTextDelta && !hasNewImages) return;
+      if (!hasTextDelta) return;
 
       // 累积主回答与思考过程
       aiResponse += currentEventAnswerDelta;
@@ -794,23 +770,12 @@ export function createMessageSender(appContext) {
         hasStartedResponse = true;
         try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
-        // 首次事件：构造图片 HTML，交由 appendMessage 一次性创建消息与历史记录
-        let imagesHTML = null;
-        if (hasNewImages) {
-          const container = document.createElement('div');
-          newInlineImageUrls.forEach((url, index) => {
-            const tag = imageHandler.createImageTag(url, `gemini-image-${index + 1}`);
-            container.appendChild(tag);
-          });
-          imagesHTML = container.innerHTML;
-        }
-
         const newAiMessageDiv = messageProcessor.appendMessage(
           aiResponse,      // 初始完整回答文本
           'ai',
           false,           // skipHistory = false, 创建历史节点
           null,            // fragment = null
-          imagesHTML,      // 初始图片（如有）
+          null,            // inline 模式下不再单独传入图片HTML
           aiThoughtsRaw,   // 初始思考过程
           null             // messageIdToUpdate = null
         );
@@ -822,11 +787,7 @@ export function createMessageSender(appContext) {
         }
         scrollToBottom();
       } else if (currentAiMessageId) {
-        // 后续事件：先将新图片追加到 DOM，再统一更新文本与历史记录
-        if (hasNewImages) {
-          appendImagesToAiMessage(currentAiMessageId, newInlineImageUrls);
-        }
-
+        // 后续事件：直接更新完整文本与思考过程（图片已被转为内联HTML）
         messageProcessor.updateAIMessage(
           currentAiMessageId,
           aiResponse,       // 当前累积完整回答
@@ -989,7 +950,6 @@ export function createMessageSender(appContext) {
     }
 
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
-    let imagesHTML = null;
     if (isGeminiApi) {
       // Google GenAI 非流式格式（支持代码执行与内联图片）
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
@@ -1020,7 +980,7 @@ export function createMessageSender(appContext) {
           return;
         }
 
-        // 内联图片 -> dataURL，后续创建 image-tag
+        // 内联图片 -> 转为内联 img 元素
         const inline = part.inlineData || part.inline_data;
         if (inline && inline.mimeType && inline.data) {
           if (String(inline.mimeType).startsWith('image/')) {
@@ -1031,12 +991,13 @@ export function createMessageSender(appContext) {
       });
 
       if (inlineImageUrls.length > 0) {
-        const container = document.createElement('div');
-        inlineImageUrls.forEach((url, index) => {
-          const tag = imageHandler.createImageTag(url, `gemini-nonstream-image-${index + 1}`);
-          container.appendChild(tag);
+        const inlineHtmlChunks = inlineImageUrls.map((url) => {
+          const safeUrl = (url || '').replace(/"/g, '&quot;');
+          const title = '模型生成图片';
+          const safeTitle = title.replace(/"/g, '&quot;');
+          return `\n<img class="ai-inline-image" src="${safeUrl}" alt="${safeTitle}" />\n`;
         });
-        imagesHTML = container.innerHTML;
+        answer += inlineHtmlChunks.join('');
       }
     } else {
       // OpenAI 兼容 非流式
@@ -1055,7 +1016,7 @@ export function createMessageSender(appContext) {
       'ai',
       false,
       null,
-      imagesHTML,    // 对 Gemini 非流式响应，带上图片
+      null,          // 非流式 Gemini 使用内联图片
       thoughts || '',
       null
     );

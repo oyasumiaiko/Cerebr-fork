@@ -277,19 +277,26 @@ export function createImageHandler(appContext) {
   /**
    * 处理图片标签，将内容和图片HTML转换为消息格式
    * @param {string} content - 文本内容
-   * @param {string} imagesHTML - 图片HTML内容
+   * @param {string} imagesHTML - 图片HTML内容；若为空则尝试从 content 中解析内联图片
    * @returns {Array|string} 处理后的消息格式
    */
   function processImageTags(content, imagesHTML) {
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = imagesHTML;
-    const imageTags = tempDiv.querySelectorAll('.image-tag');
+    const hasSeparateImages = !!(imagesHTML && imagesHTML.trim());
+    // 优先解析单独传入的图片容器；否则解析内容中的内联图片
+    tempDiv.innerHTML = hasSeparateImages ? imagesHTML : (content || '');
+    const imageNodes = tempDiv.querySelectorAll('.image-tag, img.ai-inline-image');
 
-    if (imageTags.length > 0) {
+    if (imageNodes.length > 0) {
       const result = [];
-      // 先添加图片
-      imageTags.forEach(tag => {
-        const base64Data = tag.getAttribute('data-image');
+      // 先添加图片（支持 image-tag 和内联 img.ai-inline-image）
+      imageNodes.forEach(node => {
+        let base64Data = '';
+        if (node.classList.contains('image-tag')) {
+          base64Data = node.getAttribute('data-image') || '';
+        } else {
+          base64Data = node.getAttribute('src') || '';
+        }
         if (base64Data) {
           result.push({
             type: "image_url",
@@ -300,10 +307,11 @@ export function createImageHandler(appContext) {
         }
       });
       // 后添加文本内容
-      if (content) {
+      let textPart = content;
+      if (textPart) {
         result.push({
           type: "text",
-          text: content
+          text: textPart
         });
       }
       return result;

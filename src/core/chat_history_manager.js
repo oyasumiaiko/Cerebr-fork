@@ -17,6 +17,7 @@
  * @property {string|null} [apiUuid] - 使用的 API 配置 UUID（配置的 id），用于回溯显示 (可选)
  * @property {string} [apiDisplayName] - 创建消息时记录的 API 显示名称快照 (可选)
  * @property {string} [apiModelId] - 创建消息时记录的模型名（modelName）快照 (可选)
+ * @property {boolean} [hasInlineImages] - 是否包含内联图片 (可选)
  */
 
 /**
@@ -49,7 +50,8 @@ function createMessageNode(role, content, parentId = null) {
     // --- API 元信息（用于消息 footer 显示与持久化）---
     apiUuid: null,
     apiDisplayName: '',
-    apiModelId: ''
+    apiModelId: '',
+    hasInlineImages: false
   };
 }
 

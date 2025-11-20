@@ -195,6 +195,8 @@ export function createMessageProcessor(appContext) {
       hljs.highlightElement(block);
     });
 
+    bindInlineImagePreviews(messageDiv);
+
     // 数学公式已在渲染阶段通过 KaTeX 输出，无需二次 auto-render
 
     if (!messageIdToUpdate) {
@@ -259,6 +261,9 @@ export function createMessageProcessor(appContext) {
         if (initialThoughtsRaw) {
           node.thoughtsRaw = initialThoughtsRaw;
         }
+        if (node) {
+          node.hasInlineImages = (!imagesHTML && typeof text === 'string' && /<img/i.test(text));
+        }
         messageDiv.setAttribute('data-message-id', node.id);
         // 初次创建 AI 消息时插入一个空的 API footer，占位以便样式稳定
         if (sender === 'ai') {
@@ -308,6 +313,7 @@ export function createMessageProcessor(appContext) {
       console.warn('updateAIMessage: 处理图片标签失败，回退为纯文本内容:', e);
       node.content = newAnswerContent;
     }
+    node.hasInlineImages = (typeof newAnswerContent === 'string' && /<img/i.test(newAnswerContent));
 
     if (newThoughtsRaw !== undefined) { // 允许显式将思考过程设置为 null/空字符串
       node.thoughtsRaw = newThoughtsRaw;
@@ -352,6 +358,8 @@ export function createMessageProcessor(appContext) {
     textContentDiv.querySelectorAll('pre code').forEach(block => {
       hljs.highlightElement(block);
     });
+
+    bindInlineImagePreviews(messageDiv);
 
     if (groundingMetadata) {
       if (htmlElements && htmlElements.length > 0) {
@@ -662,6 +670,24 @@ export function createMessageProcessor(appContext) {
 
     searchQueriesList.appendChild(ul);
     messageElement.appendChild(searchQueriesList);
+  }
+
+  function bindInlineImagePreviews(container) {
+    if (!container) return;
+    try {
+      const previewTargets = container.querySelectorAll('.image-tag img, img.ai-inline-image');
+      previewTargets.forEach(img => {
+        if (img.dataset.previewBound === 'true') return;
+        img.dataset.previewBound = 'true';
+        img.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          imageHandler.showImagePreview(img.src);
+        });
+      });
+    } catch (e) {
+      console.error('绑定图片预览失败:', e);
+    }
   }
 
   /**

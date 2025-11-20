@@ -590,19 +590,45 @@ export function createChatHistoryUI(appContext) {
       const thoughtsToDisplay = msg.thoughtsRaw || null; // 获取思考过程文本
 
       if (Array.isArray(msg.content)) {
-        const imagesHTML = document.createElement('div');
-        let textContent = '';
+        const legacyImagesContainer = document.createElement('div');
+        let combinedContent = '';
+        const legacyImageUrls = [];
 
         msg.content.forEach(part => {
           if (part.type === 'text') {
-            textContent = part.text;
+            combinedContent = part.text || '';
           } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
-            const imageTag = createImageTag(part.image_url.url, null);
-            imagesHTML.appendChild(imageTag);
+            legacyImageUrls.push(part.image_url.url);
           }
         });
-        // 调用 appendMessage 时传递 thoughtsToDisplay
-        messageElem = appendMessage(textContent, role, true, null, imagesHTML.innerHTML, thoughtsToDisplay);
+
+        const textHasInlineImages = typeof combinedContent === 'string' && /<img/i.test(combinedContent);
+        const shouldForceInline = !!msg.hasInlineImages || textHasInlineImages || (role === 'ai' && legacyImageUrls.length > 0);
+        let imagesHTML = null;
+
+        if (shouldForceInline) {
+          // 若文本中已经包含内联图片，则直接使用文本；若没有，则在末尾补齐。
+          if (!textHasInlineImages && legacyImageUrls.length > 0) {
+            const inlineHtml = legacyImageUrls.map(url => {
+              const safeUrl = url || '';
+              return `<img class="ai-inline-image" src="${safeUrl}" alt="加载的图片">`;
+            }).join('');
+            combinedContent = (combinedContent || '') + inlineHtml;
+          }
+          msg.hasInlineImages = true;
+          const textPartIndex = msg.content.findIndex(part => part.type === 'text');
+          if (textPartIndex >= 0) {
+            msg.content[textPartIndex] = { ...msg.content[textPartIndex], text: combinedContent };
+          }
+        } else if (legacyImageUrls.length > 0) {
+          legacyImageUrls.forEach(url => {
+            const imageTag = createImageTag(url, null);
+            legacyImagesContainer.appendChild(imageTag);
+          });
+          imagesHTML = legacyImagesContainer.innerHTML;
+        }
+
+        messageElem = appendMessage(combinedContent, role, true, null, imagesHTML, thoughtsToDisplay);
       } else {
         // 调用 appendMessage 时传递 thoughtsToDisplay
         messageElem = appendMessage(msg.content, role, true, null, null, thoughtsToDisplay);
