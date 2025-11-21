@@ -615,6 +615,8 @@ export function createMessageSender(appContext) {
     let incomingDataBuffer = ''; 
     const decoder = new TextDecoder();
     let currentEventDataLines = []; // 当前事件中的所有 data: 行内容
+    // 记录当前流式响应中最新的 Gemini 思维链签名（Thought Signature）
+    let latestGeminiThoughtSignature = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -638,6 +640,19 @@ export function createMessageSender(appContext) {
         const line = incomingDataBuffer.substring(0, lineEndIndex);
         incomingDataBuffer = incomingDataBuffer.substring(lineEndIndex + 1);
         processLine(line);
+      }
+    }
+
+    // 流式响应结束后，如果是 Gemini 且解析到了思维链签名，则写入当前 AI 消息节点
+    if (isGeminiApi && currentAiMessageId && latestGeminiThoughtSignature) {
+      try {
+        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === currentAiMessageId);
+        if (node) {
+          // 在历史节点上记录 Thought Signature，供后续多轮对话回传使用
+          node.thoughtSignature = latestGeminiThoughtSignature;
+        }
+      } catch (e) {
+        console.warn('记录 Gemini 思维链签名失败（流式）:', e);
       }
     }
 
@@ -704,6 +719,17 @@ export function createMessageSender(appContext) {
         const candidate = data.candidates[0];
         if (candidate.content && Array.isArray(candidate.content.parts)) {
           candidate.content.parts.forEach(part => {
+            // 0) 捕获 Gemini 3 思维链签名（Thought Signature）：可能出现在最后一个 part，或仅包含签名的空文本 part
+            if (typeof part.thought_signature === 'string' && part.thought_signature) {
+              latestGeminiThoughtSignature = part.thought_signature;
+            } else {
+              const extraContent = part.extra_content || part.extraContent;
+              const googleMeta = extraContent && extraContent.google;
+              if (googleMeta && typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
+                latestGeminiThoughtSignature = googleMeta.thought_signature;
+              }
+            }
+
             // 1) 普通文本与思考过程
             if (typeof part.text === 'string') {
               if (part.thought) {
@@ -935,6 +961,8 @@ export function createMessageSender(appContext) {
 
     let answer = '';
     let thoughts = '';
+    // 用于承载 Gemini 3 返回的思维链签名（Thought Signature），仅在 Gemini 响应中填充
+    let thoughtSignature = null;
     let json = null;
     try {
       json = await response.json();
@@ -951,13 +979,24 @@ export function createMessageSender(appContext) {
 
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
     if (isGeminiApi) {
-      // Google GenAI 非流式格式（支持代码执行与内联图片）
+      // Google GenAI 非流式格式（支持代码执行、内联图片与思维链签名）
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
       const candidate = candidates[0] || null;
       const parts = candidate?.content?.parts || [];
       const inlineImageUrls = [];
 
       parts.forEach(part => {
+        // 捕获非函数调用场景下的 Thought Signature：通常位于最后一个 part
+        if (typeof part?.thought_signature === 'string' && part.thought_signature) {
+          thoughtSignature = part.thought_signature;
+        } else {
+          const extraContent = part?.extra_content || part?.extraContent;
+          const googleMeta = extraContent && extraContent.google;
+          if (googleMeta && typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
+            thoughtSignature = googleMeta.thought_signature;
+          }
+        }
+
         if (typeof part?.text === 'string') {
           if (part.thought) thoughts += part.text; else answer += part.text;
           return;
@@ -1023,6 +1062,17 @@ export function createMessageSender(appContext) {
     if (newAiMessageDiv) {
       const messageId = newAiMessageDiv.getAttribute('data-message-id');
       applyApiMetaToMessage(messageId, usedApiConfig, newAiMessageDiv);
+      // 在历史节点上记录 Gemini 思维链签名，供后续多轮对话回传使用
+      if (isGeminiApi && thoughtSignature) {
+        try {
+          const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+          if (node) {
+            node.thoughtSignature = thoughtSignature;
+          }
+        } catch (e) {
+          console.warn('记录 Gemini 思维链签名失败（非流式）:', e);
+        }
+      }
     }
     scrollToBottom();
   }

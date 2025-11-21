@@ -877,6 +877,8 @@ export function createApiManager(appContext) {
     let requestBody = {};
 
     // 复制并规范化消息，按需注入“自定义提示词”至系统提示词最顶端
+    // 说明：这里保留 messages 上的 thoughtSignature 等内部字段，仅在 Gemini 请求体构建中使用；
+    // 对于 OpenAI 兼容接口，会在后续单独做字段过滤，避免发送非标准字段。
     let normalizedMessages = Array.isArray(messages) ? messages.map(m => ({ ...m })) : [];
     const customSystemPrompt = (config.customSystemPrompt || '').trim();
     if (customSystemPrompt) {
@@ -894,7 +896,7 @@ export function createApiManager(appContext) {
     }
 
     if (config.baseUrl === 'genai') {
-      // Gemini API 请求格式
+      // Gemini API 请求格式（包含 Gemini 3 思维链签名 Thought Signature 的回传）
       const contents = normalizedMessages.map(msg => {
         // Gemini API 使用 'user' 和 'model' 角色
         const role = msg.role === 'assistant' ? 'model' : msg.role;
@@ -931,12 +933,25 @@ export function createApiManager(appContext) {
         } else if (typeof msg.content === 'string') { // 纯文本消息
           parts.push({ text: msg.content });
         } else {
-            console.warn('未知的消息内容格式 (Gemini):', msg.content);
+          console.warn('未知的消息内容格式 (Gemini):', msg.content);
+        }
+
+        // 如果该消息带有 Gemini 思维链签名，则将签名附加到最后一个 part 上
+        // 只在模型消息（assistant/model）上回传，以符合官方文档建议
+        const thoughtSignature = typeof msg.thoughtSignature === 'string' && msg.thoughtSignature
+          ? msg.thoughtSignature
+          : (typeof msg.thought_signature === 'string' && msg.thought_signature ? msg.thought_signature : null);
+        if (thoughtSignature && parts.length > 0 && (msg.role === 'assistant' || role === 'model')) {
+          const lastPart = parts[parts.length - 1];
+          if (lastPart && typeof lastPart === 'object') {
+            // 文档中非函数调用场景为 Part-level 字段 thought_signature
+            lastPart.thought_signature = thoughtSignature;
+          }
         }
         
         // 只有当 parts 数组不为空时才创建 content 对象
         if (parts.length > 0) {
-            return { role: role, parts: parts };
+          return { role: role, parts: parts };
         }
         return null; // 如果没有有效的 parts，则不为此消息创建 content entry
       }).filter(Boolean); // 过滤掉 null (例如 system 消息或无效消息)
@@ -984,9 +999,23 @@ export function createApiManager(appContext) {
 
     } else {
       // 其他 API (如 OpenAI) 请求格式
+      // 仅保留 OpenAI 兼容字段，剥离内部使用的 thoughtSignature 等扩展字段
+      const sanitizedMessages = normalizedMessages.map(msg => {
+        const base = {
+          role: msg.role,
+          content: msg.content
+        };
+        if (msg.name) base.name = msg.name;
+        if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
+        if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+          base.tool_calls = msg.tool_calls;
+        }
+        return base;
+      });
+
       requestBody = {
         model: config.modelName,
-        messages: normalizedMessages, // OpenAI API可以直接处理包含图片数组的 messages
+        messages: sanitizedMessages, // OpenAI API 仅接收标准字段，过滤内部扩展字段
         stream: (config.useStreaming !== false),
         temperature: config.temperature ?? 1.0, // 确保有默认值
         top_p: 0.95,

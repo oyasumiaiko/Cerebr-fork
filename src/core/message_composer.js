@@ -10,6 +10,7 @@
  * @property {string} id 唯一ID
  * @property {('user'|'assistant'|'system')} role 角色
  * @property {string} content 文本内容
+ * @property {string|null} [thoughtSignature] Gemini 思维链签名（可选，用于在 Gemini 请求中回传）
  */
 
 /**
@@ -105,10 +106,19 @@ export function composeMessages(args) {
     } else if (maxHistory && maxHistory > 0) {
       // 限制历史消息数量
       const limited = effectiveChain.slice(-maxHistory);
-      messages.push(...limited.map(node => ({ role: mapRole(node.role), content: node.content })));
+      messages.push(...limited.map(node => ({
+        role: mapRole(node.role),
+        content: node.content,
+        // 透传历史消息上的 Gemini 思维链签名（仅在构建 Gemini 请求体时使用）
+        thoughtSignature: node.thoughtSignature || null
+      })));
     } else {
       // 发送全部历史消息
-      messages.push(...effectiveChain.map(node => ({ role: mapRole(node.role), content: node.content })));
+      messages.push(...effectiveChain.map(node => ({
+        role: mapRole(node.role),
+        content: node.content,
+        thoughtSignature: node.thoughtSignature || null
+      })));
     }
   } else {
     // 只发送最后一条
@@ -126,7 +136,11 @@ export function composeMessages(args) {
     for (let i = effectiveChain.length - 1; i >= 0; i--) {
       const message = effectiveChain[i];
       if (message.role === 'user') {
-        messages.push({ role: 'user', content: message.content });
+        messages.push({
+          role: 'user',
+          content: message.content,
+          thoughtSignature: message.thoughtSignature || null
+        });
         break; // 只添加最后一条用户消息
       }
     }
