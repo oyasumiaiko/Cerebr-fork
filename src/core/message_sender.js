@@ -720,14 +720,25 @@ export function createMessageSender(appContext) {
         if (candidate.content && Array.isArray(candidate.content.parts)) {
           candidate.content.parts.forEach(part => {
             // 0) 捕获 Gemini 3 思维链签名（Thought Signature）：可能出现在最后一个 part，或仅包含签名的空文本 part
+            let extractedSignature = null;
             if (typeof part.thought_signature === 'string' && part.thought_signature) {
-              latestGeminiThoughtSignature = part.thought_signature;
+              extractedSignature = part.thought_signature;
+            } else if (typeof part.thoughtSignature === 'string' && part.thoughtSignature) {
+              // 兼容驼峰命名的 thoughtSignature
+              extractedSignature = part.thoughtSignature;
             } else {
               const extraContent = part.extra_content || part.extraContent;
-              const googleMeta = extraContent && extraContent.google;
-              if (googleMeta && typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
-                latestGeminiThoughtSignature = googleMeta.thought_signature;
+              const googleMeta = extraContent && (extraContent.google || extraContent.Google);
+              if (googleMeta) {
+                if (typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
+                  extractedSignature = googleMeta.thought_signature;
+                } else if (typeof googleMeta.thoughtSignature === 'string' && googleMeta.thoughtSignature) {
+                  extractedSignature = googleMeta.thoughtSignature;
+                }
               }
+            }
+            if (extractedSignature) {
+              latestGeminiThoughtSignature = extractedSignature;
             }
 
             // 1) 普通文本与思考过程
@@ -987,14 +998,25 @@ export function createMessageSender(appContext) {
 
       parts.forEach(part => {
         // 捕获非函数调用场景下的 Thought Signature：通常位于最后一个 part
+        let extractedSignature = null;
         if (typeof part?.thought_signature === 'string' && part.thought_signature) {
-          thoughtSignature = part.thought_signature;
+          extractedSignature = part.thought_signature;
+        } else if (typeof part?.thoughtSignature === 'string' && part.thoughtSignature) {
+          // 兼容驼峰命名
+          extractedSignature = part.thoughtSignature;
         } else {
           const extraContent = part?.extra_content || part?.extraContent;
-          const googleMeta = extraContent && extraContent.google;
-          if (googleMeta && typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
-            thoughtSignature = googleMeta.thought_signature;
+          const googleMeta = extraContent && (extraContent.google || extraContent.Google);
+          if (googleMeta) {
+            if (typeof googleMeta.thought_signature === 'string' && googleMeta.thought_signature) {
+              extractedSignature = googleMeta.thought_signature;
+            } else if (typeof googleMeta.thoughtSignature === 'string' && googleMeta.thoughtSignature) {
+              extractedSignature = googleMeta.thoughtSignature;
+            }
           }
+        }
+        if (extractedSignature) {
+          thoughtSignature = extractedSignature;
         }
 
         if (typeof part?.text === 'string') {

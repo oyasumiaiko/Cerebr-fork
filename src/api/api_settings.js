@@ -938,14 +938,18 @@ export function createApiManager(appContext) {
 
         // 如果该消息带有 Gemini 思维链签名，则将签名附加到最后一个 part 上
         // 只在模型消息（assistant/model）上回传，以符合官方文档建议
-        const thoughtSignature = typeof msg.thoughtSignature === 'string' && msg.thoughtSignature
-          ? msg.thoughtSignature
-          : (typeof msg.thought_signature === 'string' && msg.thought_signature ? msg.thought_signature : null);
+        // 读取历史消息上记录的 Thought Signature，兼容下划线与驼峰命名
+        const thoughtSignature =
+          (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
+          (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
+          null;
         if (thoughtSignature && parts.length > 0 && (msg.role === 'assistant' || role === 'model')) {
           const lastPart = parts[parts.length - 1];
           if (lastPart && typeof lastPart === 'object') {
             // 文档中非函数调用场景为 Part-level 字段 thought_signature
             lastPart.thought_signature = thoughtSignature;
+            // 同时写入驼峰形式以兼容可能的服务端实现
+            lastPart.thoughtSignature = thoughtSignature;
           }
         }
         
