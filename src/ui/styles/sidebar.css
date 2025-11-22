@@ -1617,7 +1617,7 @@ input:checked + .slider::before {
     overflow-x: auto;
     padding: 1em;
     border-radius: 6px;
-    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-family: monospace;
     font-size: calc(var(--cerebr-font-size) - 2px);
     white-space: pre-wrap;
     background: var(--cerebr-code-bg);
