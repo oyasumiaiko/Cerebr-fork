@@ -1646,7 +1646,7 @@ input:checked + .slider::before {
     background: var(--cerebr-inline-code-bg);
     padding: 2px 4px;
     border-radius: 4px;
-    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-family: monospace;
 }
 
 .message p {
