@@ -126,16 +126,114 @@ function extractMathPlaceholders(text) {
     return placeholder;
   });
 
-  // 4) $...$ 行内（避免空白紧邻与纯数字场景，尽量减少误判）
-//   work = work.replace(/(^|[^$])\$([^\s$][\s\S]*?[^\s$])\$(?!\$)/g, (m, pre, inner) => {
-//     // 排除明显货币格式：以数字或空格紧邻 $ 的情形
-//     const invalidPre = /[\d\s]$/.test(pre);
-//     const looksLikeMath = /[A-Za-z\\^_{}\\\\]/.test(inner);
-//     if (invalidPre || !looksLikeMath) return m; // 放弃替换
-//     const placeholder = createMathPlaceholder(counter++);
-//     mathTokens.push({ placeholder, content: inner.trim(), display: false });
-//     return `${pre}${placeholder}`;
-//   });
+  // 4) $...$ 行内
+  // 使用手动扫描保证按“就近配对”：
+  // - 每个未被排除的起始 $ 都与其后遇到的第一个 $ 成对
+  // - 成对后要么整体作为公式替换，要么整体保留为普通文本，不会只排除其中一个 $
+  // - 同时应用启发式，降低把简单金额当成公式的概率
+  (function () {
+    const src = work;
+    let out = '';
+    let i = 0;
+
+    while (i < src.length) {
+      const ch = src[i];
+
+      if (ch !== '$') {
+        out += ch;
+        i += 1;
+        continue;
+      }
+
+      // 处理转义 \$：视为普通美元符号
+      if (i > 0 && src[i - 1] === '\\') {
+        // 去掉结果中的反斜杠，只保留 $
+        if (out.endsWith('\\')) {
+          out = out.slice(0, -1);
+        }
+        out += '$';
+        i += 1;
+        continue;
+      }
+
+      const startIndex = i;
+      const preChar = i > 0 ? src[i - 1] : '';
+
+      // 向后寻找与之成对的下一个 $（就近匹配）
+      let j = i + 1;
+      while (j < src.length && src[j] !== '$') {
+        j += 1;
+      }
+
+      // 没有找到匹配的 $，当前 $ 视为普通字符
+      if (j >= src.length) {
+        out += ch;
+        i += 1;
+        continue;
+      }
+
+      const innerRaw = src.slice(i + 1, j);
+      const trimmedInner = innerRaw.trim();
+
+      // 空内容直接视为普通文本
+      if (!trimmedInner) {
+        out += src.slice(startIndex, j + 1);
+        i = j + 1;
+        continue;
+      }
+
+      // --- 启发式过滤：尽量识别货币表达而非公式 ---
+      const firstChar = trimmedInner[0];
+      const startsWithDigit = /\d/.test(firstChar);
+      if (startsWithDigit) {
+        // 典型金额格式：$10, $10.00, $10 USD, $10 元...
+        const priceLike = /^\d[\d,]*(?:\.\d+)?(?:\s?(?:USD|usd|RMB|rmb|CNY|cny|元|块|块钱|美元|dollars?))?$/;
+        if (priceLike.test(trimmedInner)) {
+          // 认为是金额：整段 $...$ 保留为普通文本
+          out += src.slice(startIndex, j + 1);
+          i = j + 1;
+          continue;
+        }
+      }
+
+      // 若前一字符为字母或数字（如 "US$10"），更类似货币写法
+      if (preChar && /[0-9A-Za-z]/.test(preChar)) {
+        out += src.slice(startIndex, j + 1);
+        i = j + 1;
+        continue;
+      }
+
+      // 启发式判断是否“像数学公式”
+      const hasTexCommand = /\\[a-zA-Z]+/.test(trimmedInner);
+      const hasMathControl = /[_^{}]/.test(trimmedInner);
+      const hasOperator = /[=+\-*/]/.test(trimmedInner);
+      const hasLetter = /[A-Za-z]/.test(trimmedInner);
+      const hasDigit = /\d/.test(trimmedInner);
+      const simpleVariable = /^[A-Za-z]$/.test(trimmedInner);
+
+      const looksLikeMath =
+        hasTexCommand ||
+        hasMathControl ||
+        simpleVariable ||
+        (hasLetter && hasOperator) ||
+        (hasDigit && hasOperator);
+
+      if (!looksLikeMath) {
+        // 不像公式：整段 $...$ 原样返回
+        out += src.slice(startIndex, j + 1);
+        i = j + 1;
+        continue;
+      }
+
+      // 确认是公式：为整个 $...$ 对生成一个占位符
+      const placeholder = createMathPlaceholder(counter++);
+      mathTokens.push({ placeholder, content: trimmedInner, display: false });
+      out += placeholder;
+      i = j + 1;
+    }
+
+    work = out;
+  })();
 
   return { text: work, mathTokens };
 }
