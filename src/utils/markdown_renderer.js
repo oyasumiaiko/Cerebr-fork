@@ -90,6 +90,55 @@ function createMathPlaceholder(index) {
 }
 
 /**
+ * 检查字符串中是否存在“位于 \\text{...} 之外的中文字符”。
+ * 仅作为启发式：当发现中文且不在 TeX 的 \\text 片段内时，
+ * 更倾向于认为整段 $...$ 是自然语言而非数学公式。
+ *
+ * 规则简化为：
+ * - 识别形如 "\\text{...}" 的片段，允许内部出现任意中文；
+ * - 只要在这些片段之外发现任意中文，即视为“包含非公式中文”。
+ *
+ * @param {string} input
+ * @returns {boolean} 是否存在位于 \\text{...} 外部的中文字符
+ */
+function hasCjkOutsideTeXText(input) {
+  if (!input) return false;
+  let inText = false;
+  let braceDepth = 0;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (!inText) {
+      // 检测 \text{ 起始
+      if (ch === '\\' && input.slice(i, i + 6) === '\\text{') {
+        inText = true;
+        braceDepth = 1;
+        i += 5; // 跳过 "text{"
+        continue;
+      }
+      // 非 \text 段：若出现中文则认为在外部
+      if (ch >= '\u4e00' && ch <= '\u9fff') {
+        return true;
+      }
+    } else {
+      // 处于 \text{...} 内部，简单跟踪大括号平衡
+      if (ch === '{') {
+        braceDepth++;
+      } else if (ch === '}') {
+        braceDepth--;
+        if (braceDepth <= 0) {
+          inText = false;
+          braceDepth = 0;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * 在非代码段中提取数学表达式为占位符。
  * 支持：
  * - \(...\) 行内
@@ -206,10 +255,17 @@ function extractMathPlaceholders(text) {
       // 启发式判断是否“像数学公式”
       const hasTexCommand = /\\[a-zA-Z]+/.test(trimmedInner);
       const hasMathControl = /[_^{}]/.test(trimmedInner);
-      const hasOperator = /[=+\-*/]/.test(trimmedInner);
+      // 运算符：不包含 *，避免把 Markdown 粗体 ** 误当成乘号
+      const hasOperator = /[=+\-\/]/.test(trimmedInner);
       const hasLetter = /[A-Za-z]/.test(trimmedInner);
       const hasDigit = /\d/.test(trimmedInner);
       const simpleVariable = /^[A-Za-z]$/.test(trimmedInner);
+      // 若存在位于 \text{...} 之外的中文，更可能是自然语言而非公式
+      if (hasCjkOutsideTeXText(trimmedInner)) {
+        out += src.slice(startIndex, j + 1);
+        i = j + 1;
+        continue;
+      }
 
       const looksLikeMath =
         hasTexCommand ||
