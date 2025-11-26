@@ -318,6 +318,9 @@ export function createMessageProcessor(appContext) {
     if (newThoughtsRaw !== undefined) { // 允许显式将思考过程设置为 null/空字符串
       node.thoughtsRaw = newThoughtsRaw;
     }
+    if (groundingMetadata !== undefined) {
+      node.groundingMetadata = groundingMetadata || null;
+    }
 
     // Setup/Update thoughts display
     // Pass `processMathAndMarkdown` from the outer scope
@@ -691,6 +694,36 @@ export function createMessageProcessor(appContext) {
   }
 
   /**
+   * 切换美元符号数学渲染时，重新处理当前所有 AI 消息
+   */
+  function rerenderAiMessagesForMathSetting() {
+    if (!chatContainer) return;
+    const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
+    if (!aiMessages.length) return;
+
+    aiMessages.forEach((messageDiv) => {
+      const messageId = messageDiv.getAttribute('data-message-id');
+      const originalText = messageDiv.getAttribute('data-original-text');
+      if (!messageId || typeof originalText !== 'string') return;
+
+      const historyNode = chatHistoryManager?.chatHistory?.messages?.find(msg => msg.id === messageId);
+      if (!historyNode) return;
+
+      const hasRefsWithoutMetadata = !historyNode.groundingMetadata && messageDiv.querySelector('.reference-number');
+      if (hasRefsWithoutMetadata) {
+        console.warn('跳过重新渲染以避免丢失引用信息:', messageId);
+        return;
+      }
+
+      try {
+        updateAIMessage(messageId, originalText, historyNode.thoughtsRaw ?? null, historyNode.groundingMetadata ?? null);
+      } catch (error) {
+        console.error('重新渲染消息失败:', messageId, error);
+      }
+    });
+  }
+
+  /**
    * 获取提示词类型
    * @param {HTMLElement|string} content - 输入内容，可以是HTML元素或字符串
    * @param {Object} prompts - 提示词设置对象
@@ -765,6 +798,14 @@ export function createMessageProcessor(appContext) {
     const foldedText = foldMessageContent(text || '');
     // 使用纯函数式渲染管线（禁用内联 HTML、支持 KaTeX、严格 DOMPurify）
     return renderMarkdownSafe(foldedText, { allowDetails: true, enableDollarMath });
+  }
+
+  try {
+    services.settingsManager?.subscribe?.('enableDollarMath', () => {
+      rerenderAiMessagesForMathSetting();
+    });
+  } catch (error) {
+    console.warn('订阅 enableDollarMath 设置变化失败:', error);
   }
 
   /**
