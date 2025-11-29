@@ -236,13 +236,146 @@ function setupEmptyStateHandlers(appContext) {
   }
 
   if (appContext.dom.emptyStateRandomBackground) {
-    appContext.dom.emptyStateRandomBackground.addEventListener('click', () => {
+    const randomBgButton = appContext.dom.emptyStateRandomBackground;
+
+    // 左键：刷新随机背景图片
+    randomBgButton.addEventListener('click', () => {
       const settingsManager = appContext.services.settingsManager;
       if (!settingsManager?.refreshBackgroundImage) {
         console.warn('随机背景图片按钮点击时缺少 refreshBackgroundImage 方法');
         return;
       }
       settingsManager.refreshBackgroundImage();
+    });
+
+    // 右键：复制当前背景图片到剪贴板
+    randomBgButton.addEventListener('contextmenu', async (event) => {
+      event.preventDefault();
+
+      const showNotification = appContext.utils?.showNotification;
+
+      // 检查 Clipboard API 支持
+      if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
+        showNotification?.({
+          message: '当前环境不支持复制图片到剪贴板',
+          type: 'warning',
+          duration: 2400
+        });
+        return;
+      }
+
+      let imageUrl = '';
+
+      try {
+        // 从 CSS 变量中解析当前背景图片 URL
+        const style = getComputedStyle(document.documentElement);
+        const cssValue = (style.getPropertyValue('--cerebr-background-image') || '').trim();
+        if (!cssValue || cssValue === 'none') {
+          showNotification?.({
+            message: '当前没有背景图片可以复制',
+            type: 'warning',
+            duration: 2000
+          });
+          return;
+        }
+
+        const match = cssValue.match(/url\(\s*(['"]?)(.*?)\1\s*\)/i);
+        imageUrl = match && match[2] ? match[2] : '';
+        if (!imageUrl) {
+          showNotification?.({
+            message: '无法解析当前背景图片地址',
+            type: 'warning',
+            duration: 2400
+          });
+          return;
+        }
+
+        // 先拉取原始图片二进制
+        let blob;
+        try {
+          const response = await fetch(imageUrl);
+          if (!response.ok) {
+            throw new Error('请求失败: ' + response.status);
+          }
+          blob = await response.blob();
+        } catch (error) {
+          console.error('获取背景图片失败:', error);
+          showNotification?.({
+            message: '获取背景图片失败，无法复制到剪贴板',
+            type: 'error',
+            duration: 2600
+          });
+          return;
+        }
+
+        if (typeof ClipboardItem === 'undefined') {
+          showNotification?.({
+            message: '当前环境不支持图片剪贴板写入',
+            type: 'error',
+            duration: 2600
+          });
+          return;
+        }
+
+        // 若不是 PNG，则通过 Canvas 转换为 PNG，保证最终写入的是 PNG 图片
+        const ensurePngBlob = (inputBlob) => {
+          if (inputBlob.type === 'image/png') return Promise.resolve(inputBlob);
+
+          return new Promise((resolve, reject) => {
+            try {
+              const img = new Image();
+              const objectUrl = URL.createObjectURL(inputBlob);
+              img.onload = () => {
+                try {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0);
+                  URL.revokeObjectURL(objectUrl);
+
+                  canvas.toBlob((pngBlob) => {
+                    if (pngBlob) {
+                      resolve(pngBlob);
+                    } else {
+                      reject(new Error('PNG 转码失败'));
+                    }
+                  }, 'image/png');
+                } catch (e) {
+                  URL.revokeObjectURL(objectUrl);
+                  reject(e);
+                }
+              };
+              img.onerror = (e) => {
+                URL.revokeObjectURL(objectUrl);
+                reject(new Error('图片加载失败，无法转为 PNG'));
+              };
+              // 尝试避免跨域污染画布
+              img.crossOrigin = 'anonymous';
+              img.src = objectUrl;
+            } catch (e) {
+              reject(e);
+            }
+          });
+        };
+
+        const pngBlob = await ensurePngBlob(blob);
+        const item = new ClipboardItem({ 'image/png': pngBlob });
+        await navigator.clipboard.write([item]);
+
+        showNotification?.({
+          message: '已将背景图片以 PNG 格式复制到剪贴板',
+          type: 'success',
+          duration: 2000
+        });
+      } catch (error) {
+        console.error('复制背景图片到剪贴板失败:', error);
+        showNotification?.({
+          message: '复制背景图片失败（可能是浏览器限制或跨域图片），请稍后重试',
+          type: 'error',
+          duration: 3200
+        });
+      }
     });
   }
 }

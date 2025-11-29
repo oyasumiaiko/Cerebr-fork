@@ -207,14 +207,21 @@ function extractMathPlaceholders(text, options = {}) {
 
         const startIndex = i;
 
-        // 向后寻找与之成对的下一个 $（就近匹配）
+        // 向后寻找与之成对的下一个 $（就近匹配），不跨越换行
         let j = i + 1;
-        while (j < src.length && src[j] !== '$') {
+        let foundNewline = false;
+        while (j < src.length) {
+          const ch2 = src[j];
+          if (ch2 === '$') break;
+          if (ch2 === '\n' || ch2 === '\r') {
+            foundNewline = true;
+            break;
+          }
           j += 1;
         }
 
-        // 没有找到匹配的 $，当前 $ 视为普通字符
-        if (j >= src.length) {
+        // 没有找到匹配的 $，或中途遇到换行，则当前 $ 视为普通字符
+        if (j >= src.length || foundNewline || src[j] !== '$') {
           out += ch;
           i += 1;
           continue;
