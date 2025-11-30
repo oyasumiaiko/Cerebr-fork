@@ -85,6 +85,8 @@ export function createSettingsManager(appContext) {
     clearOnSearch: true, // This might be specific to a search feature, not a general setting
     shouldSendChatHistory: true,
     autoRetry: false,
+    // 是否自动下载 AI 返回的图片到本地并在历史中使用本地路径
+    autoDownloadImages: false,
     showReference: true,
     sidebarPosition: 'right', // 'left' 或 'right'
     stopAtTop: true, // 滚动到顶部时停止
@@ -199,6 +201,13 @@ export function createSettingsManager(appContext) {
       label: '自动重试',
       defaultValue: DEFAULT_SETTINGS.autoRetry,
       apply: (v) => applyAutoRetry(v)
+    },
+    {
+      key: 'autoDownloadImages',
+      type: 'toggle',
+      label: '自动下载 AI 图片',
+      defaultValue: DEFAULT_SETTINGS.autoDownloadImages
+      // 行为逻辑在 chat_history_ui 中读取该设置并执行实际下载
     },
     // 数学公式：是否使用 $ / $$ 作为分隔符
     {

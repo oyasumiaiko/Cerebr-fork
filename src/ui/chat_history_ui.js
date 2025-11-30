@@ -50,6 +50,7 @@ export function createChatHistoryUI(appContext) {
   // 修改: 直接使用 services.chatHistoryManager.getCurrentConversationChain 访问获取会话链函数
   // const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
   const showNotification = utils.showNotification;
+  const settingsManager = services.settingsManager;
 
   let currentConversationId = null;
   // let currentPageInfo = null; // Replaced by appContext.state.pageInfo or parameter to updatePageInfo
@@ -119,6 +120,149 @@ export function createChatHistoryUI(appContext) {
     metaCache.time = 0;
     invalidateGalleryCache();
     invalidateSearchCache();
+  }
+
+  /**
+   * 将本机文件系统路径转换为可在浏览器中使用的 file:// URL
+   * 兼容 Windows 与 POSIX 路径，用于指向下载到本地磁盘的图片文件。
+   * @param {string} nativePath - 本机文件系统路径，例如 "C:\\Users\\me\\Downloads\\Cerebr\\img.png"
+   * @returns {string} 可用于 <img src> 的 file:// URL
+   */
+  function nativePathToFileUrl(nativePath) {
+    if (!nativePath || typeof nativePath !== 'string') return '';
+    if (/^file:/i.test(nativePath)) return nativePath;
+    // Windows 盘符路径或 UNC 路径
+    if (/^[a-zA-Z]:[\\/]/.test(nativePath) || /^\\\\/.test(nativePath)) {
+      const normalized = nativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+      return `file:///${normalized}`;
+    }
+    // POSIX 路径
+    if (nativePath.startsWith('/')) {
+      return `file://${nativePath}`;
+    }
+    return nativePath;
+  }
+
+  /**
+   * 将 data:image/...;base64,... URL 下载到本地文件，并返回对应的 file:// URL
+   * - 使用 chrome.downloads API 将图片保存到下载目录下的 Cerebr/Images 子目录
+   * - 若任一环节失败，则回退为原始 data URL，不中断整体保存流程
+   * @param {string} dataUrl - data:image/...;base64,... 形式的图片数据
+   * @returns {Promise<string>} 下载成功后返回本地 file:// URL，否则返回原始 dataUrl
+   */
+  async function downloadDataUrlImageAndGetLocalUrl(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== 'string') return dataUrl;
+    if (!/^data:image\//i.test(dataUrl)) return dataUrl;
+
+    const hasDownloadsApi = typeof chrome !== 'undefined' &&
+      chrome &&
+      chrome.downloads &&
+      typeof chrome.downloads.download === 'function';
+    if (!hasDownloadsApi) return dataUrl;
+
+    try {
+      // 解析 data URL，提取 mimeType 与 base64 数据
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.\-]+);base64,([a-zA-Z0-9+/=]+)$/);
+      if (!match) return dataUrl;
+      const mimeType = match[1];
+      const base64 = match[2];
+
+      // base64 -> Blob（避免再发一次网络请求）
+      const binaryStr = atob(base64);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
+
+      const objectUrl = URL.createObjectURL(blob);
+      const lowerMime = mimeType.toLowerCase();
+      let ext = 'png';
+      if (lowerMime === 'image/jpeg' || lowerMime === 'image/jpg') ext = 'jpg';
+      else if (lowerMime === 'image/gif') ext = 'gif';
+      else if (lowerMime === 'image/webp') ext = 'webp';
+
+      const ts = new Date();
+      const tsId = ts.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+      const rand = Math.random().toString(36).slice(2, 8);
+      const filename = `Cerebr/Images/cerebr_${tsId}_${rand}.${ext}`;
+
+      // 使用 chrome.downloads 将 blob URL 保存到下载目录
+      const downloadId = await new Promise((resolve, reject) => {
+        chrome.downloads.download({ url: objectUrl, filename, saveAs: false }, (id) => {
+          const err = chrome.runtime?.lastError;
+          if (err || !id) {
+            reject(err || new Error('downloads.download failed'));
+          } else {
+            resolve(id);
+          }
+        });
+      });
+
+      // 一段时间后释放 object URL，避免内存泄漏
+      setTimeout(() => {
+        try { URL.revokeObjectURL(objectUrl); } catch (_) {}
+      }, 60 * 1000);
+
+      // 查询下载记录，获取完整本地路径
+      const item = await new Promise((resolve, reject) => {
+        chrome.downloads.search({ id: downloadId }, (results) => {
+          const err = chrome.runtime?.lastError;
+          if (err) return reject(err);
+          resolve(results && results[0]);
+        });
+      });
+
+      const nativePath = item && item.filename ? item.filename : '';
+      if (!nativePath) return dataUrl;
+
+      const fileUrl = nativePathToFileUrl(nativePath);
+      return fileUrl || dataUrl;
+    } catch (error) {
+      console.warn('自动下载图片失败，回退为 data URL:', error);
+      return dataUrl;
+    }
+  }
+
+  /**
+   * 在保存对话前，根据设置自动将 AI 消息中的 data:image/... 图片下载到本地，
+   * 并将消息内容中的图片 URL 替换为对应的 file:// 本地路径。
+   * 这样写入 IndexedDB 的将是本地路径而非大体积 base64 字符串。
+   * @param {Array<Object>} messages - 当前会话的消息数组（chatHistory.messages 的拷贝）
+   * @returns {Promise<void>}
+   */
+  async function maybeAutoDownloadImagesInMessages(messages) {
+    if (!Array.isArray(messages) || !messages.length) return;
+    const enabled = settingsManager?.getSetting?.('autoDownloadImages');
+    if (!enabled) return;
+
+    const hasDownloadsApi = typeof chrome !== 'undefined' &&
+      chrome &&
+      chrome.downloads &&
+      typeof chrome.downloads.download === 'function';
+    if (!hasDownloadsApi) return;
+
+    for (const msg of messages) {
+      if (!msg || typeof msg !== 'object') continue;
+      const role = (msg.role || '').toLowerCase();
+      // 仅处理 AI / assistant 消息中的图片，避免对用户上传图片做多余的下载
+      if (role !== 'assistant') continue;
+      if (!Array.isArray(msg.content)) continue;
+
+      for (const part of msg.content) {
+        if (!part || part.type !== 'image_url' || !part.image_url || !part.image_url.url) continue;
+        const currentUrl = String(part.image_url.url || '');
+        if (!currentUrl.startsWith('data:image/')) continue;
+        try {
+          const localUrl = await downloadDataUrlImageAndGetLocalUrl(currentUrl);
+          // 将消息内容中的 URL 替换为本地 file:// 路径
+          part.image_url.url = localUrl;
+        } catch (e) {
+          console.warn('处理单条图片下载时出错，跳过该图片:', e);
+        }
+      }
+    }
   }
 
   async function getAllConversationMetadataWithCache(forceUpdate = false) {
@@ -401,6 +545,9 @@ export function createChatHistoryUI(appContext) {
     const timestamps = messagesCopy.map(msg => msg.timestamp);
     const startTime = Math.min(...timestamps);
     const endTime = Math.max(...timestamps);
+
+    // 在持久化前，根据设置尝试将 AI 返回的 data:image 图片下载到本地，并替换为 file:// 路径
+    await maybeAutoDownloadImagesInMessages(messagesCopy);
 
     // 提取第一条消息的纯文本内容
     const firstMessageTextContent = extractMessagePlainText(messagesCopy.find(msg => extractMessagePlainText(msg) !== ''));
