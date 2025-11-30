@@ -41,7 +41,8 @@ export function createContextMenuManager(appContext) {
   const clearChatContextButton = dom.clearChatContextButton;
   const chatContainer = dom.chatContainer;
   const forkConversationButton = dom.forkConversationButton;
-  const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
+  const copyAsImageButton = dom.copyAsImageButton; // 复制整条消息为图片
+  const downloadImageButton = dom.downloadImageButton; // 新增：下载单张图片
   const editMessageButton = document.getElementById('edit-message');
 
   // Services from appContext.services
@@ -53,6 +54,7 @@ export function createContextMenuManager(appContext) {
   // Private state
   let currentMessageElement = null;
   let currentCodeBlock = null;
+  let currentImageElement = null; // 当前右键选中的图片元素（如有）
   let isEditing = false;
 
   /**
@@ -69,6 +71,8 @@ export function createContextMenuManager(appContext) {
 
     // 获取点击的代码块元素
     const codeBlock = e.target.closest('pre code');
+    // 获取点击的图片元素（AI 内联图片或输入区图片标签）
+    const imageElement = e.target.closest('.image-tag img, img.ai-inline-image');
 
     // 根据消息状态显示或隐藏停止更新按钮
     // 除了当前消息为 updating 外，只要有任意 AI 消息处于 updating（包括“正在等待回复”的占位消息），也显示“停止更新”
@@ -85,12 +89,25 @@ export function createContextMenuManager(appContext) {
     };
 
     // 根据是否点击代码块显示或隐藏复制代码按钮
-    if (codeBlock) {
-      copyCodeButton.style.display = 'flex';
-      currentCodeBlock = codeBlock;
-    } else {
-      copyCodeButton.style.display = 'none';
-      currentCodeBlock = null;
+    if (copyCodeButton) {
+      if (codeBlock) {
+        copyCodeButton.style.display = 'flex';
+        currentCodeBlock = codeBlock;
+      } else {
+        copyCodeButton.style.display = 'none';
+        currentCodeBlock = null;
+      }
+    }
+
+    // 根据是否点击图片显示或隐藏“下载图片”按钮
+    if (downloadImageButton) {
+      if (imageElement) {
+        downloadImageButton.style.display = 'flex';
+        currentImageElement = imageElement;
+      } else {
+        downloadImageButton.style.display = 'none';
+        currentImageElement = null;
+      }
     }
 
     // 调整菜单位置，确保菜单不超出视口
@@ -374,6 +391,98 @@ export function createContextMenuManager(appContext) {
   }
 
   /**
+   * 处理单张图片下载（针对右键点击的图片）
+   * 使用 chrome.downloads（如可用）优先保存到下载目录/Cerebr/Images/，
+   * 若不可用则退回到创建 <a download> 的方式。
+   */
+  async function downloadCurrentImage() {
+    if (!currentImageElement || !downloadImageButton) {
+      hideContextMenu();
+      return;
+    }
+    try {
+      const src = currentImageElement.src;
+      if (!src) {
+        hideContextMenu();
+        return;
+      }
+
+      const originalLabel = downloadImageButton.innerHTML;
+      downloadImageButton.innerHTML = '<i class="far fa-spinner fa-spin"></i> 下载中...';
+
+      // 推断文件名：优先使用 data-filename / alt，其次使用 URL 路径名，最后退回时间戳
+      let filename =
+        currentImageElement.getAttribute('data-filename') ||
+        currentImageElement.alt ||
+        '';
+      if (!filename) {
+        try {
+          const u = new URL(src);
+          const path = u.pathname || '';
+          filename = path.split('/').pop() || '';
+        } catch (_) {
+          // 可能是 data: 或 file:，此时走时间戳命名
+        }
+      }
+      const guessExtFromSrc = () => {
+        if (/^data:image\/png/i.test(src)) return 'png';
+        if (/^data:image\/jpe?g/i.test(src)) return 'jpg';
+        if (/^data:image\/gif/i.test(src)) return 'gif';
+        if (/^data:image\/webp/i.test(src)) return 'webp';
+        return 'png';
+      };
+      if (!filename) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        filename = `cerebr-image-${ts}.${guessExtFromSrc()}`;
+      }
+
+      const hasDownloadsApi = typeof chrome !== 'undefined' &&
+        chrome &&
+        chrome.downloads &&
+        typeof chrome.downloads.download === 'function';
+
+      if (hasDownloadsApi) {
+        // 使用扩展 downloads 权限保存到固定子目录
+        const targetPath = `Cerebr/Images/${filename}`;
+        await new Promise((resolve, reject) => {
+          chrome.downloads.download(
+            { url: src, filename: targetPath, saveAs: false },
+            (id) => {
+              const err = chrome.runtime?.lastError;
+              if (err || !id) {
+                reject(err || new Error('downloads.download failed'));
+              } else {
+                resolve(id);
+              }
+            }
+          );
+        });
+      } else {
+        // 回退：使用 <a download> 触发浏览器默认下载行为
+        const a = document.createElement('a');
+        a.href = src;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      downloadImageButton.innerHTML = '<i class="far fa-check"></i> 已下载';
+      setTimeout(() => {
+        downloadImageButton.innerHTML = originalLabel;
+        hideContextMenu();
+      }, 1000);
+    } catch (error) {
+      console.error('下载图片失败:', error);
+      downloadImageButton.innerHTML = '<i class="far fa-times"></i> 失败';
+      setTimeout(() => {
+        downloadImageButton.innerHTML = '<i class="far fa-download"></i> 下载图片';
+        hideContextMenu();
+      }, 1200);
+    }
+  }
+
+  /**
    * 设置事件监听器
    */
   function setupEventListeners() {
@@ -423,7 +532,14 @@ export function createContextMenuManager(appContext) {
     });
     
     // 添加复制为图片按钮点击事件
-    copyAsImageButton.addEventListener('click', copyMessageAsImage);
+    if (copyAsImageButton) {
+      copyAsImageButton.addEventListener('click', copyMessageAsImage);
+    }
+
+    // 添加下载图片按钮点击事件（仅在右键图片时显示）
+    if (downloadImageButton) {
+      downloadImageButton.addEventListener('click', downloadCurrentImage);
+    }
 
     // 添加创建分支对话按钮点击事件
     if (forkConversationButton) {
