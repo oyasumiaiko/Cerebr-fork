@@ -50,6 +50,7 @@ export function createChatHistoryUI(appContext) {
   // 修改: 直接使用 services.chatHistoryManager.getCurrentConversationChain 访问获取会话链函数
   // const getCurrentConversationChain = services.chatHistoryManager.getCurrentConversationChain;
   const showNotification = utils.showNotification;
+  const settingsManager = services.settingsManager;
 
   let currentConversationId = null;
   // let currentPageInfo = null; // Replaced by appContext.state.pageInfo or parameter to updatePageInfo
@@ -119,6 +120,209 @@ export function createChatHistoryUI(appContext) {
     metaCache.time = 0;
     invalidateGalleryCache();
     invalidateSearchCache();
+  }
+
+  // --- AI 图片自动下载去重索引 ---
+  const IMAGE_DOWNLOAD_INDEX_KEY = 'cerebr_image_download_index_v1';
+
+  /**
+   * 从本地存储加载图片下载索引（fingerprint -> fileUrl）
+   * 使用 chrome.storage.local 持久化，避免重复下载相同图片。
+   */
+  async function loadImageDownloadIndex() {
+    try {
+      const data = await storageService.getJSON(IMAGE_DOWNLOAD_INDEX_KEY, {}, { area: 'local' });
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        return data;
+      }
+    } catch (e) {
+      console.warn('读取图片下载索引失败:', e);
+    }
+    return {};
+  }
+
+  async function saveImageDownloadIndex(index) {
+    try {
+      await storageService.setJSON(IMAGE_DOWNLOAD_INDEX_KEY, index || {}, { area: 'local' });
+    } catch (e) {
+      console.warn('保存图片下载索引失败:', e);
+    }
+  }
+
+  /**
+   * 计算 dataURL 的指纹，用于判断是否重复图片。
+   * 优先使用 SHA-256，失败时回退到简单字符串哈希。
+   */
+  async function computeImageFingerprint(dataUrl) {
+    if (typeof dataUrl !== 'string' || !dataUrl) return '';
+    try {
+      if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
+        const enc = new TextEncoder();
+        const buf = enc.encode(dataUrl);
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        const bytes = Array.from(new Uint8Array(digest));
+        // 截断前 16 字节，生成 32 位十六进制串即可满足去重需求
+        return bytes
+          .slice(0, 16)
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+    } catch (e) {
+      console.warn('计算图片指纹失败，将回退到简单哈希:', e);
+    }
+    // 简单哈希回退：32 位无符号整数
+    let hash = 0;
+    for (let i = 0; i < dataUrl.length; i++) {
+      hash = ((hash << 5) - hash + dataUrl.charCodeAt(i)) | 0;
+    }
+    return `simple_${hash >>> 0}`;
+  }
+
+  /**
+   * 将 data:image/...;base64,... URL 下载到本地文件，并返回对应的 file:// 或浏览器可用的 URL。
+   * - 优先使用 chrome.downloads.download 保存到 下载目录/Cerebr/Images/ 子目录
+   * - 若 API 不可用，则退回到创建 <a download> 触发浏览器默认下载，并返回原始 dataURL
+   */
+  async function downloadDataUrlImageAndGetLocalUrl(dataUrl, suggestedFilename) {
+    if (!dataUrl || typeof dataUrl !== 'string') return dataUrl;
+    if (!/^data:image\//i.test(dataUrl)) return dataUrl;
+
+    const hasDownloadsApi =
+      typeof chrome !== 'undefined' &&
+      chrome &&
+      chrome.downloads &&
+      typeof chrome.downloads.download === 'function';
+
+    // 尝试使用 downloads API：可指定子目录，便于统一管理
+    if (hasDownloadsApi) {
+      try {
+        let filename = suggestedFilename || '';
+        if (!filename) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          let ext = 'png';
+          if (/^data:image\/jpe?g/i.test(dataUrl)) ext = 'jpg';
+          else if (/^data:image\/gif/i.test(dataUrl)) ext = 'gif';
+          else if (/^data:image\/webp/i.test(dataUrl)) ext = 'webp';
+          filename = `cerebr-image-${ts}.${ext}`;
+        }
+        const targetPath = `Cerebr/Images/${filename}`;
+        const downloadId = await new Promise((resolve, reject) => {
+          chrome.downloads.download(
+            { url: dataUrl, filename: targetPath, saveAs: false },
+            (id) => {
+              const err = chrome.runtime?.lastError;
+              if (err || !id) {
+                reject(err || new Error('downloads.download failed'));
+              } else {
+                resolve(id);
+              }
+            }
+          );
+        });
+
+        // 通过 downloads.search 拿到最终文件路径，再转换为 file:// URL
+        const item = await new Promise((resolve, reject) => {
+          chrome.downloads.search({ id: downloadId }, (results) => {
+            const err = chrome.runtime?.lastError;
+            if (err) return reject(err);
+            resolve(results && results[0]);
+          });
+        });
+
+        const nativePath = item && item.filename ? item.filename : '';
+        if (!nativePath) return dataUrl;
+
+        // 转换为 file:// URL（仅用于存储在会话中，实际展示依赖用户是否允许访问本地文件）
+        let fileUrl = nativePath;
+        if (!/^file:/i.test(fileUrl)) {
+          if (/^[a-zA-Z]:[\\/]/.test(fileUrl) || /^\\\\/.test(fileUrl)) {
+            const normalized = fileUrl.replace(/\\/g, '/').replace(/^\/+/, '');
+            fileUrl = `file:///${normalized}`;
+          } else if (fileUrl.startsWith('/')) {
+            fileUrl = `file://${fileUrl}`;
+          }
+        }
+        return fileUrl || dataUrl;
+      } catch (e) {
+        console.warn('通过 downloads API 下载图片失败，将回退为 data URL:', e);
+        return dataUrl;
+      }
+    }
+
+    // 无 downloads 权限/环境：仅触发一次下载，无法得到稳定本地路径，返回原始 dataURL
+    try {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      a.download = suggestedFilename || `cerebr-image-${ts}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (_) {}
+    return dataUrl;
+  }
+
+  /**
+   * 在保存对话前，根据设置自动将 AI 消息中的 data:image/... 图片下载到本地，
+   * 并将消息内容中的图片 URL 替换为对应的本地路径。
+   * 通过指纹 + 索引避免重复下载相同图片（即使出现在多个消息或会话中）。
+   * @param {Array<Object>} messages - 当前会话的消息数组（chatHistory.messages 的拷贝）
+   * @returns {Promise<void>}
+   */
+  async function maybeAutoDownloadImagesInMessages(messages) {
+    if (!Array.isArray(messages) || !messages.length) return;
+    const enabled = settingsManager?.getSetting?.('autoDownloadImages');
+    if (!enabled) return;
+
+    const hasDownloadsApi =
+      typeof chrome !== 'undefined' &&
+      chrome &&
+      chrome.downloads &&
+      typeof chrome.downloads.download === 'function';
+    if (!hasDownloadsApi) return;
+
+    const index = await loadImageDownloadIndex();
+    let indexChanged = false;
+
+    for (const msg of messages) {
+      if (!msg || typeof msg !== 'object') continue;
+      const role = (msg.role || '').toLowerCase();
+      // 仅处理 AI / assistant 消息中的图片，避免对用户上传图片做多余的下载
+      if (role !== 'assistant') continue;
+      if (!Array.isArray(msg.content)) continue;
+
+      for (const part of msg.content) {
+        if (!part || part.type !== 'image_url' || !part.image_url || !part.image_url.url) continue;
+        const currentUrl = String(part.image_url.url || '');
+        // 只处理 data:image/...;base64 的图片
+        if (!/^data:image\//i.test(currentUrl)) continue;
+
+        const fingerprint = await computeImageFingerprint(currentUrl);
+        if (!fingerprint) continue;
+
+        // 已经下载过：直接复用本地 URL，避免重复下载
+        if (index[fingerprint]) {
+          part.image_url.url = index[fingerprint];
+          continue;
+        }
+
+        // 首次遇到：执行下载并记录索引
+        try {
+          const localUrl = await downloadDataUrlImageAndGetLocalUrl(currentUrl, null);
+          if (localUrl && localUrl !== currentUrl) {
+            part.image_url.url = localUrl;
+            index[fingerprint] = localUrl;
+            indexChanged = true;
+          }
+        } catch (e) {
+          console.warn('自动下载图片失败，跳过该图片:', e);
+        }
+      }
+    }
+
+    if (indexChanged) {
+      await saveImageDownloadIndex(index);
+    }
   }
 
   async function getAllConversationMetadataWithCache(forceUpdate = false) {
@@ -401,6 +605,9 @@ export function createChatHistoryUI(appContext) {
     const timestamps = messagesCopy.map(msg => msg.timestamp);
     const startTime = Math.min(...timestamps);
     const endTime = Math.max(...timestamps);
+
+    // 在持久化前，根据设置尝试将 AI 返回的 data:image 图片下载到本地，并替换为去重后的本地路径
+    await maybeAutoDownloadImagesInMessages(messagesCopy);
 
     // 提取第一条消息的纯文本内容
     const firstMessageTextContent = extractMessagePlainText(messagesCopy.find(msg => extractMessagePlainText(msg) !== ''));
