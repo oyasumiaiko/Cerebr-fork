@@ -59,6 +59,62 @@ export function createMessageSender(appContext) {
   let aiThoughtsRaw = '';
   let currentAiMessageId = null;
 
+  /**
+   * 检测 Gemini 返回中「HTTP 200 但因安全原因被拦截」的场景，并给出统一的错误消息
+   *
+   * 典型表现为：
+   * - 顶层 HTTP 状态码是 200（sendRequest 不会把它视为错误）
+   * - candidates[0].finishReason 为 IMAGE_SAFETY / SAFETY 等安全相关值
+   *   或 promptFeedback.blockReason 为 SAFETY
+   * - 且本帧 / 本事件中没有任何可用的 text 正文内容
+   *
+   * 这类情况在用户看来是“200 返回错误”，需要抛出 Error 让 sendMessage 的自动重试逻辑接管。
+   * 注意：为了避免影响正常有输出但以 SAFETY 结束的情况，这里要求「当前帧没有正文」且
+   *       流式场景下前面也没有输出过内容（hasExistingContent=false）才视为错误。
+   *
+   * @param {Object} json - Gemini 返回的 JSON 对象（整帧或 SSE 事件数据）
+   * @param {Object} [options]
+   * @param {boolean} [options.hasExistingContent=false] - 对于流式场景，标记之前是否已经输出过正文
+   * @returns {{blocked: boolean, message: string}|null}
+   */
+  function detectGeminiSafetyBlock(json, options = {}) {
+    const hasExistingContent = !!options.hasExistingContent;
+    if (!json || typeof json !== 'object') return null;
+
+    const candidates = Array.isArray(json.candidates) ? json.candidates : [];
+    const candidate = candidates[0] || null;
+
+    const finishReason = candidate?.finishReason || candidate?.finish_reason || null;
+    const finishMessage = candidate?.finishMessage || candidate?.finish_message || null;
+
+    const parts = candidate?.content?.parts || [];
+    const hasTextContent = Array.isArray(parts) && parts.some(
+      (part) => typeof part?.text === 'string' && part.text.trim() !== ''
+    );
+
+    const promptFeedback = json.promptFeedback || json.prompt_feedback || null;
+    const promptBlockReason = promptFeedback?.blockReason || promptFeedback?.block_reason || null;
+    const promptBlockMessage = promptFeedback?.blockReasonMessage || promptFeedback?.block_reason_message || null;
+
+    const reasonStr = [finishReason, promptBlockReason]
+      .filter(Boolean)
+      .map(String)
+      .join(', ');
+    const isSafetyReason = /(SAFETY|IMAGE_SAFETY|PROHIBITED_CONTENT)/i.test(reasonStr);
+
+    // 没有命中安全相关原因，或当前/之前已经有正文输出，则不视为“200 返回错误”
+    if (!isSafetyReason || hasTextContent || hasExistingContent) {
+      return null;
+    }
+
+    const message =
+      finishMessage ||
+      promptBlockMessage ||
+      'Gemini 返回安全拦截结果（HTTP 200），未包含可用内容，请稍后重试。';
+
+    return { blocked: true, message };
+  }
+
   // 取消内部自动重试和定时器逻辑：由外部消费返回值并决定是否重试
 
   /**
@@ -722,6 +778,16 @@ export function createMessageSender(appContext) {
         throw new Error(errorMessage);
       }
 
+      // 处理 Gemini 里那类「HTTP 200 但因安全策略被拦截」的特殊情况
+      // 流式场景下，如果之前尚未输出任何正文，并且当前事件命中安全拦截，则视为“200 返回错误”，交给自动重试
+      const safetyBlock = detectGeminiSafetyBlock(data, {
+        hasExistingContent: !!(aiResponse && aiResponse.trim())
+      });
+      if (safetyBlock && safetyBlock.blocked) {
+        console.warn('Gemini 响应被安全策略拦截（流式，HTTP 200）:', safetyBlock.message);
+        throw new Error(safetyBlock.message);
+      }
+
       // 本事件的增量内容
       let currentEventAnswerDelta = '';
       let currentEventThoughtsDelta = '';
@@ -1012,6 +1078,13 @@ export function createMessageSender(appContext) {
 
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
     if (isGeminiApi) {
+      // 优先检测 Gemini 返回的「安全拦截但 HTTP 为 200」场景，交给上层自动重试逻辑处理
+      const safetyBlock = detectGeminiSafetyBlock(json, { hasExistingContent: false });
+      if (safetyBlock && safetyBlock.blocked) {
+        console.warn('Gemini 响应被安全策略拦截（非流式，HTTP 200）:', safetyBlock.message);
+        throw new Error(safetyBlock.message);
+      }
+
       // Google GenAI 非流式格式（支持代码执行、内联图片与思维链签名）
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
       const candidate = candidates[0] || null;
