@@ -69,11 +69,20 @@ export function createMessageSender(appContext) {
         ext = safeMime.split('/')[1] || 'png';
       }
 
-      // 统一存放到下载目录下的 Cerebr 子目录，便于用户管理
+      // 统一存放到下载目录下的 Cerebr/Images 子目录，便于用户管理
       const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, '-');
+      const pad2 = (n) => String(n).padStart(2, '0');
+      const timestamp = [
+        now.getFullYear(),
+        pad2(now.getMonth() + 1),
+        pad2(now.getDate()),
+        pad2(now.getHours()),
+        pad2(now.getMinutes()),
+        pad2(now.getSeconds())
+      ].join('');
       const random = Math.random().toString(36).slice(2, 8);
-      const filename = `Cerebr/inline-${timestamp}-${random}.${ext}`;
+      const baseName = `cerebr_${timestamp}_${random}`;
+      const filename = `Cerebr/Images/${baseName}.${ext}`;
 
       const dataUrl = `data:${safeMime};base64,${base64Data}`;
 
