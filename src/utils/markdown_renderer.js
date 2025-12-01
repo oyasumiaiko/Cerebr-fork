@@ -296,8 +296,13 @@ const DEFAULT_PURIFY_CONFIG = {
 //   ],
   FORBID_TAGS: [ 'script', 'style', 'iframe', 'object', 'embed', 'link', 'video', 'meta', 'form', 'input', 'button', 'textarea', 'select' ],
   FORBID_ATTR: [/^on/i],
-  // 仅允许 http/https 相对/绝对链接（禁止 javascript: 等）
-  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[\/\?#])/i
+  // 仅允许安全协议：
+  // - http/https        普通网页链接
+  // - mailto/tel        邮件和电话
+  // - file              本地文件（用于扩展内展示下载到本地的图片）
+  // - data:image/...    仅允许图片类型的 data URL，禁止其它 data: 方案
+  // - 相对路径 / ? #    站内链接
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file):|data:image\/[a-z0-9.+-]+;base64,|[\/\?#])/i
 };
 
 /**
