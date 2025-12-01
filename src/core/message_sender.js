@@ -37,6 +37,130 @@ export function createMessageSender(appContext) {
   const uiManager = services.uiManager;
   const showNotification = utils.showNotification;
 
+  /**
+   * 将 API 返回的 inlineData 图片保存到本地下载目录，并返回可用于 <img src> 的本地文件链接。
+   * 
+   * 设计目标：
+   * - 只在 sidebar 扩展页环境下调用，依赖 chrome.downloads 权限；
+   * - 下载失败时回退为 null，由调用方决定是否继续使用 base64 dataURL；
+   * - 返回的链接统一为 file:// 协议，便于后续预览与历史记录中复用。
+   *
+   * 注意：
+   * - 这里不会在 IndexedDB 中保存 base64 字符串，只在内存中临时构造 dataURL 交给下载接口。
+   *
+   * @param {string} mimeType - 图片 MIME 类型，例如 "image/png"
+   * @param {string} base64Data - 图片的 Base64 字符串，不包含 data: 前缀
+   * @returns {Promise<string|null>} - 成功时返回 file:// 开头的本地文件 URL，失败时返回 null
+   */
+  async function saveInlineImageToLocalFile(mimeType, base64Data) {
+    try {
+      if (!mimeType || !base64Data || !chrome?.downloads?.download) {
+        // 在无法访问下载 API 时直接放弃本地文件方案，交由上层使用 dataURL 回退
+        return null;
+      }
+
+      const safeMime = String(mimeType || '').toLowerCase();
+      let ext = 'png';
+      if (safeMime === 'image/jpeg' || safeMime === 'image/jpg') ext = 'jpg';
+      else if (safeMime === 'image/webp') ext = 'webp';
+      else if (safeMime === 'image/gif') ext = 'gif';
+      else if (safeMime === 'image/png') ext = 'png';
+      else if (safeMime.startsWith('image/')) {
+        ext = safeMime.split('/')[1] || 'png';
+      }
+
+      // 统一存放到下载目录下的 Cerebr 子目录，便于用户管理
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, '-');
+      const random = Math.random().toString(36).slice(2, 8);
+      const filename = `Cerebr/inline-${timestamp}-${random}.${ext}`;
+
+      const dataUrl = `data:${safeMime};base64,${base64Data}`;
+
+      // 第一步：触发浏览器下载
+      const downloadId = await new Promise((resolve, reject) => {
+        try {
+          chrome.downloads.download(
+            {
+              url: dataUrl,
+              filename,
+              conflictAction: 'uniquify',
+              saveAs: false
+            },
+            (id) => {
+              const lastError = chrome.runtime?.lastError;
+              if (lastError || typeof id !== 'number') {
+                console.error('保存内联图片到本地失败(download):', lastError);
+                reject(new Error(lastError?.message || 'downloads.download 失败'));
+              } else {
+                resolve(id);
+              }
+            }
+          );
+        } catch (e) {
+          console.error('调用 chrome.downloads.download 异常:', e);
+          reject(e);
+        }
+      });
+
+      // 第二步：轮询等待下载完成，拿到实际文件路径
+      const filePath = await new Promise((resolve, reject) => {
+        const timeoutMs = 30000;
+        const start = Date.now();
+
+        function check() {
+          try {
+            chrome.downloads.search({ id: downloadId }, (items) => {
+              const lastError = chrome.runtime?.lastError;
+              if (lastError) {
+                reject(new Error(lastError.message));
+                return;
+              }
+              const item = items && items[0];
+              if (!item) {
+                reject(new Error('找不到下载任务'));
+                return;
+              }
+              if (item.state === 'complete' && item.filename) {
+                resolve(item.filename);
+                return;
+              }
+              if (item.state === 'interrupted') {
+                reject(new Error(item.error || '下载被中断'));
+                return;
+              }
+              if (Date.now() - start > timeoutMs) {
+                reject(new Error('等待图片下载完成超时'));
+                return;
+              }
+              setTimeout(check, 500);
+            });
+          } catch (e) {
+            reject(e);
+          }
+        }
+
+        check();
+      });
+
+      if (!filePath || typeof filePath !== 'string') {
+        return null;
+      }
+
+      // 将本地绝对路径转换为标准的 file:// URL
+      let normalizedPath = filePath.replace(/\\/g, '/');
+      if (/^[A-Za-z]:\//.test(normalizedPath)) {
+        // Windows 路径: C:/Users/... 需要前置一个斜杠 -> /C:/Users/...
+        normalizedPath = '/' + normalizedPath;
+      }
+      const fileUrl = `file://${normalizedPath}`;
+      return fileUrl;
+    } catch (error) {
+      console.error('保存内联图片到本地失败:', error);
+      return null;
+    }
+  }
+
   // 私有状态
   let isProcessingMessage = false;
   let shouldAutoScroll = true;
@@ -686,16 +810,16 @@ export function createMessageSender(appContext) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
-        // Process any buffered complete line at the end of the stream
+        // 处理缓冲区中最后一行未以换行结尾的数据
         if (incomingDataBuffer.length > 0) {
-             processLine(incomingDataBuffer); // Process the last buffered line
-             incomingDataBuffer = ''; 
+          await processLine(incomingDataBuffer);
+          incomingDataBuffer = '';
         }
-        // If there's pending event data, try to process it as the final event
+        // 如果还有未处理完的事件行，作为最后一个事件再处理一次
         if (currentEventDataLines.length > 0) {
-          processEvent();
+          await processEvent();
         }
-        break; 
+        break;
       }
 
       incomingDataBuffer += decoder.decode(value, { stream: true });
@@ -704,7 +828,7 @@ export function createMessageSender(appContext) {
       while ((lineEndIndex = incomingDataBuffer.indexOf('\n')) >= 0) {
         const line = incomingDataBuffer.substring(0, lineEndIndex);
         incomingDataBuffer = incomingDataBuffer.substring(lineEndIndex + 1);
-        processLine(line);
+        await processLine(line);
       }
     }
 
@@ -725,13 +849,13 @@ export function createMessageSender(appContext) {
       }
     }
 
-    function processLine(line) {
+    async function processLine(line) {
       // Trim the line to handle potential CR characters as well (e.g. '\r\n')
       const trimmedLine = line.trim();
 
       if (trimmedLine === '') { // Empty line: dispatch event
         if (currentEventDataLines.length > 0) {
-          processEvent();
+          await processEvent();
         }
       } else if (trimmedLine.startsWith('data:')) {
         // Add content after "data:" (and optional single space) to current event's data lines
@@ -740,7 +864,7 @@ export function createMessageSender(appContext) {
       // Ignoring event:, id:, : (comments) as they are not used by current response structures
     }
 
-    function processEvent() {
+    async function processEvent() {
       // 将当前事件的多行 data 合并为一个 JSON 字符串
       const fullEventData = currentEventDataLines.join('\n'); 
       currentEventDataLines = []; // 重置，准备下一个事件
@@ -755,7 +879,7 @@ export function createMessageSender(appContext) {
       try {
         const jsonData = JSON.parse(fullEventData);
         if (isGeminiApi) {
-          handleGeminiEvent(jsonData);
+          await handleGeminiEvent(jsonData);
         } else {
           handleOpenAIEvent(jsonData);
         }
@@ -770,7 +894,7 @@ export function createMessageSender(appContext) {
      * 处理 Gemini SSE 事件（包括文本、思考过程、代码执行与图片）
      * @param {Object} data - 从SSE事件中解析出的JSON对象
      */
-    function handleGeminiEvent(data) {
+    async function handleGeminiEvent(data) {
       if (data.error) {
         const errorMessage = data.error.message || 'Unknown Gemini error';
         console.error('Gemini API error:', data.error);
@@ -792,12 +916,12 @@ export function createMessageSender(appContext) {
       let currentEventAnswerDelta = '';
       let currentEventThoughtsDelta = '';
       let groundingMetadata = null;
-      const newInlineImageUrls = [];
+      const newInlineImages = [];
 
       if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
         if (candidate.content && Array.isArray(candidate.content.parts)) {
-          candidate.content.parts.forEach(part => {
+          for (const part of candidate.content.parts) {
             // 0) 捕获 Gemini 3 思维链签名（Thought Signature）：可能出现在最后一个 part，或仅包含签名的空文本 part
             let extractedSignature = null;
             if (typeof part.thought_signature === 'string' && part.thought_signature) {
@@ -827,7 +951,7 @@ export function createMessageSender(appContext) {
               } else {
                 currentEventAnswerDelta += part.text;
               }
-              return;
+              continue;
             }
 
             // 2) 可执行代码块 - 转为 Markdown 代码块
@@ -835,7 +959,7 @@ export function createMessageSender(appContext) {
               const lang = (part.executableCode.language || 'python').toString().toLowerCase();
               const code = part.executableCode.code;
               currentEventAnswerDelta += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
-              return;
+              continue;
             }
 
             // 3) 代码执行结果 - 以代码块形式展示
@@ -844,25 +968,36 @@ export function createMessageSender(appContext) {
               const outcomeLabel = outcome ? ` (${outcome})` : '';
               const output = part.codeExecutionResult.output;
               currentEventAnswerDelta += `\n\`\`\`text\n# 代码执行结果${outcomeLabel}\n${output}\n\`\`\`\n`;
-              return;
+              continue;
             }
 
-            // 4) 内联图片数据 - 转为 dataURL，稍后生成 image-tag
+            // 4) 内联图片数据 - 记录待保存的信息，稍后统一下载为本地文件
             const inline = part.inlineData || part.inline_data;
             if (inline && inline.mimeType && inline.data) {
               if (String(inline.mimeType).startsWith('image/')) {
-                const dataUrl = `data:${inline.mimeType};base64,${inline.data}`;
-                newInlineImageUrls.push(dataUrl);
+                newInlineImages.push({
+                  mimeType: inline.mimeType,
+                  base64Data: inline.data
+                });
               }
             }
-          });
+          }
         }
         groundingMetadata = candidate.groundingMetadata;
       }
 
       // 将本事件中的图片转为内联 img 元素，直接插入到答案增量中
-      if (newInlineImageUrls.length > 0) {
-        const inlineHtmlChunks = newInlineImageUrls.map((url, index) => {
+      if (newInlineImages.length > 0) {
+        // 对每张图片优先尝试保存为本地文件，失败则回退为 dataURL
+        const resolvedUrls = await Promise.all(
+          newInlineImages.map(async (img) => {
+            const fileUrl = await saveInlineImageToLocalFile(img.mimeType, img.base64Data);
+            if (fileUrl) return fileUrl;
+            return `data:${img.mimeType};base64,${img.base64Data}`;
+          })
+        );
+
+        const inlineHtmlChunks = resolvedUrls.map((url) => {
           const safeUrl = (url || '').replace(/"/g, '&quot;');
           const title = '模型生成图片';
           const safeTitle = title.replace(/"/g, '&quot;');
@@ -1089,9 +1224,9 @@ export function createMessageSender(appContext) {
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
       const candidate = candidates[0] || null;
       const parts = candidate?.content?.parts || [];
-      const inlineImageUrls = [];
+      const inlineImages = [];
 
-      parts.forEach(part => {
+      for (const part of parts) {
         // 捕获非函数调用场景下的 Thought Signature：通常位于最后一个 part
         let extractedSignature = null;
         if (typeof part?.thought_signature === 'string' && part.thought_signature) {
@@ -1116,7 +1251,7 @@ export function createMessageSender(appContext) {
 
         if (typeof part?.text === 'string') {
           if (part.thought) thoughts += part.text; else answer += part.text;
-          return;
+          continue;
         }
 
         // 可执行代码块 -> Markdown 代码块
@@ -1124,7 +1259,7 @@ export function createMessageSender(appContext) {
           const lang = (part.executableCode.language || 'python').toString().toLowerCase();
           const code = part.executableCode.code;
           answer += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
-          return;
+          continue;
         }
 
         // 代码执行结果 -> Markdown 代码块
@@ -1133,21 +1268,32 @@ export function createMessageSender(appContext) {
           const outcomeLabel = outcome ? ` (${outcome})` : '';
           const output = part.codeExecutionResult.output;
           answer += `\n\`\`\`text\n# 代码执行结果${outcomeLabel}\n${output}\n\`\`\`\n`;
-          return;
+          continue;
         }
 
-        // 内联图片 -> 转为内联 img 元素
+        // 内联图片 -> 记录待保存的信息，稍后统一下载为本地文件并转为内联 img 元素
         const inline = part.inlineData || part.inline_data;
         if (inline && inline.mimeType && inline.data) {
           if (String(inline.mimeType).startsWith('image/')) {
-            const dataUrl = `data:${inline.mimeType};base64,${inline.data}`;
-            inlineImageUrls.push(dataUrl);
+            inlineImages.push({
+              mimeType: inline.mimeType,
+              base64Data: inline.data
+            });
           }
         }
-      });
+      }
 
-      if (inlineImageUrls.length > 0) {
-        const inlineHtmlChunks = inlineImageUrls.map((url) => {
+      if (inlineImages.length > 0) {
+        // 逐张图片优先尝试落盘为本地文件，失败时回退为 dataURL
+        const resolvedUrls = await Promise.all(
+          inlineImages.map(async (img) => {
+            const fileUrl = await saveInlineImageToLocalFile(img.mimeType, img.base64Data);
+            if (fileUrl) return fileUrl;
+            return `data:${img.mimeType};base64,${img.base64Data}`;
+          })
+        );
+
+        const inlineHtmlChunks = resolvedUrls.map((url) => {
           const safeUrl = (url || '').replace(/"/g, '&quot;');
           const title = '模型生成图片';
           const safeTitle = title.replace(/"/g, '&quot;');
