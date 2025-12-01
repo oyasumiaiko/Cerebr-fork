@@ -574,8 +574,8 @@ export function createMessageSender(appContext) {
       // 更新加载状态：正在发送请求
       loadingMessage.textContent = '正在发送请求...';
 
-      // 构造API请求体
-      const requestBody = apiManager.buildRequest({
+      // 构造API请求体（可能包含异步图片加载，例如从 file:// 读取本地文件后转为 Base64）
+      const requestBody = await apiManager.buildRequest({
         messages: messages,
         config: config
       });

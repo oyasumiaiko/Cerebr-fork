@@ -865,14 +865,97 @@ export function createApiManager(appContext) {
   }
 
   /**
+   * 辅助函数：将 image_url.url 转换为 Gemini 需要的 inline_data 结构
+   * 
+   * 设计目标：
+   * - 优先支持 dataURL（兼容现有逻辑）
+   * - 如果是本地文件链接 file://，在发送前临时读取文件并转为 Base64；
+   * - 读取失败时返回 null，由调用方决定是否忽略该图片。
+   *
+   * 注意：
+   * - 这里仅在构造请求体时做一次性转换，不会把 Base64 写入 IndexedDB；
+   * - 需要 manifest.json 中包含 "file:///*" host_permissions 才能 fetch 本地文件。
+   *
+   * @param {string} url - image_url.url 字段值
+   * @returns {Promise<{inline_data: { mime_type: string, data: string }}|null>}
+   */
+  async function buildGeminiInlinePartFromImageUrl(url) {
+    if (typeof url !== 'string' || !url) {
+      return null;
+    }
+
+    try {
+      // 1) 兼容原有 dataURL 格式：data:image/...;base64,XXXX
+      if (url.startsWith('data:')) {
+        const match = url.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,(.*)$/);
+        if (!match) {
+          console.warn('不支持的 dataURL 图片格式 (Gemini):', url.substring(0, 48) + '...');
+          return null;
+        }
+        return {
+          inline_data: {
+            mime_type: match[1],
+            data: match[2]
+          }
+        };
+      }
+
+      // 2) 本地文件链接：file:// 开头
+      if (url.startsWith('file://')) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          console.warn('读取本地图片失败 (Gemini):', url, response.status, response.statusText);
+          return null;
+        }
+        const blob = await response.blob();
+
+        // 推断 mimeType：优先使用 blob.type，其次根据扩展名猜测
+        let mimeType = (blob.type || '').toLowerCase();
+        if (!mimeType || !mimeType.startsWith('image/')) {
+          const lowerUrl = url.toLowerCase();
+          if (lowerUrl.endsWith('.jpg') || lowerUrl.endsWith('.jpeg')) mimeType = 'image/jpeg';
+          else if (lowerUrl.endsWith('.png')) mimeType = 'image/png';
+          else if (lowerUrl.endsWith('.gif')) mimeType = 'image/gif';
+          else if (lowerUrl.endsWith('.webp')) mimeType = 'image/webp';
+          else mimeType = 'image/png';
+        }
+
+        const arrayBuffer = await blob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        const chunkSize = 0x8000; // 分片编码，避免参数过长导致栈溢出
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const subarray = bytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode.apply(null, subarray);
+        }
+        const base64Data = btoa(binary);
+
+        return {
+          inline_data: {
+            mime_type: mimeType,
+            data: base64Data
+          }
+        };
+      }
+
+      // 3) 其他 URL（http/https 等）暂不自动处理，避免跨域/授权问题
+      console.warn('不支持的图片URL格式 (Gemini):', url.substring(0, 64) + '...');
+      return null;
+    } catch (error) {
+      console.error('buildGeminiInlinePartFromImageUrl 失败:', error);
+      return null;
+    }
+  }
+
+  /**
    * 构建 API 请求
    * @param {Object} options - 请求选项
    * @param {Array} options.messages - 消息数组
    * @param {Object} options.config - API 配置
    * @param {Object} [options.overrides] - 覆盖默认设置的参数
-   * @returns {Object} 请求体对象
+   * @returns {Promise<Object>} 请求体对象
    */
-  function buildRequest({ messages, config, overrides = {} }) {
+  async function buildRequest({ messages, config, overrides = {} }) {
     // 构造请求基本结构
     let requestBody = {};
 
@@ -897,7 +980,7 @@ export function createApiManager(appContext) {
 
     if (config.baseUrl === 'genai') {
       // Gemini API 请求格式（包含 Gemini 3 思维链签名 Thought Signature 的回传）
-      const contents = normalizedMessages.map(msg => {
+      const contents = (await Promise.all(normalizedMessages.map(async (msg) => {
         // Gemini API 使用 'user' 和 'model' 角色
         const role = msg.role === 'assistant' ? 'model' : msg.role;
         // Gemini API 将 'system' 消息作为单独的 systemInstruction
@@ -907,29 +990,16 @@ export function createApiManager(appContext) {
 
         const parts = [];
         if (Array.isArray(msg.content)) { // OpenAI Vision 格式 (文本和/或图片)
-          msg.content.forEach(item => {
+          for (const item of msg.content) {
             if (item.type === 'text') {
               parts.push({ text: item.text });
             } else if (item.type === 'image_url' && item.image_url && item.image_url.url) {
-              const dataUrl = item.image_url.url;
-              // 从 dataUrl 中提取 mime_type 和 base64 数据
-              // dataUrl 格式: "data:[<mime_type>];base64,<data>"
-              // 支持常见的图片类型: jpeg, png, gif, webp
-              const match = dataUrl.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,(.*)$/);
-              if (match) {
-                parts.push({
-                  inline_data: {
-                    mime_type: match[1], // 例如 "image/jpeg"
-                    data: match[2]       // Base64 编码的图片数据
-                  }
-                });
-              } else {
-                console.warn('不支持的图片数据URL格式或MIME类型 (Gemini):', dataUrl.substring(0, 30) + "...");
-                // 如果格式不匹配，可以考虑将原始文本作为回退（如果适用）
-                // 或者在此处不添加任何 part，具体取决于期望的行为
+              const inlinePart = await buildGeminiInlinePartFromImageUrl(item.image_url.url);
+              if (inlinePart) {
+                parts.push(inlinePart);
               }
             }
-          });
+          }
         } else if (typeof msg.content === 'string') { // 纯文本消息
           parts.push({ text: msg.content });
         } else {
@@ -958,7 +1028,7 @@ export function createApiManager(appContext) {
           return { role: role, parts: parts };
         }
         return null; // 如果没有有效的 parts，则不为此消息创建 content entry
-      }).filter(Boolean); // 过滤掉 null (例如 system 消息或无效消息)
+      }))).filter(Boolean); // 过滤掉 null (例如 system 消息或无效消息)
 
       requestBody = {
         contents: contents,
