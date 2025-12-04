@@ -798,17 +798,39 @@ export function createMessageSender(appContext) {
       return sendMessageCore(rest);
     }
 
-    // 推断本次要使用的原始文本：优先使用调用方传入的 originalMessageText，
-    // 否则从当前输入框中获取。
-    let rawText;
-    if (opts.originalMessageText !== null && opts.originalMessageText !== undefined) {
-      rawText = String(opts.originalMessageText);
-    } else {
+    // 推断本次要使用的原始文本：
+    // - 重新生成模式优先读取被重新生成的用户消息当前文本（data-original-text）；
+    // - 否则优先使用调用方传入的 originalMessageText；
+    // - 最后回退到输入框中的内容。
+    let rawText = '';
+
+    if (opts.regenerateMode && opts.messageId) {
       try {
-        rawText = inputController ? inputController.getInputText() : (messageInput.textContent || '');
+        const targetEl = chatContainer.querySelector(`[data-message-id="${opts.messageId}"]`);
+        const fromDom = targetEl?.getAttribute('data-original-text');
+        if (typeof fromDom === 'string' && fromDom.length > 0) {
+          rawText = fromDom;
+        } else if (chatHistoryManager?.chatHistory?.messages) {
+          const node = chatHistoryManager.chatHistory.messages.find(m => m.id === opts.messageId);
+          if (node && typeof node.content === 'string') {
+            rawText = node.content;
+          }
+        }
       } catch (e) {
-        console.warn('读取输入文本失败，将按空文本处理:', e);
-        rawText = '';
+        console.warn('从历史中读取用于并行解析的消息文本失败，将回退到 originalMessageText:', e);
+      }
+    }
+
+    if (!rawText) {
+      if (opts.originalMessageText !== null && opts.originalMessageText !== undefined) {
+        rawText = String(opts.originalMessageText);
+      } else {
+        try {
+          rawText = inputController ? inputController.getInputText() : (messageInput.textContent || '');
+        } catch (e) {
+          console.warn('读取输入文本失败，将按空文本处理:', e);
+          rawText = '';
+        }
       }
     }
 
