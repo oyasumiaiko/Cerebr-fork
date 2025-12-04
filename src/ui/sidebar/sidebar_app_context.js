@@ -650,8 +650,6 @@ export function applyStandaloneAdjustments(appContext) {
   }
 
   const widthSlider = document.getElementById('sidebar-width');
-  widthSlider?.closest('.menu-item')?.classList.add('standalone-hidden');
-
   const positionToggle = document.getElementById('sidebar-position-switch');
   positionToggle?.closest('.menu-item')?.classList.add('standalone-hidden');
 }

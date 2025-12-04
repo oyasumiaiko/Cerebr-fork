@@ -4595,6 +4595,11 @@ html.fullscreen-mode::before {
   max-width: var(--cerebr-sidebar-width);
 }
 
+/* 全屏下：用户消息也遵守统一的内容最大宽度，便于在独立聊天页面中调整整体内容宽度 */
+.fullscreen-mode .user-message {
+  max-width: var(--cerebr-sidebar-width);
+}
+
 /* 深色主题全屏模式 */
 .dark-theme.fullscreen-mode {
   /* --cerebr-bg-color: rgba(38, 43, 51, 1) !important;

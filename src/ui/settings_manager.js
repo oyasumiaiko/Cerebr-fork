@@ -239,8 +239,7 @@ export function createSettingsManager(appContext) {
       step: 50,
       unit: 'px',
       defaultValue: DEFAULT_SETTINGS.sidebarWidth,
-      apply: (v) => applySidebarWidth(v),
-      standaloneHidden: true
+      apply: (v) => applySidebarWidth(v)
     },
     // 字体大小
     {
@@ -740,12 +739,20 @@ export function createSettingsManager(appContext) {
     if (scaleFactorSlider) {
       scaleFactorSlider.value = value;
     }
-    
+
     if (scaleValueDisplay) {
       scaleValueDisplay.textContent = `${value.toFixed(1)}x`;
     }
-    
-    // 通知父窗口缩放比例变化
+
+    // 在独立聊天页面中，本地直接应用缩放，保持与网页侧栏相同的视觉大小语义
+    if (isStandalone) {
+      const baseScale = 1 / (window.devicePixelRatio || 1);
+      const zoom = baseScale * value;
+      // 这里使用 zoom 而不是 transform，避免影响已有基于 transform 的动效
+      document.documentElement.style.zoom = String(zoom);
+    }
+
+    // 通知父窗口缩放比例变化（嵌入模式由 content.js 接管处理）
     notifyScaleFactorChange(value);
   }
 
