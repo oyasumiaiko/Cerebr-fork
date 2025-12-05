@@ -2762,6 +2762,34 @@ export function createChatHistoryUI(appContext) {
     URL.revokeObjectURL(url);
   }
 
+  const base64FileCache = new Map(); // hash(base64) -> file://...
+  const remoteFileCache = new Map();  // remoteUrl -> file://...
+  const IMAGE_HASH_CACHE_KEY = 'image_hash_cache_v1';
+  let base64CacheLoaded = false;
+
+  async function loadBase64Cache() {
+    if (base64CacheLoaded) return;
+    try {
+      const wrap = await chrome.storage.local.get([IMAGE_HASH_CACHE_KEY]);
+      const cacheObj = wrap[IMAGE_HASH_CACHE_KEY] || {};
+      Object.entries(cacheObj).forEach(([hash, url]) => base64FileCache.set(hash, url));
+    } catch (e) {
+      console.warn('加载图片哈希缓存失败:', e);
+    } finally {
+      base64CacheLoaded = true;
+    }
+  }
+
+  async function persistBase64Cache() {
+    try {
+      const obj = {};
+      base64FileCache.forEach((url, hash) => { obj[hash] = url; });
+      await chrome.storage.local.set({ [IMAGE_HASH_CACHE_KEY]: obj });
+    } catch (e) {
+      console.warn('保存图片哈希缓存失败:', e);
+    }
+  }
+
   function getImageRoleFolder(role) {
     const r = String(role || '').toLowerCase();
     if (r === 'assistant' || r === 'ai') return 'AI';
@@ -2805,6 +2833,17 @@ export function createChatHistoryUI(appContext) {
     return { mimeType, base64Data, ext: guessExtFromMime(mimeType) };
   }
 
+  async function computeBase64Hash(base64Data) {
+    try {
+      const data = new TextEncoder().encode(base64Data);
+      const digest = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      console.warn('计算图片哈希失败，回退为长度标记:', e);
+      return `len_${base64Data.length}`;
+    }
+  }
+
   async function waitForDownloadFile(downloadId, timeoutMs = 30000) {
     const start = Date.now();
     return await new Promise((resolve, reject) => {
@@ -2828,7 +2867,7 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  async function saveDataUrlToLocalFile(dataUrl, roleFolder) {
+  async function saveDataUrlToLocalFile(dataUrl, roleFolder, preferredName) {
     try {
       if (!chrome?.downloads?.download) return null;
       const parsed = parseDataUrl(dataUrl);
@@ -2845,11 +2884,12 @@ export function createChatHistoryUI(appContext) {
         pad2(now.getSeconds())
       ].join('');
       const random = Math.random().toString(36).slice(2, 8);
-      const filename = `Cerebr/Images/${roleFolder}/${timestamp}_${random}.${ext}`;
+      const baseName = preferredName || `${timestamp}_${random}`;
+      const filename = `Cerebr/Images/${roleFolder}/${baseName}.${ext}`;
       const normalizedDataUrl = `data:${mimeType};base64,${base64Data}`;
       const downloadId = await new Promise((resolve, reject) => {
         chrome.downloads.download(
-          { url: normalizedDataUrl, filename, conflictAction: 'uniquify', saveAs: false },
+          { url: normalizedDataUrl, filename, conflictAction: 'overwrite', saveAs: false },
           (id) => {
             const lastError = chrome.runtime?.lastError;
             if (lastError || typeof id !== 'number') {
@@ -2866,6 +2906,22 @@ export function createChatHistoryUI(appContext) {
       console.error('保存 dataURL 图片失败:', error);
       return null;
     }
+  }
+
+  async function getOrSaveDataUrlToLocalFile(dataUrl, roleFolder) {
+    await loadBase64Cache();
+    const parsed = parseDataUrl(dataUrl);
+    if (!parsed) return null;
+    const hash = await computeBase64Hash(parsed.base64Data);
+    if (base64FileCache.has(hash)) {
+      return base64FileCache.get(hash);
+    }
+    const fileUrl = await saveDataUrlToLocalFile(dataUrl, roleFolder, hash);
+    if (fileUrl) {
+      base64FileCache.set(hash, fileUrl);
+      await persistBase64Cache();
+    }
+    return fileUrl;
   }
 
   async function saveRemoteImageToLocalFile(remoteUrl, roleFolder) {
@@ -2905,6 +2961,13 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
+  async function getOrSaveRemoteImage(remoteUrl, roleFolder) {
+    if (remoteFileCache.has(remoteUrl)) return remoteFileCache.get(remoteUrl);
+    const fileUrl = await saveRemoteImageToLocalFile(remoteUrl, roleFolder);
+    if (fileUrl) remoteFileCache.set(remoteUrl, fileUrl);
+    return fileUrl;
+  }
+
   async function replaceDataUrlsInText(text, roleFolder) {
     if (typeof text !== 'string') return { text, changed: false, found: 0, converted: 0, failed: 0 };
     let output = text;
@@ -2916,7 +2979,7 @@ export function createChatHistoryUI(appContext) {
     for (const m of matches) {
       found += 1;
       const dataUrl = m[0];
-      const fileUrl = await saveDataUrlToLocalFile(dataUrl, roleFolder);
+      const fileUrl = await getOrSaveDataUrlToLocalFile(dataUrl, roleFolder);
       if (fileUrl) {
         output = output.replace(dataUrl, fileUrl);
         converted += 1;
@@ -2935,28 +2998,28 @@ export function createChatHistoryUI(appContext) {
     let converted = 0;
     let failed = 0;
 
-    if (Array.isArray(msg?.content)) {
-      for (const part of msg.content) {
-        if (part?.type === 'image_url' && part.image_url?.url) {
-          const url = part.image_url.url;
-          if (typeof url === 'string' && url.startsWith('data:image/')) {
-            found += 1;
-            const local = await saveDataUrlToLocalFile(url, roleFolder);
-            if (local) {
-              part.image_url.url = local;
-              converted += 1;
-              changed = true;
-            } else {
-              failed += 1;
-            }
-          } else if (typeof url === 'string' && url.startsWith('http')) {
-            // 将 http/https 远程图片也落盘，避免后续备份重复拉取
-            const local = await saveRemoteImageToLocalFile(url, roleFolder);
-            if (local) {
-              part.image_url.url = local;
-              converted += 1;
-              changed = true;
-            }
+      if (Array.isArray(msg?.content)) {
+        for (const part of msg.content) {
+          if (part?.type === 'image_url' && part.image_url?.url) {
+            const url = part.image_url.url;
+            if (typeof url === 'string' && url.startsWith('data:image/')) {
+              found += 1;
+              const local = await getOrSaveDataUrlToLocalFile(url, roleFolder);
+              if (local) {
+                part.image_url.url = local;
+                converted += 1;
+                changed = true;
+              } else {
+                failed += 1;
+              }
+            } else if (typeof url === 'string' && url.startsWith('http')) {
+              // 将 http/https 远程图片也落盘，避免后续备份重复拉取
+              const local = await getOrSaveRemoteImage(url, roleFolder);
+              if (local) {
+                part.image_url.url = local;
+                converted += 1;
+                changed = true;
+              }
           }
         } else if (part?.type === 'text' && typeof part.text === 'string') {
           const res = await replaceDataUrlsInText(part.text, roleFolder);
