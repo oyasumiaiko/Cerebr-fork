@@ -2833,6 +2833,35 @@ export function createChatHistoryUI(appContext) {
     return { mimeType, base64Data, ext: guessExtFromMime(mimeType) };
   }
 
+  function extractHashFromFileUrl(fileUrl) {
+    try {
+      if (typeof fileUrl !== 'string' || !fileUrl.startsWith('file://')) return null;
+      let path = decodeURIComponent(fileUrl.replace(/^file:\/\//, ''));
+      if (/^[A-Za-z]:\//.test(path)) path = path.replace(/^\//, '');
+      const base = (path.split(/[\\/]/).pop() || '').split('.').slice(0, -1).join('') || '';
+      // 仅当文件名本身是纯十六进制串时才认定为哈希，避免日期_随机名被误判
+      const candidate = base.match(/^[a-fA-F0-9]{16,64}$/);
+      return candidate ? candidate[0].toLowerCase() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function formatTimestampForPath(ts) {
+    const d = new Date(ts || Date.now());
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const monthFolder = `${d.getFullYear()}_${pad2(d.getMonth() + 1)}`;
+    const dateStr = [
+      d.getFullYear(),
+      pad2(d.getMonth() + 1),
+      pad2(d.getDate()),
+      pad2(d.getHours()),
+      pad2(d.getMinutes()),
+      pad2(d.getSeconds())
+    ].join('');
+    return { monthFolder, dateStr };
+  }
+
   async function computeBase64Hash(base64Data) {
     try {
       const data = new TextEncoder().encode(base64Data);
@@ -2867,25 +2896,15 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  async function saveDataUrlToLocalFile(dataUrl, roleFolder, preferredName) {
+  async function saveDataUrlToLocalFile(dataUrl, roleFolder, preferredName, options = {}) {
     try {
       if (!chrome?.downloads?.download) return null;
       const parsed = parseDataUrl(dataUrl);
       if (!parsed) return null;
       const { mimeType, base64Data, ext } = parsed;
-      const now = new Date();
-      const pad2 = (n) => String(n).padStart(2, '0');
-      const monthFolder = `${now.getFullYear()}_${pad2(now.getMonth() + 1)}`;
-      const timestamp = [
-        now.getFullYear(),
-        pad2(now.getMonth() + 1),
-        pad2(now.getDate()),
-        pad2(now.getHours()),
-        pad2(now.getMinutes()),
-        pad2(now.getSeconds())
-      ].join('');
+      const { monthFolder, dateStr } = formatTimestampForPath(options.timestamp);
       const random = Math.random().toString(36).slice(2, 8);
-      const baseName = preferredName || `${timestamp}_${random}`;
+      const baseName = preferredName ? `${dateStr}_${preferredName}` : `${dateStr}_${random}`;
       const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${baseName}.${ext}`;
       const normalizedDataUrl = `data:${mimeType};base64,${base64Data}`;
       const downloadId = await new Promise((resolve, reject) => {
@@ -2909,7 +2928,7 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  async function getOrSaveDataUrlToLocalFile(dataUrl, roleFolder) {
+  async function getOrSaveDataUrlToLocalFile(dataUrl, roleFolder, options = {}) {
     await loadBase64Cache();
     const parsed = parseDataUrl(dataUrl);
     if (!parsed) return null;
@@ -2917,7 +2936,7 @@ export function createChatHistoryUI(appContext) {
     if (base64FileCache.has(hash)) {
       return base64FileCache.get(hash);
     }
-    const fileUrl = await saveDataUrlToLocalFile(dataUrl, roleFolder, hash);
+    const fileUrl = await saveDataUrlToLocalFile(dataUrl, roleFolder, hash, options);
     if (fileUrl) {
       base64FileCache.set(hash, fileUrl);
       await persistBase64Cache();
@@ -2925,23 +2944,13 @@ export function createChatHistoryUI(appContext) {
     return fileUrl;
   }
 
-  async function saveRemoteImageToLocalFile(remoteUrl, roleFolder) {
+  async function saveRemoteImageToLocalFile(remoteUrl, roleFolder, options = {}) {
     try {
       if (!chrome?.downloads?.download) return null;
       const ext = guessExtFromUrl(remoteUrl) || 'png';
-      const now = new Date();
-      const pad2 = (n) => String(n).padStart(2, '0');
-      const monthFolder = `${now.getFullYear()}_${pad2(now.getMonth() + 1)}`;
-      const timestamp = [
-        now.getFullYear(),
-        pad2(now.getMonth() + 1),
-        pad2(now.getDate()),
-        pad2(now.getHours()),
-        pad2(now.getMinutes()),
-        pad2(now.getSeconds())
-      ].join('');
+      const { monthFolder, dateStr } = formatTimestampForPath(options.timestamp);
       const random = Math.random().toString(36).slice(2, 8);
-      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${timestamp}_${random}.${ext}`;
+      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${dateStr}_${random}.${ext}`;
       const downloadId = await new Promise((resolve, reject) => {
         chrome.downloads.download(
           { url: remoteUrl, filename, conflictAction: 'uniquify', saveAs: false },
@@ -2963,14 +2972,14 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  async function getOrSaveRemoteImage(remoteUrl, roleFolder) {
+  async function getOrSaveRemoteImage(remoteUrl, roleFolder, options = {}) {
     if (remoteFileCache.has(remoteUrl)) return remoteFileCache.get(remoteUrl);
-    const fileUrl = await saveRemoteImageToLocalFile(remoteUrl, roleFolder);
+    const fileUrl = await saveRemoteImageToLocalFile(remoteUrl, roleFolder, options);
     if (fileUrl) remoteFileCache.set(remoteUrl, fileUrl);
     return fileUrl;
   }
 
-  async function replaceDataUrlsInText(text, roleFolder) {
+  async function replaceDataUrlsInText(text, roleFolder, options = {}) {
     if (typeof text !== 'string') return { text, changed: false, found: 0, converted: 0, failed: 0 };
     let output = text;
     let changed = false;
@@ -2981,7 +2990,7 @@ export function createChatHistoryUI(appContext) {
     for (const m of matches) {
       found += 1;
       const dataUrl = m[0];
-      const fileUrl = await getOrSaveDataUrlToLocalFile(dataUrl, roleFolder);
+      const fileUrl = await getOrSaveDataUrlToLocalFile(dataUrl, roleFolder, options);
       if (fileUrl) {
         output = output.replace(dataUrl, fileUrl);
         converted += 1;
@@ -2995,6 +3004,7 @@ export function createChatHistoryUI(appContext) {
 
   async function repairImagesInMessage(msg) {
     const roleFolder = getImageRoleFolder(msg?.role);
+    const ts = Number(msg?.timestamp) || Date.now();
     let changed = false;
     let found = 0;
     let converted = 0;
@@ -3003,28 +3013,41 @@ export function createChatHistoryUI(appContext) {
       if (Array.isArray(msg?.content)) {
         for (const part of msg.content) {
           if (part?.type === 'image_url' && part.image_url?.url) {
-            const url = part.image_url.url;
-            if (typeof url === 'string' && url.startsWith('data:image/')) {
-              found += 1;
-              const local = await getOrSaveDataUrlToLocalFile(url, roleFolder);
-              if (local) {
-                part.image_url.url = local;
-                converted += 1;
+          const url = part.image_url.url;
+          if (typeof url === 'string' && url.startsWith('data:image/')) {
+            found += 1;
+            const local = await getOrSaveDataUrlToLocalFile(url, roleFolder, { timestamp: ts });
+            if (local) {
+              part.image_url.url = local;
+              const h = extractHashFromFileUrl(local);
+              if (h) part.image_url.hash = h;
+              converted += 1;
+              changed = true;
+            } else {
+              failed += 1;
+            }
+          } else if (typeof url === 'string' && url.startsWith('http')) {
+            // 将 http/https 远程图片也落盘，避免后续备份重复拉取
+            const local = await getOrSaveRemoteImage(url, roleFolder, { timestamp: ts });
+            if (local) {
+              part.image_url.url = local;
+              const h = extractHashFromFileUrl(local);
+              if (h) part.image_url.hash = h;
+              converted += 1;
+              changed = true;
+            }
+          } else if (typeof url === 'string' && url.startsWith('file://')) {
+            // 已有本地文件但缺少哈希时尝试补写
+            if (!part.image_url.hash) {
+              const h = extractHashFromFileUrl(url);
+              if (h) {
+                part.image_url.hash = h;
                 changed = true;
-              } else {
-                failed += 1;
               }
-            } else if (typeof url === 'string' && url.startsWith('http')) {
-              // 将 http/https 远程图片也落盘，避免后续备份重复拉取
-              const local = await getOrSaveRemoteImage(url, roleFolder);
-              if (local) {
-                part.image_url.url = local;
-                converted += 1;
-                changed = true;
-              }
+            }
           }
         } else if (part?.type === 'text' && typeof part.text === 'string') {
-          const res = await replaceDataUrlsInText(part.text, roleFolder);
+          const res = await replaceDataUrlsInText(part.text, roleFolder, { timestamp: ts });
           if (res.changed) {
             part.text = res.text;
             changed = true;
@@ -3035,7 +3058,7 @@ export function createChatHistoryUI(appContext) {
         }
       }
     } else if (typeof msg?.content === 'string') {
-      const res = await replaceDataUrlsInText(msg.content, roleFolder);
+      const res = await replaceDataUrlsInText(msg.content, roleFolder, { timestamp: ts });
       if (res.changed) {
         msg.content = res.text;
         changed = true;
