@@ -3003,18 +3003,17 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  async function saveDataUrlToLocalFile(dataUrl, roleFolder, preferredName, options = {}) {
+  async function saveImageContentToLocal({ base64Data, mimeType, roleFolder, timestamp }) {
     try {
-      if (!chrome?.downloads?.download) return { fileUrl: null, relPath: null };
-      const parsed = parseDataUrl(dataUrl);
-      if (!parsed) return { fileUrl: null, relPath: null };
-      const { mimeType, base64Data, ext } = parsed;
-      const { monthFolder, dateStr } = formatTimestampForPath(options.timestamp);
-      const random = Math.random().toString(36).slice(2, 8);
-      const baseName = preferredName ? `${dateStr}_${preferredName}` : `${dateStr}_${random}`;
-      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${baseName}.${ext}`;
-      const relPath = normalizePath(filename).replace(/^Cerebr\//i, '');
+      if (!chrome?.downloads?.download) return { fileUrl: null, relPath: null, hash: null };
+      const ext = guessExtFromMime(mimeType) || 'png';
+      const { dateStr } = formatTimestampForPath(timestamp);
+      const fullHash = await computeBase64Hash(base64Data);
+      const hash16 = toHash16(fullHash);
+      const baseName = `${dateStr}_${hash16 || Math.random().toString(36).slice(2, 8)}`;
+      const relPath = `Images/${roleFolder}/${dateStr.slice(0,4)}/${dateStr.slice(4,6)}/${dateStr.slice(6,8)}/${baseName}.${ext}`;
       const normalizedDataUrl = `data:${mimeType};base64,${base64Data}`;
+      const filename = `Cerebr/${relPath}`;
       const downloadId = await new Promise((resolve, reject) => {
         chrome.downloads.download(
           { url: normalizedDataUrl, filename, conflictAction: 'overwrite', saveAs: false },
@@ -3035,68 +3034,79 @@ export function createChatHistoryUI(appContext) {
       }
       return {
         fileUrl: filePath ? normalizeFileUrl(filePath) : null,
-        relPath
+        relPath,
+        hash: fullHash
       };
     } catch (error) {
-      console.error('保存 dataURL 图片失败:', error);
-      return { fileUrl: null, relPath: null };
+      console.error('保存图片失败:', error);
+      return { fileUrl: null, relPath: null, hash: null };
     }
   }
 
-  async function getOrSaveDataUrlToLocalFile(dataUrl, roleFolder, options = {}) {
-    await loadBase64Cache();
+  async function saveDataUrlToLocalFile(dataUrl, roleFolder, preferredName, options = {}) {
     const parsed = parseDataUrl(dataUrl);
     if (!parsed) return { fileUrl: null, relPath: null, hash: null };
-    const hash = await computeBase64Hash(parsed.base64Data);
-    if (base64FileCache.has(hash)) {
-      return { fileUrl: base64FileCache.get(hash), relPath: null, hash };
-    }
-    const saved = await saveDataUrlToLocalFile(dataUrl, roleFolder, hash, options);
-    if (saved?.fileUrl) {
-      base64FileCache.set(hash, saved.fileUrl);
-      await persistBase64Cache();
-    }
-    return { ...saved, hash };
+    return await saveImageContentToLocal({
+      base64Data: parsed.base64Data,
+      mimeType: parsed.mimeType,
+      roleFolder,
+      timestamp: options.timestamp
+    });
+  }
+
+  function toHash16(fullHash) {
+    if (!fullHash || typeof fullHash !== 'string') return '';
+    return fullHash.slice(0, 16);
+  }
+
+  async function blobToBase64(blob) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result || '';
+        const str = typeof result === 'string' ? result : '';
+        const base64 = str.split(',').pop() || '';
+        resolve(base64);
+      };
+      reader.onerror = (e) => reject(e);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function getOrSaveDataUrlToLocalFile(dataUrl, roleFolder, options = {}) {
+    // 不再根据哈希跳过保存，始终保存一份
+    const parsed = parseDataUrl(dataUrl);
+    if (!parsed) return { fileUrl: null, relPath: null, hash: null };
+    return await saveImageContentToLocal({
+      base64Data: parsed.base64Data,
+      mimeType: parsed.mimeType,
+      roleFolder,
+      timestamp: options.timestamp
+    });
   }
 
   async function saveRemoteImageToLocalFile(remoteUrl, roleFolder, options = {}) {
     try {
-      if (!chrome?.downloads?.download) return { fileUrl: null, relPath: null };
-      const ext = guessExtFromUrl(remoteUrl) || 'png';
-      const { monthFolder, dateStr } = formatTimestampForPath(options.timestamp);
-      const random = Math.random().toString(36).slice(2, 8);
-      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${dateStr}_${random}.${ext}`;
-      const relPath = normalizePath(filename).replace(/^Cerebr\//i, '');
-      const downloadId = await new Promise((resolve, reject) => {
-        chrome.downloads.download(
-          { url: remoteUrl, filename, conflictAction: 'uniquify', saveAs: false },
-          (id) => {
-            const lastError = chrome.runtime?.lastError;
-            if (lastError || typeof id !== 'number') {
-              reject(new Error(lastError?.message || '下载失败'));
-            } else {
-              resolve(id);
-            }
-          }
-        );
+      const resp = await fetch(remoteUrl);
+      if (!resp.ok) return { fileUrl: null, relPath: null, hash: null };
+      const blob = await resp.blob();
+      const base64 = await blobToBase64(blob);
+      const mimeType = blob.type || `image/${guessExtFromUrl(remoteUrl) || 'png'}`;
+      return await saveImageContentToLocal({
+        base64Data: base64,
+        mimeType,
+        roleFolder,
+        timestamp: options.timestamp
       });
-      const filePath = await waitForDownloadFile(downloadId);
-      if (filePath) {
-        const root = deriveRootFromAbsolute(filePath, relPath);
-        if (root) await saveDownloadRoot(root);
-      }
-      return { fileUrl: filePath ? normalizeFileUrl(filePath) : null, relPath };
     } catch (error) {
       console.warn('下载远程图片失败，已跳过:', remoteUrl, error);
-      return { fileUrl: null, relPath: null };
+      return { fileUrl: null, relPath: null, hash: null };
     }
   }
 
   async function getOrSaveRemoteImage(remoteUrl, roleFolder, options = {}) {
-    if (remoteFileCache.has(remoteUrl)) return { fileUrl: remoteFileCache.get(remoteUrl), relPath: null };
-    const saved = await saveRemoteImageToLocalFile(remoteUrl, roleFolder, options);
-    if (saved?.fileUrl) remoteFileCache.set(remoteUrl, saved.fileUrl);
-    return saved;
+    // 不再基于文件名去重，始终保存
+    return await saveRemoteImageToLocalFile(remoteUrl, roleFolder, options);
   }
 
   async function replaceDataUrlsInText(text, roleFolder, options = {}) {
@@ -3139,27 +3149,24 @@ export function createChatHistoryUI(appContext) {
           if (typeof url === 'string' && url.startsWith('data:image/')) {
             found += 1;
           const saved = await getOrSaveDataUrlToLocalFile(url, roleFolder, { timestamp: ts });
-          if (saved?.relPath || saved?.fileUrl) {
-            const h = extractHashFromFileUrl(saved.fileUrl || '');
-            if (h) part.image_url.hash = h;
-            if (saved.relPath) {
-              part.image_url.path = saved.relPath;
-              delete part.image_url.url;
-            } else if (saved.fileUrl) {
-              // 保底：无相对路径时维持 url
-              part.image_url.url = saved.fileUrl;
-            }
-            converted += 1;
-            changed = true;
-          } else {
-            failed += 1;
+            if (saved?.relPath || saved?.fileUrl) {
+              if (saved.hash) part.image_url.hash = saved.hash;
+              if (saved.relPath) {
+                part.image_url.path = saved.relPath;
+                delete part.image_url.url;
+              } else if (saved.fileUrl) {
+                part.image_url.url = saved.fileUrl;
+              }
+              converted += 1;
+              changed = true;
+            } else {
+              failed += 1;
             }
           } else if (typeof url === 'string' && url.startsWith('http')) {
             // 将 http/https 远程图片也落盘，避免后续备份重复拉取
             const saved = await getOrSaveRemoteImage(url, roleFolder, { timestamp: ts });
             if (saved?.relPath || saved?.fileUrl) {
-              const h = extractHashFromFileUrl(saved.fileUrl || '');
-              if (h) part.image_url.hash = h;
+              if (saved.hash) part.image_url.hash = saved.hash;
               if (saved.relPath) {
                 part.image_url.path = saved.relPath;
                 delete part.image_url.url;
@@ -3271,6 +3278,90 @@ export function createChatHistoryUI(appContext) {
       convertedImages: totalConverted,
       failedConversions: totalFailed
     };
+  }
+
+  /**
+   * 重新按 YYYY/MM/DD/HHMMSS_hash16 命名保存图片并更新路径/哈希
+   * @param {{days?:number}} options
+   */
+  async function resaveImagesWithNewScheme(options = {}) {
+    await loadDownloadRoot();
+    const days = Math.max(1, Number(options.days || 365));
+    const now = Date.now();
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const sp = utils.createStepProgress({ steps: ['加载会话', '重新保存', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    const recentMetas = (metas || []).filter((m) => Number(m?.endTime) >= cutoff);
+    const total = recentMetas.length || 1;
+    let updated = 0;
+
+    sp.next('重新保存');
+    console.info('[resaveImagesWithNewScheme] start', { metas: metas.length, filtered: recentMetas.length, days });
+    for (let i = 0; i < recentMetas.length; i++) {
+      const conv = await getConversationById(recentMetas[i].id, true);
+      let convChanged = false;
+      if (conv && Array.isArray(conv.messages)) {
+        for (const msg of conv.messages) {
+          if (!Array.isArray(msg.content)) continue;
+          const ts = Number(msg?.timestamp) || Number(conv?.endTime) || Date.now();
+          for (const part of msg.content) {
+            if (part?.type !== 'image_url') continue;
+            const raw = part.image_url?.path || part.image_url?.url || '';
+            if (!raw) continue;
+            try {
+              let fileUrl = raw;
+              if (!fileUrl.startsWith('http') && !fileUrl.startsWith('data:') && !fileUrl.startsWith('file://')) {
+                const root = await loadDownloadRoot();
+                fileUrl = root ? buildFileUrlFromRelative(raw, root) : null;
+              }
+              const resolved = await resolveToFileUrlForResave(fileUrl);
+              if (!resolved) continue;
+              const resp = await fetch(resolved);
+              if (!resp.ok) continue;
+              const blob = await resp.blob();
+              const base64 = await blobToBase64(blob);
+              const mimeType = blob.type || 'image/png';
+              const saved = await saveImageContentToLocal({
+                base64Data: base64,
+                mimeType,
+                roleFolder: getImageRoleFolder(msg.role),
+                timestamp: ts
+              });
+              if (saved?.relPath) {
+                part.image_url.path = saved.relPath;
+                part.image_url.url = saved.relPath;
+                if (saved.hash) part.image_url.hash = saved.hash;
+                convChanged = true;
+                console.info('[resaveImagesWithNewScheme] resaved', { convId: conv.id, msgId: msg.id, relPath: saved.relPath });
+              }
+            } catch (e) {
+              console.warn('[resaveImagesWithNewScheme] skip image', { convId: conv.id, msgId: msg.id, raw, error: e?.message || e });
+            }
+          }
+        }
+      }
+      if (convChanged) {
+        await putConversation(conv);
+        updateConversationInCache(conv);
+        if (activeConversation?.id === conv.id) activeConversation = conv;
+        updated += 1;
+      }
+      sp.updateSub(i + 1, total, `重新保存 (${i + 1}/${total})`);
+    }
+    sp.complete('完成', true);
+    invalidateMetadataCache();
+    const result = { updatedConversations: updated, scanned: recentMetas.length };
+    console.info('[resaveImagesWithNewScheme] done', result);
+    return result;
+  }
+
+  async function resolveToFileUrlForResave(rawUrl) {
+    if (!rawUrl) return null;
+    if (rawUrl.startsWith('file://') || rawUrl.startsWith('data:') || rawUrl.startsWith('http')) return rawUrl;
+    const root = await loadDownloadRoot();
+    return root ? buildFileUrlFromRelative(rawUrl, root) : null;
   }
 
   /**
@@ -4114,6 +4205,7 @@ export function createChatHistoryUI(appContext) {
     repairRecentImages,
     purgeOrphanImageContents,
     migrateImagePathsToRelative,
+    resaveImagesWithNewScheme,
     setDownloadRootManual,
     checkImagePathUrlMismatch,
     cleanImageUrlFields

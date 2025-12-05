@@ -162,6 +162,7 @@ function attachDebugShortcuts(appContext) {
     setImageDownloadRoot: (root) => chatHistoryUI?.setDownloadRootManual?.(root),
     checkImagePathUrlMismatch: (limit) => chatHistoryUI?.checkImagePathUrlMismatch?.(limit),
     cleanImageUrlFields: () => chatHistoryUI?.cleanImageUrlFields?.(),
+    resaveImagesWithNewScheme: (opts) => chatHistoryUI?.resaveImagesWithNewScheme?.(opts),
     messageSender: appContext.services.messageSender
   };
 }
