@@ -2330,7 +2330,7 @@ export function createChatHistoryUI(appContext) {
       const isAuto = !!opts.auto;
       const resetIncremental = !!opts.resetIncremental;
       const doIncremental = mode === 'incremental';
-      const excludeImages = isAuto ? false : (opts.excludeImages !== undefined ? !!opts.excludeImages : false);
+      const excludeImages = isAuto ? true : (opts.excludeImages !== undefined ? !!opts.excludeImages : false);
       const doCompress = (opts.compress !== undefined) ? !!opts.compress : (prefs.compressDefault !== false);
       includeStripImages = !!excludeImages;
       const steps = includeStripImages ? [...stepTitles, '处理图片', ...tailSteps] : [...stepTitles, ...tailSteps];
@@ -2379,14 +2379,29 @@ export function createChatHistoryUI(appContext) {
       }
 
       // 生成文件名与 Blob
-      const seqForName = doIncremental ? (seqBase + 1) : undefined;
-      const filename = buildBackupFilename({ mode: doIncremental ? 'incremental' : 'full', excludeImages, doCompress, seq: seqForName });
       sp.next('打包数据');
-      const blob = await buildBackupBlob(conversationsToExport, doCompress);
+      const { blob, usedStripFallback } = await buildBackupBlob(conversationsToExport, doCompress, { allowStripFallback: true });
+      const seqForName = doIncremental ? (seqBase + 1) : undefined;
+      const effectiveExcludeImages = excludeImages || usedStripFallback;
+      const filename = buildBackupFilename({
+        mode: doIncremental ? 'incremental' : 'full',
+        excludeImages: effectiveExcludeImages,
+        doCompress,
+        seq: seqForName
+      });
       sp.next('保存文件');
 
       // 仅使用下载API或<a download>保存
       await triggerBlobDownload(blob, filename);
+      if (usedStripFallback && !excludeImages) {
+        try {
+          showNotification({
+            message: '备份体积过大，已自动移除图片后完成备份',
+            type: 'warning',
+            duration: 3600
+          });
+        } catch (_) {}
+      }
 
       // 记录本次备份时间（使用数据中最大 endTime 避免时间漂移）
       sp.next('更新备份时间');
@@ -2580,18 +2595,21 @@ export function createChatHistoryUI(appContext) {
    * @returns {Object}
    */
   function stripImagesFromConversation(conversation) {
+    if (!conversation || typeof conversation !== 'object') return conversation;
     try {
-      const cloned = JSON.parse(JSON.stringify(conversation));
-      if (Array.isArray(cloned.messages)) {
-        cloned.messages = cloned.messages.map(msg => {
-          const m = { ...msg };
-          // 兼容字符串与多段内容
-          if (Array.isArray(m.content)) {
-            m.content = m.content.filter(part => part && ((part.type === 'text' && typeof part.text === 'string')));
-            // 若结果为空，则改为空字符串，避免还原失败
-            if (m.content.length === 0) m.content = '';
+      const cloned = { ...conversation };
+      if (Array.isArray(conversation.messages)) {
+        cloned.messages = conversation.messages.map((msg) => {
+          const next = { ...msg };
+          // 只保留文本片段，丢弃 image_url，以避免 dataURL/截图撑爆字符串长度
+          if (Array.isArray(msg.content)) {
+            const textParts = msg.content
+              .filter(part => part && part.type === 'text' && typeof part.text === 'string')
+              .map(part => ({ type: 'text', text: part.text }));
+            next.content = textParts.length > 0 ? textParts : '';
+            if (next.contentRef) delete next.contentRef; // 去掉对已被剥离图片内容的引用
           }
-          return m;
+          return next;
         });
       }
       return cloned;
@@ -2601,26 +2619,45 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
-   * 工具：将对象压缩为 gzip 并触发下载
+   * 工具：构建备份 Blob（可选 gzip），在超大数据时自动剥离图片兜底
    * 使用浏览器原生 CompressionStream('gzip')，无需额外依赖
    * @param {any} data
-   * @param {string} filename
+   * @param {boolean} compress
+   * @param {{allowStripFallback?: boolean}} options
+   * @returns {Promise<{blob: Blob, usedStripFallback: boolean}>}
    */
-  async function buildBackupBlob(data, compress = true) {
-    const jsonStr = JSON.stringify(data);
+  async function buildBackupBlob(data, compress = true, options = {}) {
+    const { allowStripFallback = false } = options || {};
+    let jsonStr = '';
+    let usedStripFallback = false;
+    try {
+      jsonStr = JSON.stringify(data);
+    } catch (error) {
+      const isRangeError = (error instanceof RangeError) || /invalid string length/i.test(error?.message || '');
+      if (!allowStripFallback || !isRangeError) {
+        throw error;
+      }
+      // 当字符串过大导致序列化失败时，移除图片后重试，避免 auto backup 被大图阻塞
+      console.warn('备份数据过大，尝试移除图片后重试:', error);
+      const safeData = Array.isArray(data)
+        ? data.map((conv) => stripImagesFromConversation(conv))
+        : stripImagesFromConversation(data);
+      jsonStr = JSON.stringify(safeData);
+      usedStripFallback = true;
+    }
     if (compress && typeof CompressionStream !== 'undefined') {
       try {
         const enc = new TextEncoder();
         const inputStream = new Blob([enc.encode(jsonStr)]).stream();
         const gzipStream = inputStream.pipeThrough(new CompressionStream('gzip'));
         const gzipBlob = await new Response(gzipStream).blob();
-        return new Blob([gzipBlob], { type: 'application/gzip' });
+        return { blob: new Blob([gzipBlob], { type: 'application/gzip' }), usedStripFallback };
       } catch (e) {
         console.warn('压缩失败，回退至原始 JSON:', e);
-        return new Blob([jsonStr], { type: 'application/json' });
+        return { blob: new Blob([jsonStr], { type: 'application/json' }), usedStripFallback };
       }
     }
-    return new Blob([jsonStr], { type: 'application/json' });
+    return { blob: new Blob([jsonStr], { type: 'application/json' }), usedStripFallback };
   }
 
   async function triggerBlobDownload(blob, filename) {
