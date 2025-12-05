@@ -44,6 +44,7 @@ export async function initializeSidebarServices(appContext) {
   window.cerebr.messageSender = appContext.services.messageSender;
   // 暴露图片重扫工具，便于在控制台手动触发最近会话的本地化清理
   window.cerebr.repairRecentImages = (options) => appContext.services.chatHistoryUI?.repairRecentImages(options);
+  window.cerebr.purgeOrphanImageContents = () => appContext.services.chatHistoryUI?.purgeOrphanImageContents?.();
 
   appContext.services.uiManager = createUIManager(appContext);
   appContext.services.contextMenuManager = createContextMenuManager(appContext);

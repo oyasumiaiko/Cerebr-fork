@@ -10,7 +10,8 @@ import {
   deleteConversation, 
   getConversationById,
   releaseConversationMemory,
-  getDatabaseStats
+  getDatabaseStats,
+  purgeOrphanMessageContents
 } from '../storage/indexeddb_helper.js';
 import { storageService } from '../utils/storage_service.js';
 
@@ -2597,11 +2598,24 @@ export function createChatHistoryUI(appContext) {
     return Array.from(map.values());
   }
 
+  // ==== 图片重扫与本地化（用于清理最近会话中的 base64） ====
+  const DATA_URL_REGEX = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+=*/gi;
+
   /**
    * 工具：将会话中的图片内容移除，仅保留文本以减小备份体积
    * @param {Object} conversation
    * @returns {Object}
    */
+  function stripDataUrlsFromString(text) {
+    if (typeof text !== 'string') return { text, removed: 0 };
+    let removed = 0;
+    const cleaned = text.replace(DATA_URL_REGEX, () => {
+      removed += 1;
+      return '';
+    });
+    return { text: cleaned, removed };
+  }
+
   function stripImagesFromConversation(conversation) {
     if (!conversation || typeof conversation !== 'object') return conversation;
     try {
@@ -2613,9 +2627,15 @@ export function createChatHistoryUI(appContext) {
           if (Array.isArray(msg.content)) {
             const textParts = msg.content
               .filter(part => part && part.type === 'text' && typeof part.text === 'string')
-              .map(part => ({ type: 'text', text: part.text }));
+              .map(part => {
+                const cleaned = stripDataUrlsFromString(part.text);
+                return { type: 'text', text: cleaned.text };
+              });
             next.content = textParts.length > 0 ? textParts : '';
             if (next.contentRef) delete next.contentRef; // 去掉对已被剥离图片内容的引用
+          } else if (typeof msg.content === 'string') {
+            const cleaned = stripDataUrlsFromString(msg.content);
+            next.content = cleaned.text;
           }
           return next;
         });
@@ -2638,21 +2658,63 @@ export function createChatHistoryUI(appContext) {
     const { allowStripFallback = false } = options || {};
     let jsonStr = '';
     let usedStripFallback = false;
+    let dataForStringify = data;
+    let useStreaming = false;
+
+    const buildStreamBlob = async (arr) => {
+      const encoder = new TextEncoder();
+      const jsonStream = new ReadableStream({
+        start(controller) {
+          try {
+            controller.enqueue(encoder.encode('['));
+            arr.forEach((item, idx) => {
+              const chunk = JSON.stringify(item);
+              controller.enqueue(encoder.encode(chunk));
+              if (idx !== arr.length - 1) controller.enqueue(encoder.encode(','));
+            });
+            controller.enqueue(encoder.encode(']'));
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        }
+      });
+      if (compress && typeof CompressionStream !== 'undefined') {
+        const gzipStream = jsonStream.pipeThrough(new CompressionStream('gzip'));
+        const gzipBlob = await new Response(gzipStream).blob();
+        return new Blob([gzipBlob], { type: 'application/gzip' });
+      }
+      const plainStream = jsonStream;
+      const plainBlob = await new Response(plainStream).blob();
+      return new Blob([plainBlob], { type: compress ? 'application/json' : 'application/json' });
+    };
+
     try {
-      jsonStr = JSON.stringify(data);
+      jsonStr = JSON.stringify(dataForStringify);
     } catch (error) {
       const isRangeError = (error instanceof RangeError) || /invalid string length/i.test(error?.message || '');
       if (!allowStripFallback || !isRangeError) {
         throw error;
       }
-      // 当字符串过大导致序列化失败时，移除图片后重试，避免 auto backup 被大图阻塞
       console.warn('备份数据过大，尝试移除图片后重试:', error);
-      const safeData = Array.isArray(data)
+      dataForStringify = Array.isArray(data)
         ? data.map((conv) => stripImagesFromConversation(conv))
         : stripImagesFromConversation(data);
-      jsonStr = JSON.stringify(safeData);
-      usedStripFallback = true;
+      try {
+        jsonStr = JSON.stringify(dataForStringify);
+        usedStripFallback = true;
+      } catch (e) {
+        // 二次仍失败时，改用流式构造 JSON 以规避超大字符串限制
+        console.warn('备份数据仍然过大，改用流式构造 JSON:', e);
+        useStreaming = true;
+        usedStripFallback = true;
+      }
     }
+
+    if (useStreaming) {
+      return { blob: await buildStreamBlob(Array.isArray(dataForStringify) ? dataForStringify : [dataForStringify]), usedStripFallback };
+    }
+
     if (compress && typeof CompressionStream !== 'undefined') {
       try {
         const enc = new TextEncoder();
@@ -2699,9 +2761,6 @@ export function createChatHistoryUI(appContext) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
-
-  // ==== 图片重扫与本地化（用于清理最近会话中的 base64） ====
-  const DATA_URL_REGEX = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+=*/gi;
 
   function getImageRoleFolder(role) {
     const r = String(role || '').toLowerCase();
@@ -2983,6 +3042,14 @@ export function createChatHistoryUI(appContext) {
       convertedImages: totalConverted,
       failedConversions: totalFailed
     };
+  }
+
+  /**
+   * 清理 IndexedDB 中孤立的 messageContents 记录，避免无引用的图片残留占用空间
+   * @returns {Promise<{removed:number,total:number}>}
+   */
+  async function purgeOrphanImageContents() {
+    return await purgeOrphanMessageContents();
   }
 
   /**
@@ -3630,6 +3697,7 @@ export function createChatHistoryUI(appContext) {
     clearMemoryCache,
     createForkConversation,
     restartAutoBackupScheduler,
-    repairRecentImages
+    repairRecentImages,
+    purgeOrphanImageContents
   };
 }

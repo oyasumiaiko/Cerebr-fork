@@ -342,6 +342,62 @@ export function releaseConversationMemory(conversation) {
 }
 
 /**
+ * 扫描 messageContents 表，删除未被任何消息引用的内容，避免遗留的 base64 或孤儿记录撑爆存储
+ * @returns {Promise<{ removed: number, total: number }>}
+ */
+export async function purgeOrphanMessageContents() {
+  const db = await openChatHistoryDB();
+  const transaction = db.transaction(['conversations', 'messageContents'], 'readwrite');
+  const conversationStore = transaction.objectStore('conversations');
+  const contentStore = transaction.objectStore('messageContents');
+
+  // 收集所有会话中仍在使用的 contentRef ID
+  const usedRefs = new Set();
+  await new Promise((resolve, reject) => {
+    const request = conversationStore.openCursor();
+    request.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        const conv = cursor.value;
+        if (conv?.messages && Array.isArray(conv.messages)) {
+          conv.messages.forEach((msg) => {
+            if (msg?.contentRef) usedRefs.add(msg.contentRef);
+          });
+        }
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+  // 遍历 messageContents，删除不在引用集合中的记录
+  let removed = 0;
+  let total = 0;
+  await new Promise((resolve, reject) => {
+    const request = contentStore.openCursor();
+    request.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        total += 1;
+        const key = cursor.primaryKey;
+        if (!usedRefs.has(key)) {
+          cursor.delete();
+          removed += 1;
+        }
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+  return { removed, total };
+}
+
+/**
  * 获取数据库存储统计信息
  * @returns {Promise<Object>} 包含数据库统计信息的对象
  */
