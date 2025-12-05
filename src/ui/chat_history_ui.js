@@ -2692,6 +2692,291 @@ export function createChatHistoryUI(appContext) {
     URL.revokeObjectURL(url);
   }
 
+  // ==== 图片重扫与本地化（用于清理最近会话中的 base64） ====
+  const DATA_URL_REGEX = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+=*/gi;
+
+  function getImageRoleFolder(role) {
+    const r = String(role || '').toLowerCase();
+    if (r === 'assistant' || r === 'ai') return 'AI';
+    return 'User';
+  }
+
+  function guessExtFromMime(mime) {
+    const m = String(mime || '').toLowerCase();
+    if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+    if (m.includes('webp')) return 'webp';
+    if (m.includes('gif')) return 'gif';
+    if (m.includes('bmp')) return 'bmp';
+    return 'png';
+  }
+
+  function guessExtFromUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const pathname = parsed.pathname || '';
+      const match = pathname.match(/\.([a-zA-Z0-9]+)$/);
+      if (match && match[1]) return match[1].toLowerCase();
+    } catch (_) {}
+    return null;
+  }
+
+  function normalizeFileUrl(filePath) {
+    let normalizedPath = filePath.replace(/\\/g, '/');
+    if (/^[A-Za-z]:\//.test(normalizedPath)) {
+      normalizedPath = '/' + normalizedPath;
+    }
+    return `file://${normalizedPath}`;
+  }
+
+  function parseDataUrl(dataUrl) {
+    if (typeof dataUrl !== 'string') return null;
+    if (!dataUrl.startsWith('data:image/')) return null;
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return null;
+    const mimeType = match[1] || 'image/png';
+    const base64Data = match[2] || '';
+    return { mimeType, base64Data, ext: guessExtFromMime(mimeType) };
+  }
+
+  async function waitForDownloadFile(downloadId, timeoutMs = 30000) {
+    const start = Date.now();
+    return await new Promise((resolve, reject) => {
+      const tick = () => {
+        try {
+          chrome.downloads.search({ id: downloadId }, (items) => {
+            const lastError = chrome.runtime?.lastError;
+            if (lastError) return reject(new Error(lastError.message));
+            const item = items && items[0];
+            if (!item) return reject(new Error('找不到下载任务'));
+            if (item.state === 'complete' && item.filename) return resolve(item.filename);
+            if (item.state === 'interrupted') return reject(new Error(item.error || '下载被中断'));
+            if (Date.now() - start > timeoutMs) return reject(new Error('下载超时'));
+            setTimeout(tick, 400);
+          });
+        } catch (e) {
+          reject(e);
+        }
+      };
+      tick();
+    });
+  }
+
+  async function saveDataUrlToLocalFile(dataUrl, roleFolder) {
+    try {
+      if (!chrome?.downloads?.download) return null;
+      const parsed = parseDataUrl(dataUrl);
+      if (!parsed) return null;
+      const { mimeType, base64Data, ext } = parsed;
+      const now = new Date();
+      const pad2 = (n) => String(n).padStart(2, '0');
+      const timestamp = [
+        now.getFullYear(),
+        pad2(now.getMonth() + 1),
+        pad2(now.getDate()),
+        pad2(now.getHours()),
+        pad2(now.getMinutes()),
+        pad2(now.getSeconds())
+      ].join('');
+      const random = Math.random().toString(36).slice(2, 8);
+      const filename = `Cerebr/Images/${roleFolder}/${timestamp}_${random}.${ext}`;
+      const normalizedDataUrl = `data:${mimeType};base64,${base64Data}`;
+      const downloadId = await new Promise((resolve, reject) => {
+        chrome.downloads.download(
+          { url: normalizedDataUrl, filename, conflictAction: 'uniquify', saveAs: false },
+          (id) => {
+            const lastError = chrome.runtime?.lastError;
+            if (lastError || typeof id !== 'number') {
+              reject(new Error(lastError?.message || '下载失败'));
+            } else {
+              resolve(id);
+            }
+          }
+        );
+      });
+      const filePath = await waitForDownloadFile(downloadId);
+      return filePath ? normalizeFileUrl(filePath) : null;
+    } catch (error) {
+      console.error('保存 dataURL 图片失败:', error);
+      return null;
+    }
+  }
+
+  async function saveRemoteImageToLocalFile(remoteUrl, roleFolder) {
+    try {
+      if (!chrome?.downloads?.download) return null;
+      const ext = guessExtFromUrl(remoteUrl) || 'png';
+      const now = new Date();
+      const pad2 = (n) => String(n).padStart(2, '0');
+      const timestamp = [
+        now.getFullYear(),
+        pad2(now.getMonth() + 1),
+        pad2(now.getDate()),
+        pad2(now.getHours()),
+        pad2(now.getMinutes()),
+        pad2(now.getSeconds())
+      ].join('');
+      const random = Math.random().toString(36).slice(2, 8);
+      const filename = `Cerebr/Images/${roleFolder}/${timestamp}_${random}.${ext}`;
+      const downloadId = await new Promise((resolve, reject) => {
+        chrome.downloads.download(
+          { url: remoteUrl, filename, conflictAction: 'uniquify', saveAs: false },
+          (id) => {
+            const lastError = chrome.runtime?.lastError;
+            if (lastError || typeof id !== 'number') {
+              reject(new Error(lastError?.message || '下载失败'));
+            } else {
+              resolve(id);
+            }
+          }
+        );
+      });
+      const filePath = await waitForDownloadFile(downloadId);
+      return filePath ? normalizeFileUrl(filePath) : null;
+    } catch (error) {
+      console.warn('下载远程图片失败，已跳过:', remoteUrl, error);
+      return null;
+    }
+  }
+
+  async function replaceDataUrlsInText(text, roleFolder) {
+    if (typeof text !== 'string') return { text, changed: false, found: 0, converted: 0, failed: 0 };
+    let output = text;
+    let changed = false;
+    let found = 0;
+    let converted = 0;
+    let failed = 0;
+    const matches = [...text.matchAll(DATA_URL_REGEX)];
+    for (const m of matches) {
+      found += 1;
+      const dataUrl = m[0];
+      const fileUrl = await saveDataUrlToLocalFile(dataUrl, roleFolder);
+      if (fileUrl) {
+        output = output.replace(dataUrl, fileUrl);
+        converted += 1;
+        changed = true;
+      } else {
+        failed += 1;
+      }
+    }
+    return { text: output, changed, found, converted, failed };
+  }
+
+  async function repairImagesInMessage(msg) {
+    const roleFolder = getImageRoleFolder(msg?.role);
+    let changed = false;
+    let found = 0;
+    let converted = 0;
+    let failed = 0;
+
+    if (Array.isArray(msg?.content)) {
+      for (const part of msg.content) {
+        if (part?.type === 'image_url' && part.image_url?.url) {
+          const url = part.image_url.url;
+          if (typeof url === 'string' && url.startsWith('data:image/')) {
+            found += 1;
+            const local = await saveDataUrlToLocalFile(url, roleFolder);
+            if (local) {
+              part.image_url.url = local;
+              converted += 1;
+              changed = true;
+            } else {
+              failed += 1;
+            }
+          } else if (typeof url === 'string' && url.startsWith('http')) {
+            // 将 http/https 远程图片也落盘，避免后续备份重复拉取
+            const local = await saveRemoteImageToLocalFile(url, roleFolder);
+            if (local) {
+              part.image_url.url = local;
+              converted += 1;
+              changed = true;
+            }
+          }
+        } else if (part?.type === 'text' && typeof part.text === 'string') {
+          const res = await replaceDataUrlsInText(part.text, roleFolder);
+          if (res.changed) {
+            part.text = res.text;
+            changed = true;
+          }
+          found += res.found;
+          converted += res.converted;
+          failed += res.failed;
+        }
+      }
+    } else if (typeof msg?.content === 'string') {
+      const res = await replaceDataUrlsInText(msg.content, roleFolder);
+      if (res.changed) {
+        msg.content = res.text;
+        changed = true;
+      }
+      found += res.found;
+      converted += res.converted;
+      failed += res.failed;
+    }
+
+    // 移除已无用的内容引用，避免保留旧的 base64 内容
+    if (changed && msg.contentRef) delete msg.contentRef;
+
+    return { changed, found, converted, failed };
+  }
+
+  async function repairRecentImages(options = {}) {
+    const days = Math.max(1, Number(options.days || 7));
+    const now = Date.now();
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const sp = utils.createStepProgress({ steps: ['加载会话', '处理图片', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    const recentMetas = (metas || []).filter((m) => Number(m?.endTime) >= cutoff);
+    const total = recentMetas.length || 1;
+
+    let updated = 0;
+    let totalFound = 0;
+    let totalConverted = 0;
+    let totalFailed = 0;
+
+    sp.next('处理图片');
+    for (let i = 0; i < recentMetas.length; i++) {
+      // 按需加载完整内容，避免一次性拉取全部会话导致内存暴涨
+      const conv = await getConversationById(recentMetas[i].id, true);
+      if (!conv) {
+        sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
+        continue;
+      }
+      let convChanged = false;
+      if (Array.isArray(conv.messages)) {
+        for (const msg of conv.messages) {
+          const res = await repairImagesInMessage(msg);
+          totalFound += res.found;
+          totalConverted += res.converted;
+          totalFailed += res.failed;
+          if (res.changed) convChanged = true;
+        }
+      }
+      if (convChanged) {
+        conv.messageCount = Array.isArray(conv.messages) ? conv.messages.length : 0;
+        conv.endTime = Number(conv.endTime) || conv.endTime || now;
+        await putConversation(conv);
+        updateConversationInCache(conv);
+        if (activeConversation?.id === conv.id) {
+          activeConversation = conv;
+        }
+        updated += 1;
+      }
+      sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
+    }
+
+    sp.complete('处理完成', true);
+    invalidateMetadataCache();
+    return {
+      scannedConversations: recentMetas.length,
+      updatedConversations: updated,
+      base64Found: totalFound,
+      convertedImages: totalConverted,
+      failedConversions: totalFailed
+    };
+  }
+
   /**
    * 工具：读取备份文件文本，支持 .json 及 .json.gz
    * @param {File} file
@@ -3336,6 +3621,7 @@ export function createChatHistoryUI(appContext) {
     getCurrentConversationId: () => currentConversationId,
     clearMemoryCache,
     createForkConversation,
-    restartAutoBackupScheduler
+    restartAutoBackupScheduler,
+    repairRecentImages
   };
 }
