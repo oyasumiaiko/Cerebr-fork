@@ -1649,22 +1649,23 @@ export function createChatHistoryUI(appContext) {
         if (Array.isArray(msg?.content)) {
           for (let idx = 0; idx < msg.content.length; idx++) {
             const part = msg.content[idx];
-            if (part && part.type === 'image_url' && part.image_url && part.image_url.url) {
-              const url = part.image_url.url;
-              const key = `${conv.id || 'conv'}_${msg.id || idx}_${idx}_${url}`;
-              if (seenKeys.has(key)) continue;
-              seenKeys.add(key);
-              images.push({
-                conversationId: conv.id,
-                messageId: msg.id,
-                url,
-                timestamp,
-                summary: conv.summary || '',
-                title: conv.title || '',
-                domain: convDomain || '未知来源'
-              });
-              if (images.length >= GALLERY_IMAGE_LIMIT) break;
-            }
+            if (!part || part.type !== 'image_url' || !part.image_url) continue;
+            const resolvedUrl = await resolveImageUrlForDisplay(part.image_url);
+            if (!resolvedUrl) continue;
+            const rawKey = part.image_url.path || part.image_url.url || resolvedUrl;
+            const key = `${conv.id || 'conv'}_${msg.id || idx}_${idx}_${rawKey}`;
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            images.push({
+              conversationId: conv.id,
+              messageId: msg.id,
+              url: resolvedUrl,
+              timestamp,
+              summary: conv.summary || '',
+              title: conv.title || '',
+              domain: convDomain || '未知来源'
+            });
+            if (images.length >= GALLERY_IMAGE_LIMIT) break;
           }
         }
         if (images.length >= GALLERY_IMAGE_LIMIT) {
