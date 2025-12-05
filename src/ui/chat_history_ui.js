@@ -3322,6 +3322,69 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 检查 image_url.path 与 image_url.url 的一致性，统计差异并给出示例
+   * @param {number} [sampleLimit=20]
+   * @returns {Promise<{total:number, same:number, mismatch:number, pathOnly:number, urlOnly:number, samples:Array<Object>}>}
+   */
+  async function checkImagePathUrlMismatch(sampleLimit = 20) {
+    const metas = await getAllConversationMetadata();
+    let total = 0;
+    let same = 0;
+    let mismatch = 0;
+    let pathOnly = 0;
+    let urlOnly = 0;
+    const samples = [];
+
+    const normalizeRel = (p) => normalizePath(p || '').replace(/^\/+/, '');
+    const normalizeUrl = (u) => {
+      if (!u) return '';
+      if (u.startsWith('file://')) {
+        let p = decodeURIComponent(u.replace(/^file:\/\//, ''));
+        if (/^[A-Za-z]:\//.test(p)) p = p.replace(/^\//, '');
+        return normalizeRel(p);
+      }
+      return normalizeRel(u);
+    };
+
+    for (const meta of metas) {
+      const conv = await getConversationById(meta.id, true);
+      if (!conv || !Array.isArray(conv.messages)) continue;
+      for (const msg of conv.messages) {
+        if (!Array.isArray(msg.content)) continue;
+        for (const part of msg.content) {
+          if (part?.type !== 'image_url') continue;
+          total += 1;
+          const rawPath = part.image_url?.path || '';
+          const rawUrl = part.image_url?.url || '';
+          const normPath = normalizeRel(rawPath);
+          const normUrl = normalizeUrl(rawUrl);
+          if (normPath && normUrl) {
+            if (normUrl.endsWith(normPath)) {
+              same += 1;
+            } else {
+              mismatch += 1;
+              if (samples.length < sampleLimit) {
+                samples.push({
+                  conversationId: conv.id,
+                  messageId: msg.id,
+                  path: rawPath,
+                  url: rawUrl
+                });
+              }
+            }
+          } else if (normPath && !normUrl) {
+            pathOnly += 1;
+          } else if (!normPath && normUrl) {
+            urlOnly += 1;
+          }
+        }
+      }
+    }
+
+    return { total, same, mismatch, pathOnly, urlOnly, samples };
+  }
+
+  /**
    * 清理 IndexedDB 中孤立的 messageContents 记录，避免无引用的图片残留占用空间
    * @returns {Promise<{removed:number,total:number}>}
    */
@@ -3977,6 +4040,7 @@ export function createChatHistoryUI(appContext) {
     repairRecentImages,
     purgeOrphanImageContents,
     migrateImagePathsToRelative,
-    setDownloadRootManual
+    setDownloadRootManual,
+    checkImagePathUrlMismatch
   };
 }

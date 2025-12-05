@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   exposeGlobals(appContext, isStandalone);
 
   await initializeSidebarServices(appContext);
+  attachDebugShortcuts(appContext);
   registerSidebarEventHandlers(appContext);
 });
 
@@ -149,4 +150,17 @@ function exposeGlobals(appContext, isStandalone) {
       window.cerebr.settings.prompts = appContext.services.promptSettingsManager.getPrompts();
     }
   });
+}
+
+function attachDebugShortcuts(appContext) {
+  const chatHistoryUI = appContext.services.chatHistoryUI;
+  window.cerebr = window.cerebr || {};
+  window.cerebr.debug = {
+    repairRecentImages: (opts) => chatHistoryUI?.repairRecentImages?.(opts),
+    purgeOrphanImageContents: () => chatHistoryUI?.purgeOrphanImageContents?.(),
+    migrateImagePathsToRelative: () => chatHistoryUI?.migrateImagePathsToRelative?.(),
+    setImageDownloadRoot: (root) => chatHistoryUI?.setDownloadRootManual?.(root),
+    checkImagePathUrlMismatch: (limit) => chatHistoryUI?.checkImagePathUrlMismatch?.(limit),
+    messageSender: appContext.services.messageSender
+  };
 }
