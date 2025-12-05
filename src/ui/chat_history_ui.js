@@ -2875,6 +2875,7 @@ export function createChatHistoryUI(appContext) {
       const { mimeType, base64Data, ext } = parsed;
       const now = new Date();
       const pad2 = (n) => String(n).padStart(2, '0');
+      const monthFolder = `${now.getFullYear()}_${pad2(now.getMonth() + 1)}`;
       const timestamp = [
         now.getFullYear(),
         pad2(now.getMonth() + 1),
@@ -2885,7 +2886,7 @@ export function createChatHistoryUI(appContext) {
       ].join('');
       const random = Math.random().toString(36).slice(2, 8);
       const baseName = preferredName || `${timestamp}_${random}`;
-      const filename = `Cerebr/Images/${roleFolder}/${baseName}.${ext}`;
+      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${baseName}.${ext}`;
       const normalizedDataUrl = `data:${mimeType};base64,${base64Data}`;
       const downloadId = await new Promise((resolve, reject) => {
         chrome.downloads.download(
@@ -2930,6 +2931,7 @@ export function createChatHistoryUI(appContext) {
       const ext = guessExtFromUrl(remoteUrl) || 'png';
       const now = new Date();
       const pad2 = (n) => String(n).padStart(2, '0');
+      const monthFolder = `${now.getFullYear()}_${pad2(now.getMonth() + 1)}`;
       const timestamp = [
         now.getFullYear(),
         pad2(now.getMonth() + 1),
@@ -2939,7 +2941,7 @@ export function createChatHistoryUI(appContext) {
         pad2(now.getSeconds())
       ].join('');
       const random = Math.random().toString(36).slice(2, 8);
-      const filename = `Cerebr/Images/${roleFolder}/${timestamp}_${random}.${ext}`;
+      const filename = `Cerebr/Images/${roleFolder}/${monthFolder}/${timestamp}_${random}.${ext}`;
       const downloadId = await new Promise((resolve, reject) => {
         chrome.downloads.download(
           { url: remoteUrl, filename, conflictAction: 'uniquify', saveAs: false },
