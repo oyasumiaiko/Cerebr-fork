@@ -163,6 +163,7 @@ function attachDebugShortcuts(appContext) {
     checkImagePathUrlMismatch: (limit) => chatHistoryUI?.checkImagePathUrlMismatch?.(limit),
     cleanImageUrlFields: () => chatHistoryUI?.cleanImageUrlFields?.(),
     resaveImagesWithNewScheme: (opts) => chatHistoryUI?.resaveImagesWithNewScheme?.(opts),
+    scanDataUrlsInDb: (limit) => chatHistoryUI?.scanDataUrlsInDb?.(limit),
     messageSender: appContext.services.messageSender
   };
 }
