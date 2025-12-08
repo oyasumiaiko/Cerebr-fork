@@ -85,7 +85,11 @@ export function composeMessages(args) {
   }
   systemMessageContent += pageContentPrompt;
 
-  messages.push({ role: 'system', content: systemMessageContent });
+  const hasSystemMessage = typeof systemMessageContent === 'string' && systemMessageContent.trim() !== '';
+  if (hasSystemMessage) {
+    // 如果系统提示为空则不推送 system 消息，避免在请求载荷中出现空占位
+    messages.push({ role: 'system', content: systemMessageContent });
+  }
 
   // 2) 历史消息选择
   const chain = Array.isArray(conversationChain) ? conversationChain.slice() : [];
