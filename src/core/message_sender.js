@@ -5,6 +5,7 @@
  * 这个模块是应用程序的核心部分，处理从用户输入到AI响应显示的完整流程。
  */
 import { composeMessages } from './message_composer.js';
+import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 
 /**
  * 创建消息发送器
@@ -1331,7 +1332,10 @@ export function createMessageSender(appContext) {
 
       // 累积主回答与思考过程
       aiResponse += currentEventAnswerDelta;
-      aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta;
+      aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, currentEventThoughtsDelta);
+      const thinkExtraction = extractThinkingFromText(aiResponse);
+      aiResponse = thinkExtraction.cleanText;
+      aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
 
       if (!hasStartedResponse) {
         // 首次收到内容（文本或图片）：移除“正在处理...”提示
@@ -1401,7 +1405,10 @@ export function createMessageSender(appContext) {
       if (currentEventAnswerDelta || currentEventThoughtsDelta) {
           // 累积AI的完整响应文本
           aiResponse += currentEventAnswerDelta;
-          aiThoughtsRaw = (aiThoughtsRaw || '') + currentEventThoughtsDelta; // Accumulate thoughts separately
+          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, currentEventThoughtsDelta); // Accumulate thoughts separately
+          const thinkExtraction = extractThinkingFromText(aiResponse);
+          aiResponse = thinkExtraction.cleanText;
+          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
 
           // 【关键逻辑】检查这是否是流式响应的第一个数据块
       if (!hasStartedResponse) {
@@ -1635,6 +1642,13 @@ export function createMessageSender(appContext) {
       if (typeof message?.content === 'string') answer = message.content;
       if (typeof message?.reasoning_content === 'string') thoughts = message.reasoning_content;
       else if (typeof message?.reasoning === 'string') thoughts = message.reasoning;
+    }
+
+    // 额外提取 <think> 包裹的思考摘要，避免混入正文
+    if (typeof answer === 'string') {
+      const thinkExtraction = extractThinkingFromText(answer);
+      answer = thinkExtraction.cleanText;
+      thoughts = mergeThoughts(thoughts, thinkExtraction.thoughtText);
     }
 
     // 移除 loading 并渲染最终消息

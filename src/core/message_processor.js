@@ -13,6 +13,7 @@
  * @returns {Object} 消息处理API
  */
 import { renderMarkdownSafe } from '../utils/markdown_renderer.js';
+import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 
 export function createMessageProcessor(appContext) {
   const {
@@ -47,7 +48,7 @@ export function createMessageProcessor(appContext) {
 
         const thoughtsPrefix = document.createElement('div');
         thoughtsPrefix.className = 'thoughts-prefix';
-        thoughtsPrefix.textContent = '思考过程:';
+        thoughtsPrefix.textContent = '思考摘要（不会发送）:';
         thoughtsContentDiv.appendChild(thoughtsPrefix);
 
         thoughtsInnerContent = document.createElement('div');
@@ -111,10 +112,20 @@ export function createMessageProcessor(appContext) {
    * @param {string|null} [initialThoughtsRaw=null] - AI的初始思考过程文本 (可选)
    * @param {string|null} [messageIdToUpdate=null] - 如果是更新现有消息，则提供其ID
    * @returns {HTMLElement} 新生成或更新的消息元素
-   */
+  */
   function appendMessage(text, sender, skipHistory = false, fragment = null, imagesHTML = null, initialThoughtsRaw = null, messageIdToUpdate = null) {
     let messageDiv;
     let node;
+    // 提前拆分 <think> 段落，确保正文与思考摘要分离
+    let messageText = text;
+    let thoughtsForMessage = initialThoughtsRaw;
+    if (typeof messageText === 'string') {
+      const thinkExtraction = extractThinkingFromText(messageText);
+      if (thinkExtraction.thoughtText) {
+        thoughtsForMessage = mergeThoughts(thoughtsForMessage, thinkExtraction.thoughtText);
+        messageText = thinkExtraction.cleanText;
+      }
+    }
 
     if (messageIdToUpdate) {
       messageDiv = chatContainer.querySelector(`[data-message-id="${messageIdToUpdate}"]`);
@@ -141,8 +152,8 @@ export function createMessageProcessor(appContext) {
       messageDiv.classList.add('batch-load');
     }
 
-    messageDiv.setAttribute('data-original-text', text); // Main answer text
-    // initialThoughtsRaw is handled below by setupThoughtsDisplay
+    messageDiv.setAttribute('data-original-text', messageText); // Main answer text
+    // thoughtsForMessage is handled below by setupThoughtsDisplay
 
     if (imagesHTML && imagesHTML.trim() && !messageIdToUpdate) {
       const imageContentDiv = document.createElement('div');
@@ -160,7 +171,7 @@ export function createMessageProcessor(appContext) {
     
     // Setup thoughts display (handles creation/removal)
     // Pass `processMathAndMarkdown` from the outer scope
-    setupThoughtsDisplay(messageDiv, initialThoughtsRaw, processMathAndMarkdown);
+    setupThoughtsDisplay(messageDiv, thoughtsForMessage, processMathAndMarkdown);
 
 
     let textContentDiv = messageDiv.querySelector('.text-content');
@@ -177,13 +188,13 @@ export function createMessageProcessor(appContext) {
     }
     try {
       if (sender === 'user') {
-        textContentDiv.innerText = text;
+        textContentDiv.innerText = messageText;
       } else {
-        textContentDiv.innerHTML = processMathAndMarkdown(text);
+        textContentDiv.innerHTML = processMathAndMarkdown(messageText);
       }
     } catch (error) {
       console.error('处理数学公式和Markdown失败:', error);
-      textContentDiv.innerText = text;
+      textContentDiv.innerText = messageText;
     }
     
     messageDiv.querySelectorAll('a:not(.reference-number)').forEach(link => { // Avoid affecting reference links
@@ -244,25 +255,25 @@ export function createMessageProcessor(appContext) {
       if (messageIdToUpdate) {
         node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageIdToUpdate);
         if (node) {
-          node.content = text; // Main answer
-          if (initialThoughtsRaw !== undefined) { // Allow setting thoughts to null/empty
-             node.thoughtsRaw = initialThoughtsRaw;
+          node.content = messageText; // Main answer
+          if (thoughtsForMessage !== undefined) { // Allow setting thoughts to null/empty
+             node.thoughtsRaw = thoughtsForMessage;
           }
         } else {
              console.warn(`appendMessage: History node not found for update: ${messageIdToUpdate}`);
         }
       } else {
-        const processedContent = imageHandler.processImageTags(text, imagesHTML);
+        const processedContent = imageHandler.processImageTags(messageText, imagesHTML);
         node = chatHistoryManager.addMessageToTree(
           sender === 'user' ? 'user' : 'assistant',
           processedContent,
           chatHistoryManager.chatHistory.currentNode
         );
-        if (initialThoughtsRaw) {
-          node.thoughtsRaw = initialThoughtsRaw;
+        if (thoughtsForMessage) {
+          node.thoughtsRaw = thoughtsForMessage;
         }
         if (node) {
-          node.hasInlineImages = (!imagesHTML && typeof text === 'string' && /<img/i.test(text));
+          node.hasInlineImages = (!imagesHTML && typeof messageText === 'string' && /<img/i.test(messageText));
         }
         messageDiv.setAttribute('data-message-id', node.id);
         // 初次创建 AI 消息时插入一个空的 API footer，占位以便样式稳定
@@ -291,6 +302,19 @@ export function createMessageProcessor(appContext) {
     const messageDiv = chatContainer.querySelector(`[data-message-id="${messageId}"]`);
     const node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
 
+    // 统一拆分 <think> 思考段落，保证思考摘要独立存储与展示
+    let safeAnswerContent = newAnswerContent;
+    let resolvedThoughts = newThoughtsRaw;
+    let shouldUpdateThoughts = (newThoughtsRaw !== undefined);
+    if (typeof safeAnswerContent === 'string') {
+      const thinkExtraction = extractThinkingFromText(safeAnswerContent);
+      safeAnswerContent = thinkExtraction.cleanText;
+      if (thinkExtraction.thoughtText) {
+        resolvedThoughts = mergeThoughts(resolvedThoughts, thinkExtraction.thoughtText);
+        shouldUpdateThoughts = true;
+      }
+    }
+
     if (!messageDiv || !node) {
       console.error('updateAIMessage: 消息或历史节点未找到', messageId);
       // Fallback: if messageDiv doesn't exist, create it. This implies the initial appendMessage in stream handler failed or was skipped.
@@ -298,7 +322,7 @@ export function createMessageProcessor(appContext) {
       return;
     }
 
-    messageDiv.setAttribute('data-original-text', newAnswerContent);
+    messageDiv.setAttribute('data-original-text', safeAnswerContent);
     // 思考过程文本由 setupThoughtsDisplay 统一处理
 
     // --- 同步历史记录中的内容结构（支持图片 + 文本的混合内容） ---
@@ -307,16 +331,16 @@ export function createMessageProcessor(appContext) {
       const imageContentDiv = messageDiv.querySelector('.image-content');
       const imagesHTML = imageContentDiv ? imageContentDiv.innerHTML : null;
       // 使用与 appendMessage 相同的逻辑，将文本和图片转换为统一的消息内容格式
-      const processedContent = imageHandler.processImageTags(newAnswerContent, imagesHTML || '');
+      const processedContent = imageHandler.processImageTags(safeAnswerContent, imagesHTML || '');
       node.content = processedContent;
     } catch (e) {
       console.warn('updateAIMessage: 处理图片标签失败，回退为纯文本内容:', e);
-      node.content = newAnswerContent;
+      node.content = safeAnswerContent;
     }
-    node.hasInlineImages = (typeof newAnswerContent === 'string' && /<img/i.test(newAnswerContent));
+    node.hasInlineImages = (typeof safeAnswerContent === 'string' && /<img/i.test(safeAnswerContent));
 
-    if (newThoughtsRaw !== undefined) { // 允许显式将思考过程设置为 null/空字符串
-      node.thoughtsRaw = newThoughtsRaw;
+    if (shouldUpdateThoughts) { // 允许显式将思考过程设置为 null/空字符串
+      node.thoughtsRaw = resolvedThoughts;
     }
     if (groundingMetadata !== undefined) {
       node.groundingMetadata = groundingMetadata || null;
@@ -324,7 +348,7 @@ export function createMessageProcessor(appContext) {
 
     // Setup/Update thoughts display
     // Pass `processMathAndMarkdown` from the outer scope
-    setupThoughtsDisplay(messageDiv, newThoughtsRaw, processMathAndMarkdown);
+    setupThoughtsDisplay(messageDiv, resolvedThoughts, processMathAndMarkdown);
 
     let textContentDiv = messageDiv.querySelector('.text-content');
     if (!textContentDiv) { // Should exist if appendMessage created it, but good to check
@@ -339,12 +363,12 @@ export function createMessageProcessor(appContext) {
         }
     }
     
-    let processedText = newAnswerContent;
+    let processedText = safeAnswerContent;
     let htmlElements = [];
-    let processedResult = newAnswerContent;
+    let processedResult = safeAnswerContent;
 
     if (groundingMetadata) {
-      processedResult = addGroundingToMessage(newAnswerContent, groundingMetadata);
+      processedResult = addGroundingToMessage(safeAnswerContent, groundingMetadata);
       if (typeof processedResult === 'object') {
         processedText = processedResult.text;
         htmlElements = processedResult.htmlElements;
@@ -821,30 +845,30 @@ export function createMessageProcessor(appContext) {
    * @returns {string} 处理后的消息文本，其中符合条件的部分被包裹在一个折叠元素中
    */
   function foldMessageContent(text) {
+    if (typeof text !== 'string') return text;
+    // 预先去掉 <think> 段落，思考摘要改由独立区域展示
+    const { cleanText } = extractThinkingFromText(text);
+    let normalizedText = cleanText;
     // 定义折叠配置
     const foldConfigs = [
       {
         regex: /^([\s\S]*)<\/search>/,
         summary: '搜索过程'
-      },
-      {
-        regex: /^<think>([\s\S]*)<\/think>/,
-        summary: '思考过程'
       }
     ];
 
     // 对每个配置应用折叠处理
     for (const config of foldConfigs) {
-      const match = text.match(config.regex);
+      const match = normalizedText.match(config.regex);
       if (match && match[1] && match[1].trim() !== '') {
         const foldedPart = match[1];
-        const remainingPart = text.slice(match[0].length);
+        const remainingPart = normalizedText.slice(match[0].length);
         const quotedFoldedPart = `<blockquote>${foldedPart}</blockquote>`;
-        text = `<details class="folded-message"><summary>${config.summary}</summary><div>\n${quotedFoldedPart}</div></details>\n\n${remainingPart}`;
+        normalizedText = `<details class="folded-message"><summary>${config.summary}</summary><div>\n${quotedFoldedPart}</div></details>\n\n${remainingPart}`;
       }
     }
 
-    return text;
+    return normalizedText;
   }
 
   /**

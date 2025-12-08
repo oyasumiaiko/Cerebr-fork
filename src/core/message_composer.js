@@ -55,6 +55,8 @@
  *   maxHistory: 16
  * });
  */
+import { extractThinkingFromText } from '../utils/thoughts_parser.js';
+
 export function composeMessages(args) {
   const {
     prompts,
@@ -112,7 +114,7 @@ export function composeMessages(args) {
       const limited = effectiveChain.slice(-maxHistory);
       messages.push(...limited.map(node => ({
         role: mapRole(node.role),
-        content: node.content,
+        content: sanitizeContentForSend(node.content),
         // 透传历史消息上的 Gemini 思维链签名（仅在构建 Gemini 请求体时使用）
         thoughtSignature: node.thoughtSignature || null
       })));
@@ -120,7 +122,7 @@ export function composeMessages(args) {
       // 发送全部历史消息
       messages.push(...effectiveChain.map(node => ({
         role: mapRole(node.role),
-        content: node.content,
+        content: sanitizeContentForSend(node.content),
         thoughtSignature: node.thoughtSignature || null
       })));
     }
@@ -128,7 +130,7 @@ export function composeMessages(args) {
     // 只发送最后一条
     if (effectiveChain.length > 0) {
       const last = effectiveChain[effectiveChain.length - 1];
-      messages.push({ role: mapRole(last.role), content: last.content });
+      messages.push({ role: mapRole(last.role), content: sanitizeContentForSend(last.content) });
     }
   }
 
@@ -142,7 +144,7 @@ export function composeMessages(args) {
       if (message.role === 'user') {
         messages.push({
           role: 'user',
-          content: message.content,
+          content: sanitizeContentForSend(message.content),
           thoughtSignature: message.thoughtSignature || null
         });
         break; // 只添加最后一条用户消息
@@ -151,6 +153,17 @@ export function composeMessages(args) {
   }
 
   return applyUserMessageSpacing(messages);
+}
+
+/**
+ * 纯函数：移除消息正文中的 <think> 段落，避免隐式思考内容被重新发送。
+ * @param {string|Array} content - 历史消息正文
+ * @returns {string|Array} 去除思考段落后的正文
+ */
+function sanitizeContentForSend(content) {
+  if (typeof content !== 'string') return content;
+  const { cleanText } = extractThinkingFromText(content);
+  return cleanText;
 }
 
 /**

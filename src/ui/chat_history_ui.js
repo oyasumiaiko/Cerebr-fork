@@ -14,6 +14,7 @@ import {
   purgeOrphanMessageContents
 } from '../storage/indexeddb_helper.js';
 import { storageService } from '../utils/storage_service.js';
+import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -120,6 +121,23 @@ export function createChatHistoryUI(appContext) {
     metaCache.time = 0;
     invalidateGalleryCache();
     invalidateSearchCache();
+  }
+
+  /**
+   * 归一化单条消息的思考内容：提取 <think> 段落到 thoughtsRaw，避免正文携带隐藏思考。
+   * @param {Object} msg - 聊天消息对象
+   * @returns {Object} 处理后的消息对象
+   */
+  function normalizeThinkingForMessage(msg) {
+    if (!msg) return msg;
+    if (typeof msg.content === 'string') {
+      const thinkExtraction = extractThinkingFromText(msg.content);
+      if (thinkExtraction.thoughtText) {
+        msg.thoughtsRaw = mergeThoughts(msg.thoughtsRaw, thinkExtraction.thoughtText);
+        msg.content = thinkExtraction.cleanText;
+      }
+    }
+    return msg;
   }
 
   async function getAllConversationMetadataWithCache(forceUpdate = false) {
@@ -398,6 +416,8 @@ export function createChatHistoryUI(appContext) {
       }
       return;
     }
+    // 保存前确保 <think> 段落已转为 thoughtsRaw，避免思考内容混入正文
+    messages.forEach(normalizeThinkingForMessage);
     const messagesCopy = messages.slice();
     // 保存前先将消息中的 dataURL/远程图片落盘，防止 base64 继续写入 IndexedDB
     try {
@@ -594,6 +614,7 @@ export function createChatHistoryUI(appContext) {
     chatContainer.innerHTML = '';
     // 遍历对话中的每条消息并显示
     for (const msg of fullConversation.messages) {
+      normalizeThinkingForMessage(msg);
       const role = msg.role.toLowerCase() === 'assistant' ? 'ai' : msg.role;
       let messageElem = null;
       const thoughtsToDisplay = msg.thoughtsRaw || null; // 获取思考过程文本
