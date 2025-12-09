@@ -188,6 +188,8 @@ export function createMessageSender(appContext) {
   let pageContent = null;
   let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
+  // 流式标记：若当前数据流进入 <think> 段落，则持续写入思考块直到遇到 </think>
+  let isInStreamingThoughtBlock = false;
   // 自动重试配置：指数退避，最多 5 次
   const MAX_AUTO_RETRY_ATTEMPTS = 5;
   const AUTO_RETRY_BASE_DELAY_MS = 500;
@@ -197,6 +199,77 @@ export function createMessageSender(appContext) {
     const normalizedAttempt = Math.max(0, attemptIndex);
     const rawDelay = AUTO_RETRY_BASE_DELAY_MS * Math.pow(2, normalizedAttempt);
     return Math.min(AUTO_RETRY_MAX_DELAY_MS, Math.round(rawDelay));
+  }
+
+  /**
+   * 将流式增量按 <think> 标签拆分到思考块与正文块。
+   * 若已进入思考模式，则持续写入直到遇到闭合标签。
+   * @param {string} delta - 本次增量文本
+   * @param {boolean} forceThought - 是否优先视为思考文本（例如 part.thought=true）
+   * @returns {{answerDelta: string, thoughtDelta: string}}
+   */
+  function splitDeltaByThinkTags(delta, forceThought = false) {
+    if (typeof delta !== 'string' || delta.length === 0) {
+      return { answerDelta: '', thoughtDelta: '' };
+    }
+
+    let answerDelta = '';
+    let thoughtDelta = '';
+    let remaining = delta;
+
+    while (remaining.length > 0) {
+      if (isInStreamingThoughtBlock) {
+        const closeIdx = remaining.indexOf('</think>');
+        if (closeIdx === -1) {
+          thoughtDelta += remaining;
+          remaining = '';
+          continue;
+        }
+        thoughtDelta += remaining.slice(0, closeIdx);
+        remaining = remaining.slice(closeIdx + 8);
+        isInStreamingThoughtBlock = false;
+        continue;
+      }
+
+      const openIdx = remaining.indexOf('<think>');
+      if (openIdx === -1) {
+        if (forceThought) {
+          thoughtDelta += remaining;
+        } else {
+          answerDelta += remaining;
+        }
+        remaining = '';
+        continue;
+      }
+
+      // 先写入开标签前的内容
+      if (openIdx > 0) {
+        const before = remaining.slice(0, openIdx);
+        if (forceThought) {
+          thoughtDelta += before;
+        } else {
+          answerDelta += before;
+        }
+      }
+
+      // 跳过 <think> 标签
+      remaining = remaining.slice(openIdx + 7);
+
+      const closeIdx = remaining.indexOf('</think>');
+      if (closeIdx === -1) {
+        // 没有闭合标签，进入思考模式，剩余内容全部写入思考摘要
+        thoughtDelta += remaining;
+        remaining = '';
+        isInStreamingThoughtBlock = true;
+        continue;
+      }
+
+      // 有闭合标签，截取其中内容写入思考摘要
+      thoughtDelta += remaining.slice(0, closeIdx);
+      remaining = remaining.slice(closeIdx + 8);
+    }
+
+    return { answerDelta, thoughtDelta };
   }
   let currentConversationId = null;
 
@@ -1115,6 +1188,8 @@ export function createMessageSender(appContext) {
     let aiResponse = '';
     // 累积当前流中的思考过程文本（Gemini / OpenAI reasoning）
     let aiThoughtsRaw = '';
+    // 每次流式请求开始时重置思考块状态
+    isInStreamingThoughtBlock = false;
     // 标记是否为 Gemini 流式接口
     const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') && !response.url.includes('openai');
     // SSE 行缓冲
@@ -1265,11 +1340,9 @@ export function createMessageSender(appContext) {
 
             // 1) 普通文本与思考过程
             if (typeof part.text === 'string') {
-              if (part.thought) {
-                currentEventThoughtsDelta += part.text;
-              } else {
-                currentEventAnswerDelta += part.text;
-              }
+              const split = splitDeltaByThinkTags(part.text, !!part.thought);
+              currentEventAnswerDelta += split.answerDelta;
+              currentEventThoughtsDelta += split.thoughtDelta;
               continue;
             }
 
@@ -1403,9 +1476,17 @@ export function createMessageSender(appContext) {
 
       // 只有在有实际内容增量时才继续处理
       if (currentEventAnswerDelta || currentEventThoughtsDelta) {
+          const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
+          const thoughtSplit = splitDeltaByThinkTags(String(currentEventThoughtsDelta || ''), true);
+
           // 累积AI的完整响应文本
-          aiResponse += currentEventAnswerDelta;
-          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, currentEventThoughtsDelta); // Accumulate thoughts separately
+          aiResponse += split.answerDelta;
+          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thoughtSplit.thoughtDelta || split.thoughtDelta);
+
+          // 若思考流仍未闭合，避免正文暂存残留 <think>
+          if (split.thoughtDelta && !split.answerDelta) {
+            aiResponse = aiResponse; // no-op, 保持逻辑对齐
+          }
           const thinkExtraction = extractThinkingFromText(aiResponse);
           aiResponse = thinkExtraction.cleanText;
           aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
