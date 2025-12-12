@@ -76,6 +76,88 @@ export async function getAllConversationMetadata() {
 }
 
 /**
+ * 根据一组 URL 候选前缀，从 IndexedDB 中找出“最适合继续对话”的会话元数据。
+ *
+ * 设计背景：
+ * - “继续本页对话”只需要定位到一个会话（通常是最近的一条），不需要把所有会话都搬到内存里再排序；
+ * - 旧实现会先取出全部会话元数据并在 UI 层做排序/扫描；
+ * - 这里将匹配逻辑下沉到游标遍历过程中，避免：
+ *   - 额外的数组构建与排序开销；
+ *   - 为每条会话计算 messageIds（这在会话很多/消息很多时会显著拖慢）。
+ *
+ * 匹配规则：
+ * - candidateUrls 为“从严格到宽松”的前缀列表；
+ * - 优先命中更严格的 candidate；
+ * - 在同一个 candidate 下，选择 endTime 最大的会话；
+ * - endTime 相同则保留更早遇到的记录（等价于稳定排序后的选择结果）。
+ *
+ * 返回值：
+ * - 返回一个“精简版”会话对象（仅包含 id/url/startTime/endTime/title），以降低对象复制与内存占用；
+ * - 调用方如需完整 messages，请再用 getConversationById 加载。
+ *
+ * @param {string[]} candidateUrls
+ * @returns {Promise<({id:string, url?:string, startTime?:number, endTime?:number, title?:string}|null)>}
+ */
+export async function findMostRecentConversationMetadataByUrlCandidates(candidateUrls) {
+  const candidates = Array.isArray(candidateUrls)
+    ? candidateUrls.filter((c) => typeof c === 'string' && c.length > 0)
+    : [];
+  if (candidates.length === 0) return null;
+
+  const db = await openChatHistoryDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('conversations', 'readonly');
+    const store = transaction.objectStore('conversations');
+
+    const bestByIndex = new Array(candidates.length).fill(null);
+    const bestEndTimeByIndex = new Array(candidates.length).fill(-1);
+
+    const request = store.openCursor();
+    request.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (!cursor) {
+        for (let i = 0; i < bestByIndex.length; i += 1) {
+          if (bestByIndex[i]) {
+            resolve(bestByIndex[i]);
+            return;
+          }
+        }
+        resolve(null);
+        return;
+      }
+
+      const conv = cursor.value;
+      const url = conv?.url;
+      if (typeof url === 'string' && url.length > 0) {
+        for (let i = 0; i < candidates.length; i += 1) {
+          const candidate = candidates[i];
+          if (!url.startsWith(candidate)) continue;
+
+          const endTime = Number(conv?.endTime) || 0;
+          if (!bestByIndex[i] || endTime > bestEndTimeByIndex[i]) {
+            bestByIndex[i] = {
+              id: conv?.id,
+              url: conv?.url,
+              startTime: conv?.startTime,
+              endTime: conv?.endTime,
+              title: conv?.title
+            };
+            bestEndTimeByIndex[i] = endTime;
+          }
+          break;
+        }
+      }
+
+      cursor.continue();
+    };
+
+    request.onerror = (event) => {
+      reject(event.target.error);
+    };
+  });
+}
+
+/**
  * 获取全部对话记录(包含完整消息内容)
  * @param {boolean} [loadFullContent=true] - 是否加载完整消息内容
  * @returns {Promise<Array<Object>>} 包含所有对话记录的数组

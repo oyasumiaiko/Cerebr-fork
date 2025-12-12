@@ -622,6 +622,15 @@ export function createChatHistoryUI(appContext) {
     
     // 清空当前聊天容器
     chatContainer.innerHTML = '';
+
+    // 性能优化：
+    // - 预热下载根目录缓存：避免首次遇到图片时触发 chrome.storage.local 读取造成额外卡顿；
+    // - 使用 DocumentFragment 批量插入 DOM，减少大量 appendChild 带来的反复回流/重绘；
+    // - 注意：messageProcessor.appendMessage 在传入 fragment 时会给消息加上 batch-load class（用于动画）。
+    //   “继续本页对话”属于快速恢复场景，这里移除 batch-load，确保视觉行为与之前一致。
+    try { await loadDownloadRoot(); } catch (_) {}
+    const fragment = document.createDocumentFragment();
+
     // 遍历对话中的每条消息并显示
     for (const msg of fullConversation.messages) {
       normalizeThinkingForMessage(msg);
@@ -669,12 +678,15 @@ export function createChatHistoryUI(appContext) {
           imagesHTML = legacyImagesContainer.innerHTML;
         }
 
-        messageElem = appendMessage(combinedContent, role, true, null, imagesHTML, thoughtsToDisplay);
+        messageElem = appendMessage(combinedContent, role, true, fragment, imagesHTML, thoughtsToDisplay);
       } else {
         // 调用 appendMessage 时传递 thoughtsToDisplay
-        messageElem = appendMessage(msg.content, role, true, null, null, thoughtsToDisplay);
+        messageElem = appendMessage(msg.content, role, true, fragment, null, thoughtsToDisplay);
       }
-      
+
+      if (messageElem && messageElem.classList) {
+        messageElem.classList.remove('batch-load');
+      }
       messageElem.setAttribute('data-message-id', msg.id);
       // 渲染 API footer（按优先级：uuid->displayName->modelId），带 Thought Signature 的消息用文字标记
       try {
@@ -717,6 +729,9 @@ export function createChatHistoryUI(appContext) {
           : footer.title;
       } catch (_) {}
     }
+
+    // 批量插入：一次性提交到 DOM，显著降低大对话恢复时的卡顿/延迟
+    chatContainer.appendChild(fragment);
     // 恢复加载的对话历史到聊天管理器
     // 修改: 使用 services.chatHistoryManager.chatHistory 访问数据对象
     services.chatHistoryManager.chatHistory.messages = fullConversation.messages.slice();
