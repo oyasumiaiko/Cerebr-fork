@@ -1,6 +1,7 @@
 import { initTreeDebugger } from '../../debug/tree_debugger.js';
 import { findMostRecentConversationMetadataByUrlCandidates } from '../../storage/indexeddb_helper.js';
 import { packRemoteRepoViaApiExtension } from '../../utils/repomix.js';
+import { generateCandidateUrls } from '../../utils/url_candidates.js';
 
 /**
  * 注册侧边栏所需的事件绑定与交互逻辑。
@@ -28,55 +29,6 @@ export function registerSidebarEventHandlers(appContext) {
   scheduleInitialRequests(appContext);
 }
 
-/**
- * 将当前页面 URL 生成一组“从严格到宽松”的候选前缀，用于匹配历史会话。
- *
- * 设计目标：
- * - 行为与旧逻辑保持一致：优先使用更“具体”的前缀（越靠前越严格）；
- * - 支持 URL 里包含 path / query / hash 的场景：逐步剥离末尾片段；
- * - 去重：避免重复候选导致多余匹配成本。
- *
- * @param {string} urlString
- * @returns {string[]} 候选前缀数组（按优先级从高到低）
- */
-function generateCandidateUrls(urlString) {
-  const candidates = new Set();
-  try {
-    const urlObj = new URL(urlString);
-    const origin = urlObj.origin;
-
-    let current = urlString;
-
-    while (current.length > origin.length) {
-      candidates.add(current);
-
-      const searchArea = current.substring(origin.length);
-      const lastDelimiterIndexInSearchArea = Math.max(
-        searchArea.lastIndexOf('/'),
-        searchArea.lastIndexOf('?'),
-        searchArea.lastIndexOf('&'),
-        searchArea.lastIndexOf('#')
-      );
-
-      if (lastDelimiterIndexInSearchArea === -1) {
-        break;
-      }
-
-      const delimiterIndex = origin.length + lastDelimiterIndexInSearchArea;
-      current = current.substring(0, delimiterIndex);
-
-      if (current === origin + '/') {
-        current = origin;
-      }
-    }
-
-    candidates.add(origin);
-  } catch (error) {
-    console.error('generateCandidateUrls error: ', error);
-    if (urlString) candidates.add(urlString);
-  }
-  return Array.from(candidates);
-}
 /**
  * 处理“打开独立页面”入口按钮。
  * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext

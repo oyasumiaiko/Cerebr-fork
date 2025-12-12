@@ -3158,6 +3158,49 @@ body.hide-references .reference-number.superscript {
     color: var(--cerebr-text-color);
 }
 
+/* URL 快速筛选：匹配等级徽标 */
+#chat-history-panel .url-match-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    padding: 0 6px;
+    margin-right: 6px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 18px;
+    border: 1px solid var(--cerebr-control-border);
+    background: var(--cerebr-control-bg);
+    color: var(--cerebr-text-color);
+    white-space: nowrap;
+    user-select: none;
+}
+
+#chat-history-panel .url-match-level-0 {
+    border-color: color-mix(in srgb, var(--cerebr-green) 65%, transparent);
+    background: color-mix(in srgb, var(--cerebr-green) 18%, transparent);
+}
+
+#chat-history-panel .url-match-level-1 {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 65%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 18%, transparent);
+}
+
+#chat-history-panel .url-match-level-2 {
+    border-color: color-mix(in srgb, var(--cerebr-orange) 65%, transparent);
+    background: color-mix(in srgb, var(--cerebr-orange) 18%, transparent);
+}
+
+#chat-history-panel .url-match-level-3 {
+    border-color: color-mix(in srgb, var(--cerebr-purple) 65%, transparent);
+    background: color-mix(in srgb, var(--cerebr-purple) 18%, transparent);
+}
+
+#chat-history-panel .url-match-level-4 {
+    border-color: color-mix(in srgb, var(--cerebr-teal) 65%, transparent);
+    background: color-mix(in srgb, var(--cerebr-teal) 18%, transparent);
+}
+
 /* 保持面板整体固定，内部列表区域独立滚动 */
 #chat-history-list {
     flex: 1 1 auto;
@@ -3901,6 +3944,32 @@ body.hide-references .reference-number.superscript {
 }
 .clear-filter-btn:hover {
   background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* 聊天记录面板：当前 URL 快速筛选按钮 */
+.url-filter-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: inherit;
+  padding: 4px 8px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-left: 5px;
+  border-radius: 4px;
+}
+
+.url-filter-btn:hover {
+  background-color: var(--cerebr-hover-color);
+}
+
+.url-filter-btn.active {
+  background: var(--cerebr-control-bg);
+  border-color: var(--cerebr-control-border);
+}
+
+.url-filter-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 当侧边栏位置为左（即添加了 .position-left 类）时，让 collapse-button 出现在右边 */

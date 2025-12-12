@@ -6,6 +6,9 @@
 import { 
   getAllConversationMetadata, 
   getAllConversations, 
+  getConversationMetadataByIds,
+  getConversationMetadataPageByEndTimeDesc,
+  listConversationMetadataByUrlCandidates,
   putConversation, 
   deleteConversation, 
   getConversationById,
@@ -15,6 +18,7 @@ import {
 } from '../storage/indexeddb_helper.js';
 import { storageService } from '../utils/storage_service.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
+import { generateCandidateUrls } from '../utils/url_candidates.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -248,10 +252,13 @@ export function createChatHistoryUI(appContext) {
 
   // --- Infinite Scroll/Batch Rendering State ---
   const BATCH_SIZE = 100; // 每批加载的项目数
+  // 默认视图性能优化：首次只取“置顶 + 最近 50 条（非置顶）”，后续按需再分页追加
+  const INITIAL_UNPINNED_LOAD_LIMIT = 50;
+  const PAGED_UNPINNED_LOAD_SIZE = 100;
   let currentDisplayItems = []; // 当前筛选和排序后的所有项目
   let currentlyRenderedCount = 0; // 已渲染的项目数量
   let isLoadingMoreItems = false; // 防止并发加载的标志
-  let currentGroupLabelForBatchRender = null; // 用于跨批次跟踪组标签（针对未置顶项目）
+  let currentGroupLabelForBatchRender = null; // 跨批次跟踪“分组 key”（默认按日期；URL 模式按匹配等级）
   let currentPinnedItemsCountInDisplay = 0; // 当前显示列表中置顶项的数量，用于辅助分组逻辑
 
   // --- 置顶功能相关 ---
@@ -1166,187 +1173,270 @@ export function createChatHistoryUI(appContext) {
     }
 
     const pinnedIds = await getPinnedIds();
-    const allHistoriesMeta = await getAllConversationMetadataWithCache();
     // 任务可能已被新一轮加载替换
     if (panel.dataset.runId !== runId) return;
+
+    // 记录本轮“列表数据源模式”，供 renderMoreItems 继续分页追加
+    // - paged：默认视图（置顶 + 最近 N 条），后续按需加载更多
+    // - full：全文搜索/消息数筛选等，需要全量元数据
+    // - url：按当前页面 URL 前缀快速筛选
+    panel._historyDataSource = { mode: 'full' };
+
+    const urlFilterMode = panel.dataset.urlFilterMode === 'currentUrl';
+
+    let baseHistories = null;
+
+    if (urlFilterMode) {
+      const currentUrl = (state.pageInfo?.url || '').trim();
+      if (!currentUrl) {
+        // 无 URL 时退回普通模式（按钮理论上会 disabled，这里再做一次防御）
+        panel.dataset.urlFilterMode = '';
+      } else {
+        panel._historyDataSource = { mode: 'url', currentUrl };
+        const candidateUrls = generateCandidateUrls(currentUrl);
+        baseHistories = await listConversationMetadataByUrlCandidates(candidateUrls);
+        if (panel.dataset.runId !== runId) return;
+      }
+    }
+
+    // 默认视图（无输入筛选）走“快速分页”：
+    // - 首次：置顶 + 最近 50（非置顶）
+    // - 后续：滚动到底部再继续加载更多（renderMoreItems 内部触发）
+    if (!baseHistories && !isCountFilter && !filterText.trim()) {
+      panel._historyDataSource = { mode: 'paged', cursor: null, hasMore: false, pageSize: PAGED_UNPINNED_LOAD_SIZE };
+      removeSearchSummary(panel);
+
+      const pinnedMetas = await getConversationMetadataByIds(pinnedIds);
+      if (panel.dataset.runId !== runId) return;
+
+      const firstPage = await getConversationMetadataPageByEndTimeDesc({
+        limit: INITIAL_UNPINNED_LOAD_LIMIT,
+        cursor: null,
+        excludeIds: pinnedIds
+      });
+      if (panel.dataset.runId !== runId) return;
+
+      panel._historyDataSource.cursor = firstPage.cursor;
+      panel._historyDataSource.hasMore = firstPage.hasMore;
+
+      baseHistories = [...pinnedMetas, ...(firstPage.items || [])];
+    }
+
+    // 需要“全量元数据”的场景：消息数筛选 / 全文搜索
+    if (!baseHistories) {
+      panel._historyDataSource = { mode: 'full' };
+      baseHistories = await getAllConversationMetadataWithCache();
+      if (panel.dataset.runId !== runId) return;
+    }
 
     let sourceHistories = [];
     let effectiveFilterTextForHighlight = filterText;
 
-    if (isCountFilter) {
-      sourceHistories = allHistoriesMeta.filter(history =>
-        compareCount(history.messageCount, countOperator, countThreshold)
-      );
+    if (panel._historyDataSource.mode === 'paged') {
+      // 默认分页列表不做额外筛选（filterText 本身为空）
+      sourceHistories = baseHistories;
       effectiveFilterTextForHighlight = '';
       removeSearchSummary(panel);
-    } else if (filterText.trim()) {
-      const normalizedFilter = panel.dataset.normalizedFilter || filterText.trim().toLowerCase();
-      if (searchCache.results && searchCache.normalized === normalizedFilter) {
-        sourceHistories = searchCache.results.slice();
-        effectiveFilterTextForHighlight = filterText;
-        const meta = searchCache.meta || {};
-        renderSearchSummary(panel, {
-          query: searchCache.query || filterText,
-          normalized: searchCache.normalized,
-          durationMs: meta.durationMs,
-          resultCount: meta.resultCount ?? sourceHistories.length,
-          excerptCount: meta.excerptCount,
-          scannedCount: meta.scannedCount,
-          reused: true
-        });
-      } else {
-        removeSearchSummary(panel);
+    } else if (panel._historyDataSource.mode === 'url') {
+      // URL 模式保持“快速”：仅在元数据维度做筛选（避免全文消息扫描导致的延迟）
+      removeSearchSummary(panel);
+
+      if (isCountFilter) {
+        sourceHistories = baseHistories.filter((history) =>
+          compareCount(history.messageCount, countOperator, countThreshold)
+        );
+        effectiveFilterTextForHighlight = '';
+      } else if (filterText.trim()) {
         const lowerFilter = normalizedFilter;
-        const searchStartTime = performance.now();
-        const matchedEntries = [];
-        const matchInfoMap = new Map();
-        const totalItems = allHistoriesMeta.length;
-        let nextIndex = 0;
-        let processedCount = 0;
-        let lastProgressUpdate = 0;
-        let cancelled = false;
+        sourceHistories = baseHistories.filter((history) => {
+          const url = (history.url || '').toLowerCase();
+          const summary = (history.summary || '').toLowerCase();
+          const title = (history.title || '').toLowerCase();
+          return url.includes(lowerFilter) || summary.includes(lowerFilter) || title.includes(lowerFilter);
+        });
+        effectiveFilterTextForHighlight = filterText;
+      } else {
+        sourceHistories = baseHistories;
+        effectiveFilterTextForHighlight = '';
+      }
+    } else {
+      const allHistoriesMeta = baseHistories;
 
-        // 在列表容器顶部插入搜索进度指示器
-        const searchProgressIndicator = document.createElement('div');
-        searchProgressIndicator.className = 'search-loading-indicator';
-
-        const filterBoxContainer = panel.querySelector('.filter-container');
-        if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
-          filterBoxContainer.insertAdjacentElement('afterend', searchProgressIndicator);
+      if (isCountFilter) {
+        sourceHistories = allHistoriesMeta.filter(history =>
+          compareCount(history.messageCount, countOperator, countThreshold)
+        );
+        effectiveFilterTextForHighlight = '';
+        removeSearchSummary(panel);
+      } else if (filterText.trim()) {
+        const normalizedFilter = panel.dataset.normalizedFilter || filterText.trim().toLowerCase();
+        if (searchCache.results && searchCache.normalized === normalizedFilter) {
+          sourceHistories = searchCache.results.slice();
+          effectiveFilterTextForHighlight = filterText;
+          const meta = searchCache.meta || {};
+          renderSearchSummary(panel, {
+            query: searchCache.query || filterText,
+            normalized: searchCache.normalized,
+            durationMs: meta.durationMs,
+            resultCount: meta.resultCount ?? sourceHistories.length,
+            excerptCount: meta.excerptCount,
+            scannedCount: meta.scannedCount,
+            reused: true
+          });
         } else {
-          listContainer.insertBefore(searchProgressIndicator, listContainer.firstChild);
-        }
+          removeSearchSummary(panel);
+          const lowerFilter = normalizedFilter;
+          const searchStartTime = performance.now();
+          const matchedEntries = [];
+          const matchInfoMap = new Map();
+          const totalItems = allHistoriesMeta.length;
+          let nextIndex = 0;
+          let processedCount = 0;
+          let lastProgressUpdate = 0;
+          let cancelled = false;
 
-        const PROGRESS_UPDATE_INTERVAL = 10;
-        const CONCURRENCY = Math.min(6, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
+          // 在列表容器顶部插入搜索进度指示器
+          const searchProgressIndicator = document.createElement('div');
+          searchProgressIndicator.className = 'search-loading-indicator';
 
-        const updateProgress = (force = false) => {
-          if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
-          lastProgressUpdate = processedCount;
-          const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
-          const matchCount = matchedEntries.length;
-          searchProgressIndicator.innerHTML = `
-            <div class="search-progress">
-              <div class="search-progress-text">
-                正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''})
+          const filterBoxContainer = panel.querySelector('.filter-container');
+          if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
+            filterBoxContainer.insertAdjacentElement('afterend', searchProgressIndicator);
+          } else {
+            listContainer.insertBefore(searchProgressIndicator, listContainer.firstChild);
+          }
+
+          const PROGRESS_UPDATE_INTERVAL = 10;
+          const CONCURRENCY = Math.min(6, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
+
+          const updateProgress = (force = false) => {
+            if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
+            lastProgressUpdate = processedCount;
+            const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
+            const matchCount = matchedEntries.length;
+            searchProgressIndicator.innerHTML = `
+              <div class="search-progress">
+                <div class="search-progress-text">
+                  正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''})
+                </div>
+                <div class="search-progress-bar">
+                  <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
+                </div>
               </div>
-              <div class="search-progress-bar">
-                <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
-              </div>
-            </div>
-          `;
-        };
+            `;
+          };
 
-        updateProgress(true);
+          updateProgress(true);
 
-        const workers = Array.from({ length: CONCURRENCY }).map(async () => {
-          while (true) {
-            const currentIndex = nextIndex++;
-            if (currentIndex >= totalItems || cancelled) break;
+          const workers = Array.from({ length: CONCURRENCY }).map(async () => {
+            while (true) {
+              const currentIndex = nextIndex++;
+              if (currentIndex >= totalItems || cancelled) break;
 
-            if (panel.dataset.runId !== runId) {
-              cancelled = true;
-              break;
-            }
+              if (panel.dataset.runId !== runId) {
+                cancelled = true;
+                break;
+              }
 
-            const historyMeta = allHistoriesMeta[currentIndex];
-            const url = (historyMeta.url || '').toLowerCase();
-            const summary = (historyMeta.summary || '').toLowerCase();
-            let matched = false;
+              const historyMeta = allHistoriesMeta[currentIndex];
+              const url = (historyMeta.url || '').toLowerCase();
+              const summary = (historyMeta.summary || '').toLowerCase();
+              let matched = false;
 
-            if (url.includes(lowerFilter) || summary.includes(lowerFilter)) {
-              matchedEntries.push({ index: currentIndex, data: historyMeta });
-              matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
-              matched = true;
-            }
+              if (url.includes(lowerFilter) || summary.includes(lowerFilter)) {
+                matchedEntries.push({ index: currentIndex, data: historyMeta });
+                matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
+                matched = true;
+              }
 
-            if (!matched) {
-              try {
-                const fullConversation = await getConversationFromCacheOrLoad(historyMeta.id);
-                if (panel.dataset.runId !== runId) {
-                  cancelled = true;
-                  break;
-                }
-                if (fullConversation && Array.isArray(fullConversation.messages)) {
-                  const matchInfo = matchInfoMap.get(historyMeta.id) || { messageId: null, excerpts: [], reason: 'message' };
-                  let conversationMatched = false;
-                  for (const message of fullConversation.messages) {
-                    const plainText = extractMessagePlainText(message);
-                    if (!plainText) continue;
-                    const lowerPlain = plainText.toLowerCase();
-                    if (lowerPlain.includes(lowerFilter)) {
-                      conversationMatched = true;
-                      if (!matchInfo.messageId && message.id) {
-                        matchInfo.messageId = message.id;
-                      }
-                      if (matchInfo.excerpts.length < 20) {
-                        const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
-                        if (excerpt) {
-                          matchInfo.excerpts.push(excerpt);
+              if (!matched) {
+                try {
+                  const fullConversation = await getConversationFromCacheOrLoad(historyMeta.id);
+                  if (panel.dataset.runId !== runId) {
+                    cancelled = true;
+                    break;
+                  }
+                  if (fullConversation && Array.isArray(fullConversation.messages)) {
+                    const matchInfo = matchInfoMap.get(historyMeta.id) || { messageId: null, excerpts: [], reason: 'message' };
+                    let conversationMatched = false;
+                    for (const message of fullConversation.messages) {
+                      const plainText = extractMessagePlainText(message);
+                      if (!plainText) continue;
+                      const lowerPlain = plainText.toLowerCase();
+                      if (lowerPlain.includes(lowerFilter)) {
+                        conversationMatched = true;
+                        if (!matchInfo.messageId && message.id) {
+                          matchInfo.messageId = message.id;
+                        }
+                        if (matchInfo.excerpts.length < 20) {
+                          const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
+                          if (excerpt) {
+                            matchInfo.excerpts.push(excerpt);
+                          }
                         }
                       }
+                      if (matchInfo.excerpts.length >= 20) break;
                     }
-                    if (matchInfo.excerpts.length >= 20) break;
+                    if (conversationMatched) {
+                      matchInfoMap.set(historyMeta.id, matchInfo);
+                      matchedEntries.push({ index: currentIndex, data: fullConversation });
+                    }
                   }
-                  if (conversationMatched) {
-                    matchInfoMap.set(historyMeta.id, matchInfo);
-                    matchedEntries.push({ index: currentIndex, data: fullConversation });
-                  }
+                } catch (error) {
+                  console.error(`搜索会话 ${historyMeta.id} 失败:`, error);
                 }
-              } catch (error) {
-                console.error(`搜索会话 ${historyMeta.id} 失败:`, error);
               }
+
+              processedCount++;
+              updateProgress();
+              await new Promise(resolve => setTimeout(resolve, 0));
             }
+          });
 
-            processedCount++;
-            updateProgress();
-            await new Promise(resolve => setTimeout(resolve, 0));
+          await Promise.all(workers);
+
+          if (panel.dataset.runId !== runId || cancelled) {
+            if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
+            return;
           }
-        });
 
-        await Promise.all(workers);
-
-        if (panel.dataset.runId !== runId || cancelled) {
+          updateProgress(true);
           if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-          return;
-        }
 
-        updateProgress(true);
-        if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-
-        matchedEntries.sort((a, b) => a.index - b.index);
-        const finalResults = matchedEntries.map(entry => entry.data);
-        const durationMs = performance.now() - searchStartTime;
-        const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
-        const scannedCount = Math.min(processedCount, totalItems);
-        searchCache = {
-          query: filterText,
-          normalized: normalizedFilter,
-          results: finalResults.slice(),
-          matchMap: matchInfoMap,
-          timestamp: Date.now(),
-          meta: {
+          matchedEntries.sort((a, b) => a.index - b.index);
+          const finalResults = matchedEntries.map(entry => entry.data);
+          const durationMs = performance.now() - searchStartTime;
+          const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
+          const scannedCount = Math.min(processedCount, totalItems);
+          searchCache = {
+            query: filterText,
+            normalized: normalizedFilter,
+            results: finalResults.slice(),
+            matchMap: matchInfoMap,
+            timestamp: Date.now(),
+            meta: {
+              durationMs,
+              resultCount: finalResults.length,
+              excerptCount,
+              scannedCount
+            }
+          };
+          sourceHistories = searchCache.results.slice();
+          renderSearchSummary(panel, {
+            query: filterText,
+            normalized: normalizedFilter,
             durationMs,
             resultCount: finalResults.length,
             excerptCount,
-            scannedCount
-          }
-        };
-        sourceHistories = searchCache.results.slice();
-        renderSearchSummary(panel, {
-          query: filterText,
-          normalized: normalizedFilter,
-          durationMs,
-          resultCount: finalResults.length,
-          excerptCount,
-          scannedCount,
-          reused: false
-        });
+            scannedCount,
+            reused: false
+          });
+        }
+      } else {
+        removeSearchSummary(panel);
+        sourceHistories = allHistoriesMeta;
+        effectiveFilterTextForHighlight = '';
       }
-    } else {
-      removeSearchSummary(panel);
-      sourceHistories = allHistoriesMeta;
-      effectiveFilterTextForHighlight = '';
     }
 
     const pinnedItems = [];
@@ -1362,10 +1452,25 @@ export function createChatHistoryUI(appContext) {
     });
 
     pinnedItems.sort((a, b) => (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity));
-    unpinnedItems.sort((a, b) => b.endTime - a.endTime);
+    if (panel?._historyDataSource?.mode === 'url') {
+      // URL 快速筛选模式：更严格的匹配等级优先，等级相同再按最近对话排序
+      unpinnedItems.sort((a, b) => {
+        const aLevel = Number.isFinite(Number(a?.urlMatchLevel)) ? Number(a.urlMatchLevel) : Number.POSITIVE_INFINITY;
+        const bLevel = Number.isFinite(Number(b?.urlMatchLevel)) ? Number(b.urlMatchLevel) : Number.POSITIVE_INFINITY;
+        if (aLevel !== bLevel) return aLevel - bLevel;
+        return (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0);
+      });
+    } else {
+      unpinnedItems.sort((a, b) => (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0));
+    }
 
     currentDisplayItems = [...pinnedItems, ...unpinnedItems];
     currentPinnedItemsCountInDisplay = pinnedItems.length;
+
+    if (panel?._historyDataSource?.mode === 'paged') {
+      // 用于后续分页追加时去重（极端情况下避免重复插入同一会话）
+      panel._historyDataSource.loadedIdSet = new Set(currentDisplayItems.map((item) => item?.id).filter(Boolean));
+    }
 
     currentlyRenderedCount = 0;
     currentGroupLabelForBatchRender = null;
@@ -1492,7 +1597,24 @@ export function createChatHistoryUI(appContext) {
     let title = conv.title;
     const chatTimeSpan = relativeTime === relativeEndTime ? relativeTime : `${relativeTime} - ${relativeEndTime}`;
     const displayInfos = `${chatTimeSpan} · 消息数: ${conv.messageCount} · ${domain}`;
-    infoDiv.textContent = displayInfos;
+    // URL 快速筛选模式下，为每条会话标注“匹配等级”，便于用户理解来源范围
+    // - 等级越小越严格（越接近当前页面 URL）
+    // - 鼠标悬停可查看匹配前缀
+    const hasUrlMatchLevel = Number.isFinite(Number(conv?.urlMatchLevel));
+    if (hasUrlMatchLevel) {
+      const level = Number(conv.urlMatchLevel);
+      const prefix = typeof conv?.urlMatchPrefix === 'string' ? conv.urlMatchPrefix : '';
+      const badge = document.createElement('span');
+      badge.className = `url-match-badge url-match-level-${level}`;
+      badge.textContent = `L${level}`;
+      badge.title = prefix
+        ? `URL 匹配等级 L${level}（越小越精确）\n匹配前缀: ${prefix}`
+        : `URL 匹配等级 L${level}（越小越精确）`;
+      infoDiv.appendChild(badge);
+      infoDiv.appendChild(document.createTextNode(displayInfos));
+    } else {
+      infoDiv.textContent = displayInfos;
+    }
     const details = `开始: ${convDate.toLocaleString()} (${relativeTime})\n最新: ${endTime.toLocaleString()} (${relativeEndTime})\n${title}\n${conv.url}`.split('\n').filter(Boolean).join('\n');
     item.title = details;
 
@@ -1607,6 +1729,77 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 默认分页模式下，从 IndexedDB 继续按 endTime 倒序加载下一页“轻量元数据”。
+   *
+   * 设计要点：
+   * - 只在 mode==='paged' 且已渲染到当前已加载数据末尾时触发；
+   * - 仅追加“非置顶”会话（置顶会话已在首屏批量读取并固定在顶部）。
+   *
+   * @param {HTMLElement|null} panel
+   * @param {string[]} pinnedIds
+   * @param {string} currentPanelFilter
+   * @param {string} currentRunId
+   * @returns {Promise<boolean>} 是否成功追加了新条目
+   */
+  async function appendNextUnpinnedPageForPagedMode(panel, pinnedIds, currentPanelFilter, currentRunId) {
+    const dataSource = panel?._historyDataSource;
+    if (!dataSource || dataSource.mode !== 'paged' || !dataSource.hasMore) return false;
+
+    // 若期间用户切换筛选条件/触发新的加载流程，则直接放弃本次追加，避免旧数据污染
+    if (!panel || panel.dataset.currentFilter !== currentPanelFilter || panel.dataset.runId !== currentRunId) {
+      return false;
+    }
+
+    const limit = Math.max(1, Number(dataSource.pageSize) || PAGED_UNPINNED_LOAD_SIZE);
+
+    let page = null;
+    try {
+      page = await getConversationMetadataPageByEndTimeDesc({
+        limit,
+        cursor: dataSource.cursor || null,
+        excludeIds: pinnedIds
+      });
+    } catch (error) {
+      console.error('分页加载聊天记录失败:', error);
+      dataSource.hasMore = false;
+      return false;
+    }
+
+    if (panel.dataset.currentFilter !== currentPanelFilter || panel.dataset.runId !== currentRunId) {
+      return false;
+    }
+
+    const items = Array.isArray(page?.items) ? page.items : [];
+    dataSource.cursor = page?.cursor || null;
+    dataSource.hasMore = !!page?.hasMore;
+
+    if (items.length === 0) {
+      dataSource.hasMore = false;
+      return false;
+    }
+
+    if (!(dataSource.loadedIdSet instanceof Set)) {
+      dataSource.loadedIdSet = new Set(currentDisplayItems.map((item) => item?.id).filter(Boolean));
+    }
+
+    let appended = false;
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      if (dataSource.loadedIdSet.has(item.id)) continue;
+      dataSource.loadedIdSet.add(item.id);
+      currentDisplayItems.push(item);
+      appended = true;
+    }
+
+    // 极端兜底：若没有任何新增条目，避免 hasMore 一直为 true 导致空转
+    if (!appended) {
+      dataSource.hasMore = false;
+    }
+
+    return appended;
+  }
+
+  /**
    * 渲染下一批聊天记录项。
    * @param {HTMLElement} listContainer - 列表容器元素
    * @param {string[]} pinnedIds - 当前置顶的ID列表
@@ -1614,7 +1807,7 @@ export function createChatHistoryUI(appContext) {
    * @param {string} currentPanelFilter - 调用此函数时面板当前的过滤条件，用于一致性检查
    */
   async function renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId) {
-    if (isLoadingMoreItems || currentlyRenderedCount >= currentDisplayItems.length) {
+    if (isLoadingMoreItems) {
       return;
     }
     isLoadingMoreItems = true;
@@ -1623,6 +1816,15 @@ export function createChatHistoryUI(appContext) {
     if (panel && (panel.dataset.currentFilter !== currentPanelFilter || panel.dataset.runId !== currentRunId)) {
       isLoadingMoreItems = false;
       return;
+    }
+
+    // 若已渲染到当前已加载数据末尾：在 paged 模式下尝试继续从 DB 追加下一页
+    if (currentlyRenderedCount >= currentDisplayItems.length) {
+      const appended = await appendNextUnpinnedPageForPagedMode(panel, pinnedIds, currentPanelFilter, currentRunId);
+      if (!appended || currentlyRenderedCount >= currentDisplayItems.length) {
+        isLoadingMoreItems = false;
+        return;
+      }
     }
 
     const fragment = document.createDocumentFragment();
@@ -1634,17 +1836,39 @@ export function createChatHistoryUI(appContext) {
       const isConvPinned = pinnedIds.includes(conv.id);
 
       if (!isConvPinned) {
-        const convDate = new Date(conv.endTime);
-        const groupLabel = getGroupLabel(convDate);
-
         const isFirstUnpinnedAfterPinnedBlock = (convIndex === currentPinnedItemsCountInDisplay);
 
-        if (isFirstUnpinnedAfterPinnedBlock || currentGroupLabelForBatchRender !== groupLabel) {
+        let groupKey = '';
+        let groupText = '';
+        let groupTitle = '';
+
+        if (panel?._historyDataSource?.mode === 'url') {
+          const level = Number.isFinite(Number(conv?.urlMatchLevel)) ? Number(conv.urlMatchLevel) : null;
+          const prefix = typeof conv?.urlMatchPrefix === 'string' ? conv.urlMatchPrefix : '';
+          groupKey = `urlMatchLevel:${level == null ? 'unknown' : level}`;
+          if (level == null) {
+            groupText = 'URL 匹配';
+            groupTitle = prefix ? `URL 前缀匹配\n匹配前缀: ${prefix}` : 'URL 前缀匹配';
+          } else {
+            groupText = `匹配 L${level}`;
+            groupTitle = prefix
+              ? `URL 匹配等级：L${level}（越小越精确）\n匹配前缀: ${prefix}`
+              : `URL 匹配等级：L${level}（越小越精确）`;
+          }
+        } else {
+          const convDate = new Date(conv.endTime);
+          const groupLabel = getGroupLabel(convDate);
+          groupKey = groupLabel;
+          groupText = groupLabel;
+        }
+
+        if (isFirstUnpinnedAfterPinnedBlock || currentGroupLabelForBatchRender !== groupKey) {
           const groupHeader = document.createElement('div');
           groupHeader.className = 'chat-history-group-header';
-          groupHeader.textContent = groupLabel;
+          groupHeader.textContent = groupText;
+          if (groupTitle) groupHeader.title = groupTitle;
           fragment.appendChild(groupHeader);
-          currentGroupLabelForBatchRender = groupLabel;
+          currentGroupLabelForBatchRender = groupKey;
         }
       }
 
@@ -1668,12 +1892,14 @@ export function createChatHistoryUI(appContext) {
     currentlyRenderedCount += itemsRenderedInThisCall;
     isLoadingMoreItems = false;
 
-    if (currentlyRenderedCount < currentDisplayItems.length && itemsRenderedInThisCall > 0) {
+    if (itemsRenderedInThisCall > 0) {
       requestAnimationFrame(() => {
         const panelNow = listContainer.closest('#chat-history-panel');
         if (!panelNow) return;
         if (panelNow.dataset.currentFilter !== currentPanelFilter || panelNow.dataset.runId !== currentRunId) return;
-        if (listContainer.scrollHeight <= listContainer.clientHeight) {
+        const ds = panelNow._historyDataSource;
+        const mayHaveMore = ds && ds.mode === 'paged' && ds.hasMore;
+        if (listContainer.scrollHeight <= listContainer.clientHeight && (currentlyRenderedCount < currentDisplayItems.length || mayHaveMore)) {
           renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId);
         }
       });
@@ -2216,6 +2442,42 @@ export function createChatHistoryUI(appContext) {
         filterInput.focus(); 
       });
       filterContainer.appendChild(clearButton);
+
+      // 当前 URL 快速筛选按钮：只显示与当前页面 URL 相关的历史会话（按前缀匹配分级）
+      const urlFilterButton = document.createElement('button');
+      urlFilterButton.textContent = '本页';
+      urlFilterButton.className = 'url-filter-btn';
+      urlFilterButton.style.marginLeft = '5px';
+
+      const updateUrlFilterButtonState = () => {
+        const currentUrl = state.pageInfo?.url;
+        const hasUrl = !!(currentUrl && typeof currentUrl === 'string' && currentUrl.trim());
+        urlFilterButton.disabled = !hasUrl;
+        urlFilterButton.title = hasUrl
+          ? '快速筛选出与当前页面 URL 相关的历史会话（按 URL 前缀分级匹配）'
+          : '未能获取当前页面 URL，无法启用“本页”筛选';
+        urlFilterButton.classList.toggle('active', panel.dataset.urlFilterMode === 'currentUrl');
+        // 根据模式调整占位符，让用户知道当前筛选范围
+        if (filterInput) {
+          filterInput.placeholder = (panel.dataset.urlFilterMode === 'currentUrl')
+            ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
+            : '筛选文本 或 >10, <5, =20...';
+        }
+      };
+
+      urlFilterButton.addEventListener('click', () => {
+        const currentUrl = state.pageInfo?.url;
+        const hasUrl = !!(currentUrl && typeof currentUrl === 'string' && currentUrl.trim());
+        if (!hasUrl) return;
+        const nextActive = panel.dataset.urlFilterMode !== 'currentUrl';
+        panel.dataset.urlFilterMode = nextActive ? 'currentUrl' : '';
+        updateUrlFilterButtonState();
+        loadConversationHistories(panel, filterInput ? filterInput.value : '');
+        filterInput?.focus();
+      });
+
+      updateUrlFilterButtonState();
+      filterContainer.appendChild(urlFilterButton);
       
       historyContent.appendChild(filterContainer);
 
@@ -2300,6 +2562,21 @@ export function createChatHistoryUI(appContext) {
     } else {
       // 如果面板已存在，获取 filterInput 引用
       filterInput = panel.querySelector('.filter-container input[type="text"]');
+      const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn');
+      if (urlFilterButton) {
+        const currentUrl = state.pageInfo?.url;
+        const hasUrl = !!(currentUrl && typeof currentUrl === 'string' && currentUrl.trim());
+        urlFilterButton.disabled = !hasUrl;
+        urlFilterButton.title = hasUrl
+          ? '快速筛选出与当前页面 URL 相关的历史会话（按 URL 前缀分级匹配）'
+          : '未能获取当前页面 URL，无法启用“本页”筛选';
+        urlFilterButton.classList.toggle('active', panel.dataset.urlFilterMode === 'currentUrl');
+      }
+      if (filterInput) {
+        filterInput.placeholder = (panel.dataset.urlFilterMode === 'currentUrl')
+          ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
+          : '筛选文本 或 >10, <5, =20...';
+      }
     }
     
     // 使用已有的筛选值加载历史记录
