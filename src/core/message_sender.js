@@ -5,7 +5,7 @@
  * 这个模块是应用程序的核心部分，处理从用户输入到AI响应显示的完整流程。
  */
 import { composeMessages } from './message_composer.js';
-import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
+import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '../utils/thoughts_parser.js';
 
 /**
  * 创建消息发送器
@@ -1538,7 +1538,8 @@ export function createMessageSender(appContext) {
 
       // 累积主回答与思考过程
       aiResponse += currentEventAnswerDelta;
-      aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, currentEventThoughtsDelta);
+      // 思考过程可能是“流式增量”输出：这里必须按增量拼接，避免每个分片都被插入段落分隔导致渲染成大量 <p>。
+      aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventThoughtsDelta);
       const thinkExtraction = extractThinkingFromText(aiResponse);
       aiResponse = thinkExtraction.cleanText;
       aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
@@ -1614,7 +1615,8 @@ export function createMessageSender(appContext) {
 
           // 累积AI的完整响应文本
           aiResponse += split.answerDelta;
-          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thoughtSplit.thoughtDelta || split.thoughtDelta);
+          // 思考过程同样按“流式增量”合并，避免 mergeThoughts 的 `\\n\\n` 拼接导致每个 token 变成一段。
+          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, thoughtSplit.thoughtDelta || split.thoughtDelta);
 
           // 若思考流仍未闭合，避免正文暂存残留 <think>
           if (split.thoughtDelta && !split.answerDelta) {
