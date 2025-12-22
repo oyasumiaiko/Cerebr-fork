@@ -282,6 +282,14 @@ export function createContextMenuManager(appContext) {
         // --- 1. 使用 dom-to-image 生成原始 Canvas ---
         const originalCanvas = await domtoimage.toCanvas(currentMessageElement, {
           // 不指定背景色，尝试捕获实际背景
+          // 需求：右键“复制为图片”时隐藏思考内容块，避免截图包含该区域。
+          filter: (node) => {
+            if (!(node instanceof Element)) return true;
+            if (node.classList?.contains('thoughts-content')) return false;
+            // 兼容：有些节点可能是 thoughts-content 的子孙节点
+            if (typeof node.closest === 'function' && node.closest('.thoughts-content')) return false;
+            return true;
+          }
         });
 
         // --- 2. 创建带边距的新 Canvas ---

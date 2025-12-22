@@ -40,39 +40,34 @@ export function createMessageProcessor(appContext) {
 
     if (rawThoughts && rawThoughts.trim() !== '') {
       let thoughtsInnerContent;
-      let expandButton;
+      let toggleButton;
 
       if (!thoughtsContentDiv) {
         thoughtsContentDiv = document.createElement('div');
-        thoughtsContentDiv.className = 'thoughts-content'; // .expanded is toggled by button
+        thoughtsContentDiv.className = 'thoughts-content';
 
-        const thoughtsPrefix = document.createElement('div');
-        thoughtsPrefix.className = 'thoughts-prefix';
-        thoughtsPrefix.textContent = '思考摘要（不会发送）:';
-        thoughtsContentDiv.appendChild(thoughtsPrefix);
+        // 说明：折叠态只显示“思考内容”这一行；展开后才显示完整思考文本。
+        // 设计目标：当 AI 开始输出正文（data-original-text 非空）时，默认自动折叠，避免思考块占用过多高度。
+        toggleButton = document.createElement('button');
+        toggleButton.className = 'thoughts-toggle';
+        toggleButton.setAttribute('type', 'button');
+        toggleButton.setAttribute('aria-label', '切换思考内容');
+        toggleButton.setAttribute('aria-expanded', 'false');
+        toggleButton.textContent = '思考内容';
+        thoughtsContentDiv.appendChild(toggleButton);
 
         thoughtsInnerContent = document.createElement('div');
         thoughtsInnerContent.className = 'thoughts-inner-content';
         thoughtsContentDiv.appendChild(thoughtsInnerContent);
 
-        expandButton = document.createElement('button');
-        expandButton.className = 'expand-thoughts-btn';
-        expandButton.setAttribute('type', 'button'); // Good practice for buttons
-        expandButton.setAttribute('aria-label', '切换思考过程');
-        expandButton.setAttribute('aria-expanded', 'false');
-        // 使用 Font Awesome 图标 - 确保您的项目已包含 Font Awesome
-        expandButton.innerHTML = '<i class="fa-light fa-arrows-from-line icon-expand"></i><i class="fa-light fa-arrows-to-line icon-collapse"></i>';
-        expandButton.style.fontSize = '1.2em';
-        
-        expandButton.addEventListener('click', (e) => {
-          e.stopPropagation(); // Prevent click from bubbling to messageDiv if it has listeners
+        toggleButton.addEventListener('click', (e) => {
+          e.stopPropagation();
+          // 用户手动操作后，不再执行“自动折叠/自动展开”，避免与用户意图冲突。
+          thoughtsContentDiv.dataset.userToggled = 'true';
           const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
-          expandButton.setAttribute('aria-expanded', isExpanded.toString());
+          toggleButton.setAttribute('aria-expanded', isExpanded.toString());
         });
-        // 将按钮放在 thoughts-prefix 之后，但在 inner-content 之前，或根据CSS调整为绝对定位
-        // For absolute positioning of button within thoughtsContentDiv, DOM order is less critical for visual.
-        // Let's append it directly to thoughtsContentDiv. CSS handles positioning.
-        thoughtsContentDiv.appendChild(expandButton);
+        toggleButton.dataset.listenerAdded = 'true';
         
         const textContentElement = messageWrapperDiv.querySelector('.text-content');
         if (textContentElement) {
@@ -81,19 +76,60 @@ export function createMessageProcessor(appContext) {
              messageWrapperDiv.appendChild(thoughtsContentDiv); // Fallback
         }
       } else {
-        // Thoughts section already exists, get its parts
+        // Thoughts section already exists, get its parts (兼容旧结构：清理旧的 prefix/button)
+        const legacyPrefix = thoughtsContentDiv.querySelector('.thoughts-prefix');
+        if (legacyPrefix) legacyPrefix.remove();
+        const legacyExpandButton = thoughtsContentDiv.querySelector('.expand-thoughts-btn');
+        if (legacyExpandButton) legacyExpandButton.remove();
+
         thoughtsInnerContent = thoughtsContentDiv.querySelector('.thoughts-inner-content');
-        expandButton = thoughtsContentDiv.querySelector('.expand-thoughts-btn');
-        // Reset expansion state if content is being updated (optional, depends on desired UX)
-        // thoughtsContentDiv.classList.remove('expanded');
-        // if(expandButton) expandButton.setAttribute('aria-expanded', 'false');
+        toggleButton = thoughtsContentDiv.querySelector('.thoughts-toggle');
+        if (!toggleButton) {
+          toggleButton = document.createElement('button');
+          toggleButton.className = 'thoughts-toggle';
+          toggleButton.setAttribute('type', 'button');
+          toggleButton.setAttribute('aria-label', '切换思考内容');
+          toggleButton.setAttribute('aria-expanded', 'false');
+          toggleButton.textContent = '思考内容';
+          thoughtsContentDiv.insertBefore(toggleButton, thoughtsContentDiv.firstChild);
+        }
+        if (!toggleButton.dataset.listenerAdded) {
+          toggleButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            thoughtsContentDiv.dataset.userToggled = 'true';
+            const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
+            toggleButton.setAttribute('aria-expanded', isExpanded.toString());
+          });
+          toggleButton.dataset.listenerAdded = 'true';
+        }
+        if (!thoughtsInnerContent) {
+          thoughtsInnerContent = document.createElement('div');
+          thoughtsInnerContent.className = 'thoughts-inner-content';
+          thoughtsContentDiv.appendChild(thoughtsInnerContent);
+        }
       }
       
       if (thoughtsInnerContent) {
           thoughtsInnerContent.innerHTML = processMathAndMarkdownFn(rawThoughts);
       }
-      if (expandButton) { // Ensure button is visible if thoughts exist
-          expandButton.style.display = ''; 
+
+      // 自动折叠策略：
+      // - 在 AI 还未开始输出正文时（data-original-text 为空），默认展开，便于实时查看思考流。
+      // - 一旦正文开始输出，则默认折叠为单行，仅保留“思考内容”入口；用户点击后可再次展开。
+      // - 如果用户已经手动展开/折叠过，则尊重用户选择，不再自动干预。
+      const answerText = messageWrapperDiv.getAttribute('data-original-text') || '';
+      const hasAnswerContent = (typeof answerText === 'string') && answerText.trim() !== '';
+      const userHasToggled = thoughtsContentDiv.dataset.userToggled === 'true';
+
+      if (!userHasToggled) {
+        if (hasAnswerContent) {
+          thoughtsContentDiv.classList.remove('expanded');
+        } else {
+          thoughtsContentDiv.classList.add('expanded');
+        }
+      }
+      if (toggleButton) {
+        toggleButton.setAttribute('aria-expanded', thoughtsContentDiv.classList.contains('expanded') ? 'true' : 'false');
       }
 
     } else if (thoughtsContentDiv) {
