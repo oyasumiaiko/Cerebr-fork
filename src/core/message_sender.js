@@ -6,6 +6,7 @@
  */
 import { composeMessages } from './message_composer.js';
 import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '../utils/thoughts_parser.js';
+import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 
 /**
  * 创建消息发送器
@@ -722,10 +723,17 @@ export function createMessageSender(appContext) {
       return attemptState;
     };
 
-    const finalizeAttempt = (attemptState) => {
-      if (!attemptState || attemptState.finished) return;
-      attemptState.finished = true;
-      activeAttempts.delete(attemptState.id);
+	    const finalizeAttempt = (attemptState) => {
+	      if (!attemptState || attemptState.finished) return;
+
+	      // 重要：请求结束/失败/中断时，先把最后一帧 UI 更新尽量落地，并清理节流器的定时器。
+	      // 否则可能出现“请求已结束但仍在后台更新 DOM”的情况，进一步放大卡顿或触发对已删除节点的更新。
+	      try { attemptState.uiUpdateThrottler?.flush?.({ force: true }); } catch (_) {}
+	      try { attemptState.uiUpdateThrottler?.cancel?.(); } catch (_) {}
+	      try { attemptState.uiUpdateThrottler = null; } catch (_) {}
+
+	      attemptState.finished = true;
+	      activeAttempts.delete(attemptState.id);
 
       const hasOtherAttempts = activeAttempts.size > 0;
       if (!hasOtherAttempts) {
@@ -1423,14 +1431,42 @@ export function createMessageSender(appContext) {
     let incomingDataBuffer = ''; 
     const decoder = new TextDecoder();
     let currentEventDataLines = []; // 当前事件中的所有 data: 行内容
-    // 记录当前流式响应中最新的 Gemini 思维链签名（Thought Signature）
-    let latestGeminiThoughtSignature = null;
-    // 当前流对应的 AI 消息 ID（与 attempt 绑定）
-    let currentAiMessageId = null;
+	    // 记录当前流式响应中最新的 Gemini 思维链签名（Thought Signature）
+	    let latestGeminiThoughtSignature = null;
+	    // 当前流对应的 AI 消息 ID（与 attempt 绑定）
+	    let currentAiMessageId = null;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
+	    // 自适应 UI 更新节流器：将多个 token 的高频更新合并为较低频的 DOM 刷新，缓解长消息渲染导致的卡顿。
+	    // 说明：这里不改 messageProcessor.updateAIMessage 的“全量重渲染”策略，而是通过“掉帧合并”降低调用频率。
+	    const uiUpdateThrottler = createAdaptiveUpdateThrottler({
+	      run: (payload) => {
+	        if (!payload || !payload.messageId) return;
+	        messageProcessor.updateAIMessage(
+	          payload.messageId,
+	          payload.answer || '',
+	          payload.thoughts || '',
+	          payload.groundingMetadata
+	        );
+	      },
+	      shouldCancel: () => {
+	        try { return !!(attemptState?.controller?.signal?.aborted || attemptState?.finished); } catch (_) { return false; }
+	      },
+	      getContentSize: (payload) => {
+	        const answerSize = (typeof payload?.answer === 'string') ? payload.answer.length : 0;
+	        const thoughtsSize = (typeof payload?.thoughts === 'string') ? payload.thoughts.length : 0;
+	        return answerSize + thoughtsSize;
+	      }
+	    });
+	    if (attemptState) {
+	      attemptState.uiUpdateThrottler = uiUpdateThrottler;
+	    }
+
+	    // 记录“正文是否已出现过”：用于在“先输出思考、后输出正文”的模型上，让正文首次出现时更快落地到 UI。
+	    let hasEverShownAnswerContent = false;
+
+	    while (true) {
+	      const { done, value } = await reader.read();
+	      if (done) {
         // 处理缓冲区中最后一行未以换行结尾的数据
         if (incomingDataBuffer.length > 0) {
           await processLine(incomingDataBuffer);
@@ -1440,8 +1476,8 @@ export function createMessageSender(appContext) {
         if (currentEventDataLines.length > 0) {
           await processEvent();
         }
-        break;
-      }
+	        break;
+	      }
 
       incomingDataBuffer += decoder.decode(value, { stream: true });
 
@@ -1449,13 +1485,16 @@ export function createMessageSender(appContext) {
       while ((lineEndIndex = incomingDataBuffer.indexOf('\n')) >= 0) {
         const line = incomingDataBuffer.substring(0, lineEndIndex);
         incomingDataBuffer = incomingDataBuffer.substring(lineEndIndex + 1);
-        await processLine(line);
-      }
-    }
+	        await processLine(line);
+	      }
+	    }
 
-    // 流式响应结束后，如果是 Gemini 且解析到了思维链签名，则写入当前 AI 消息节点，并刷新 footer 标记
-    if (isGeminiApi && currentAiMessageId && latestGeminiThoughtSignature) {
-      try {
+	    // 流式响应结束：强制刷新最后一帧，避免尾部 token 被节流合并后未能落到 UI。
+	    try { uiUpdateThrottler.flush({ force: true }); } catch (_) {}
+
+	    // 流式响应结束后，如果是 Gemini 且解析到了思维链签名，则写入当前 AI 消息节点，并刷新 footer 标记
+	    if (isGeminiApi && currentAiMessageId && latestGeminiThoughtSignature) {
+	      try {
         const node = chatHistoryManager.chatHistory.messages.find(m => m.id === currentAiMessageId);
         if (node) {
           // 在历史节点上记录 Thought Signature，供后续多轮对话回传使用
@@ -1492,10 +1531,12 @@ export function createMessageSender(appContext) {
 
       if (fullEventData.trim() === '') return; // 空事件直接跳过
 
-      // OpenAI 特有的 [DONE] 结束标记
-      if (!isGeminiApi && fullEventData.trim() === '[DONE]') {
-        return;
-      }
+	      // OpenAI 特有的 [DONE] 结束标记
+	      if (!isGeminiApi && fullEventData.trim() === '[DONE]') {
+	        // 结束标记到达时，尽量立刻落一次最终 UI，避免连接迟迟不关闭导致的“最后几 token 不显示”。
+	        try { uiUpdateThrottler.flush({ force: true }); } catch (_) {}
+	        return;
+	      }
 
       try {
         const jsonData = JSON.parse(fullEventData);
@@ -1638,11 +1679,11 @@ export function createMessageSender(appContext) {
       aiResponse = thinkExtraction.cleanText;
       aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
 
-      if (!hasStartedResponse) {
-        // 首次收到内容（文本或图片）：移除“正在处理...”提示
-        if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-        hasStartedResponse = true;
-        try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
+	      if (!hasStartedResponse) {
+	        // 首次收到内容（文本或图片）：移除“正在处理...”提示
+	        if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+	        hasStartedResponse = true;
+	        try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
         const newAiMessageDiv = messageProcessor.appendMessage(
           aiResponse,      // 初始完整回答文本
@@ -1654,26 +1695,39 @@ export function createMessageSender(appContext) {
           null             // messageIdToUpdate = null
         );
 
-        if (newAiMessageDiv) {
-          currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
-          // 将本次 AI 消息与 attempt 绑定，便于按消息粒度中止/清理
-          if (attemptState) {
-            attemptState.aiMessageId = currentAiMessageId;
-          }
-          // 记录 API 元信息并渲染 footer
-          applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
-        }
-        scrollToBottom();
-      } else if (currentAiMessageId) {
-        // 后续事件：直接更新完整文本与思考过程（图片已被转为内联HTML）
-        messageProcessor.updateAIMessage(
-          currentAiMessageId,
-          aiResponse,       // 当前累积完整回答
-          aiThoughtsRaw,    // 当前累积思考过程
-          groundingMetadata // 引用元数据
-        );
-        // scrollToBottom() 在 updateAIMessage 内部调用
-      }
+	        if (newAiMessageDiv) {
+	          currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
+	          // 将本次 AI 消息与 attempt 绑定，便于按消息粒度中止/清理
+	          if (attemptState) {
+	            attemptState.aiMessageId = currentAiMessageId;
+	          }
+	          // 记录 API 元信息并渲染 footer
+	          applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
+	        }
+	        scrollToBottom();
+
+	        // 记录“正文已出现”：若首帧只包含思考过程，则保持 false，待正文首次出现时强制刷新一次 UI。
+	        hasEverShownAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
+	      } else if (currentAiMessageId) {
+	        // 后续事件：直接更新完整文本与思考过程（图片已被转为内联HTML）
+	        const nowHasAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
+	        const forceUiUpdate = nowHasAnswerContent && !hasEverShownAnswerContent;
+	        if (forceUiUpdate) {
+	          // 正文首次出现：优先让 UI 立刻落地（同时触发思考框自动折叠），避免“正文已开始但仍只看到思考”的错觉。
+	          hasEverShownAnswerContent = true;
+	        }
+
+	        uiUpdateThrottler.enqueue(
+	          {
+	            messageId: currentAiMessageId,
+	            answer: aiResponse,
+	            thoughts: aiThoughtsRaw,
+	            groundingMetadata
+	          },
+	          { force: forceUiUpdate }
+	        );
+	        // scrollToBottom() 在 updateAIMessage 内部调用
+	      }
     }
 
     /**
@@ -1753,20 +1807,33 @@ export function createMessageSender(appContext) {
                   applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
               }
               
-              // 自动滚动到聊天底部
-              scrollToBottom();
+	              // 自动滚动到聊天底部
+	              scrollToBottom();
 
-          } else if (currentAiMessageId) {
-              // 【更新消息】如果不是第一个数据块，并且我们已经有了 messageId
-              // 则调用 updateAIMessage 来更新已存在的消息内容
-              messageProcessor.updateAIMessage(
-                  currentAiMessageId, // <-- 使用之前保存的正确ID
-                  aiResponse,         // <-- 传递当前累积的完整文本
-                  aiThoughtsRaw,      // thoughtsRaw, 传入当前累积的思考内容
-                  null                // groundingMetadata: 传递引用元数据（如果存在）
-              );
-              // scrollToBottom() 会在 updateAIMessage 内部被调用，这里无需重复调用
-          }
+	              // 记录“正文已出现”：若首帧只包含思考过程，则保持 false，待正文首次出现时强制刷新一次 UI。
+	              hasEverShownAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
+
+	          } else if (currentAiMessageId) {
+	              // 【更新消息】如果不是第一个数据块，并且我们已经有了 messageId
+	              // 则调用 updateAIMessage 来更新已存在的消息内容
+	              const nowHasAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
+	              const forceUiUpdate = nowHasAnswerContent && !hasEverShownAnswerContent;
+	              if (forceUiUpdate) {
+	                // 正文首次出现：优先让 UI 立刻落地（同时触发思考框自动折叠）
+	                hasEverShownAnswerContent = true;
+	              }
+
+	              uiUpdateThrottler.enqueue(
+	                {
+	                  messageId: currentAiMessageId,
+	                  answer: aiResponse,
+	                  thoughts: aiThoughtsRaw,
+	                  groundingMetadata: null
+	                },
+	                { force: forceUiUpdate }
+	              );
+	              // scrollToBottom() 会在 updateAIMessage 内部被调用，这里无需重复调用
+	          }
       }
     }
   }
