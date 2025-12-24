@@ -606,16 +606,17 @@ export function applyStandaloneAdjustments(appContext) {
   document.body.classList.add('standalone-mode');
   const root = document.documentElement;
   root.classList.add('standalone-mode');
-  // 独立页面沿用统一的「全屏模式」布局：使用与网页侧栏相同的内容宽度配置
+  // 独立页面沿用统一的「全屏模式」布局：使用“全屏内容宽度”控制居中内容列宽度
   root.classList.add('fullscreen-mode');
   try {
     const settingsManager = appContext.services.settingsManager;
-    const configuredWidth = settingsManager?.getSetting?.('sidebarWidth');
-    const sidebarWidth = (typeof configuredWidth === 'number' && !Number.isNaN(configuredWidth))
-      ? configuredWidth
-      // 800 与 DEFAULT_SETTINGS.sidebarWidth 保持一致，避免 magic number 发散
-      : 800;
-    root.style.setProperty('--cerebr-sidebar-width', `${sidebarWidth}px`);
+    const configuredFullscreenWidth = settingsManager?.getSetting?.('fullscreenWidth');
+    const fallbackSidebarWidth = settingsManager?.getSetting?.('sidebarWidth');
+    const fullscreenWidth = (typeof configuredFullscreenWidth === 'number' && !Number.isNaN(configuredFullscreenWidth))
+      ? configuredFullscreenWidth
+      : ((typeof fallbackSidebarWidth === 'number' && !Number.isNaN(fallbackSidebarWidth)) ? fallbackSidebarWidth : 800);
+
+    root.style.setProperty('--cerebr-fullscreen-width', `${fullscreenWidth}px`);
   } catch (e) {
     // 回退：在极端情况下保持可用布局，而不是让页面崩溃
     console.warn('应用独立页面宽度设置失败，将使用默认布局宽度', e);

@@ -78,6 +78,9 @@ export function createSettingsManager(appContext) {
   const DEFAULT_SETTINGS = {
     theme: 'auto',  // 默认为自动跟随系统
     sidebarWidth: 800,
+    // 全屏模式下的“内容列宽度”（影响全屏布局下消息与输入框的最大宽度）
+    // 说明：历史版本中全屏布局复用了 sidebarWidth；这里新增独立配置以便分别调整。
+    fullscreenWidth: 800,
     fontSize: 14,
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
@@ -240,6 +243,19 @@ export function createSettingsManager(appContext) {
       unit: 'px',
       defaultValue: DEFAULT_SETTINGS.sidebarWidth,
       apply: (v) => applySidebarWidth(v)
+    },
+    // 全屏模式内容宽度（仅影响全屏布局的居中内容区，不影响侧栏本身宽度）
+    {
+      key: 'fullscreenWidth',
+      type: 'range',
+      id: 'fullscreen-width',
+      label: '全屏宽度',
+      min: 500,
+      max: 2400,
+      step: 50,
+      unit: 'px',
+      defaultValue: DEFAULT_SETTINGS.fullscreenWidth,
+      apply: (v) => applyFullscreenWidth(v)
     },
     // 字体大小
     {
@@ -573,6 +589,54 @@ export function createSettingsManager(appContext) {
     }
   }
 
+  /**
+   * 根据当前布局模式（侧栏 / 全屏）控制“宽度滑条”的显隐。
+   *
+   * 背景：历史版本只有一个 sidebarWidth，既用于侧栏宽度，也用于全屏布局的内容列宽度。
+   * 本次新增 fullscreenWidth 后，为避免用户同时看到两个滑条造成困惑，需要按模式只展示一个：
+   * - 侧栏模式：显示「侧栏宽度」，隐藏「全屏宽度」
+   * - 全屏模式：显示「全屏宽度」，隐藏「侧栏宽度」
+   *
+   * 这里不移除节点，只切换 menu-item 的 display，避免重新渲染/重新绑定事件带来的状态抖动。
+   */
+  function updateWidthSlidersVisibility() {
+    const root = document.documentElement;
+    const isFullscreenLayout = isStandalone || !!root?.classList?.contains('fullscreen-mode');
+
+    const sidebarWidthEl = dynamicElements.get('sidebarWidth') || document.getElementById('sidebar-width');
+    const fullscreenWidthEl = dynamicElements.get('fullscreenWidth') || document.getElementById('fullscreen-width');
+
+    const sidebarItem = sidebarWidthEl?.closest?.('.menu-item') || null;
+    const fullscreenItem = fullscreenWidthEl?.closest?.('.menu-item') || null;
+
+    if (sidebarItem) sidebarItem.style.display = isFullscreenLayout ? 'none' : '';
+    if (fullscreenItem) fullscreenItem.style.display = isFullscreenLayout ? '' : 'none';
+  }
+
+  /**
+   * 监听全屏模式 class 的变化，确保用户在切换全屏时设置面板能即时刷新显示的滑条。
+   * 说明：全屏状态由 sidebar_events.js 通过切换 html.fullscreen-mode 实现，监听 class 最稳定。
+   */
+  function setupFullscreenModeObserver() {
+    updateWidthSlidersVisibility();
+
+    try {
+      const root = document.documentElement;
+      if (!root) return;
+
+      const observer = new MutationObserver(() => {
+        updateWidthSlidersVisibility();
+      });
+
+      observer.observe(root, {
+        attributes: true,
+        attributeFilter: ['class']
+      });
+    } catch (e) {
+      console.warn('注册全屏模式监听失败（忽略）:', e);
+    }
+  }
+
   function formatDisplayValue(def, value) {
     if (typeof def.formatValue === 'function') {
       try {
@@ -595,6 +659,17 @@ export function createSettingsManager(appContext) {
       
       // 合并默认设置和已保存的设置
       currentSettings = {...DEFAULT_SETTINGS, ...result};
+
+      // 兼容旧版本：首次引入 fullscreenWidth 时，用已有的 sidebarWidth 作为初始值。
+      // 这样升级后不会出现“全屏宽度突然变窄/变宽”的跳变体验。
+      if (!Object.prototype.hasOwnProperty.call(result, 'fullscreenWidth')) {
+        currentSettings.fullscreenWidth = currentSettings.sidebarWidth;
+        try {
+          await chrome.storage.sync.set({ fullscreenWidth: currentSettings.fullscreenWidth });
+        } catch (e) {
+          console.warn('写入 fullscreenWidth 默认值失败（忽略）:', e);
+        }
+      }
       
       // 应用所有设置到UI
       applyAllSettings();
@@ -717,6 +792,13 @@ export function createSettingsManager(appContext) {
     
     // 通知父窗口宽度变化
     notifySidebarWidthChange(width);
+  }
+
+  // 应用全屏模式内容宽度
+  // 说明：全屏布局通过 CSS 变量 --cerebr-fullscreen-width 控制“居中内容列”的最大宽度，
+  // 与侧栏实际宽度（--cerebr-sidebar-width）拆分后可分别调整。
+  function applyFullscreenWidth(width) {
+    document.documentElement.style.setProperty('--cerebr-fullscreen-width', `${width}px`);
   }
   
   // 应用字体大小
@@ -1340,6 +1422,9 @@ export function createSettingsManager(appContext) {
     renderSettingsFromRegistry();
     // 基于注册表构建schema
     buildSchemaFromRegistry();
+
+    // 设置面板：按布局模式展示对应的宽度滑条（侧栏/全屏）
+    setupFullscreenModeObserver();
 
     setupEventListeners();
     setupSystemThemeListener();

@@ -358,6 +358,17 @@ class CerebrSidebar {
       iframe.src = chrome.runtime.getURL('src/ui/sidebar/sidebar.html');
       iframe.allow = 'clipboard-write';
 
+      // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；
+      // 但父页面的全屏状态（this.isFullscreen 与 .cerebr-sidebar.fullscreen）仍然存在。
+      // 因此需要在 iframe 每次 load 完成后，把“当前全屏状态”重新同步给 iframe，避免其误判为侧栏模式。
+      iframe.addEventListener('load', () => {
+        try {
+          this.notifyIframeFullscreenState(this.isFullscreen);
+        } catch (e) {
+          console.warn('同步 iframe 全屏状态失败（忽略）:', e);
+        }
+      });
+
       content.appendChild(iframe);
       this.sidebar.appendChild(header);
       this.sidebar.appendChild(resizer);

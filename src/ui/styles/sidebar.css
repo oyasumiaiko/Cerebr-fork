@@ -15,6 +15,8 @@ input, textarea, select {
     --cerebr-opacity: 0.6;
     --cerebr-blur-radius: 100px;
     --cerebr-sidebar-width: 430px;
+    /* 全屏模式下的“内容列宽度”，用于控制居中内容区域的最大宽度（与侧栏宽度解耦） */
+    --cerebr-fullscreen-width: 800px;
     --cerebr-font-size: 14px; /* 消息内容字体 */
     --cerebr-ui-font-size: 15px; /* UI 默认字体（不影响消息内容） */
 
@@ -4585,26 +4587,26 @@ html.fullscreen-mode::before {
 .fullscreen-mode #chat-container,
 .fullscreen-mode #input-container,
 .fullscreen-mode .empty-state-content {
-  padding-left: max(15px, calc((100vw - var(--cerebr-sidebar-width)) / 2));
-  padding-right: max(15px, calc((100vw - var(--cerebr-sidebar-width)) / 2));
+  padding-left: max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2));
+  padding-right: max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2));
 }
 
 /* 全屏下同样需要扣掉滚动条（或 scrollbar-gutter 占位）的宽度，避免右侧出现“额外空白”。 */
 .fullscreen-mode #chat-container.has-scrollbar {
   padding-right: calc(
-    max(15px, calc((100vw - var(--cerebr-sidebar-width)) / 2)) - var(--scrollbar-width, 0px)
+    max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2)) - var(--scrollbar-width, 0px)
   );
 }
 
 /* 全屏下：AI 消息不再强制充满整行，避免超宽 */
 .fullscreen-mode .ai-message {
   width: auto;
-  max-width: var(--cerebr-sidebar-width);
+  max-width: var(--cerebr-fullscreen-width);
 }
 
 /* 全屏下：用户消息也遵守统一的内容最大宽度，便于在独立聊天页面中调整整体内容宽度 */
 .fullscreen-mode .user-message {
-  max-width: var(--cerebr-sidebar-width);
+  max-width: var(--cerebr-fullscreen-width);
 }
 
 /* 深色主题全屏模式 */
