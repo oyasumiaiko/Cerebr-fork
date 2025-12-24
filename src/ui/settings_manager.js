@@ -798,7 +798,19 @@ export function createSettingsManager(appContext) {
   // 说明：全屏布局通过 CSS 变量 --cerebr-fullscreen-width 控制“居中内容列”的最大宽度，
   // 与侧栏实际宽度（--cerebr-sidebar-width）拆分后可分别调整。
   function applyFullscreenWidth(width) {
-    document.documentElement.style.setProperty('--cerebr-fullscreen-width', `${width}px`);
+    // 重要：全屏内容宽度需要与侧栏宽度保持相同的“缩放语义”：
+    // - 侧栏宽度在 content.js 中会做缩放校正，确保宽度数值不随 scaleFactor 改变
+    // - 全屏布局的内容列宽度如果直接使用 width，会随着 scaleFactor 一起被放大/缩小
+    // 因此这里需要用 scaleFactor 进行反向校正，让用户看到/设置的「全屏宽度」保持“绝对像素”语义。
+    const rawWidth = Number(width);
+    const configuredScaleFactor = Number(currentSettings.scaleFactor);
+    const effectiveScaleFactor = (Number.isFinite(configuredScaleFactor) && configuredScaleFactor > 0)
+      ? configuredScaleFactor
+      : 1;
+
+    const safeWidth = Number.isFinite(rawWidth) ? rawWidth : DEFAULT_SETTINGS.fullscreenWidth;
+    const correctedWidth = safeWidth / effectiveScaleFactor;
+    document.documentElement.style.setProperty('--cerebr-fullscreen-width', `${correctedWidth}px`);
   }
   
   // 应用字体大小
@@ -836,6 +848,14 @@ export function createSettingsManager(appContext) {
 
     // 通知父窗口缩放比例变化（嵌入模式由 content.js 接管处理）
     notifyScaleFactorChange(value);
+
+    // scaleFactor 变化会影响全屏内容宽度的“实际像素表现”，因此需要重新应用一次校正后的全屏宽度
+    // 说明：这里不改变设置值本身（仍以“绝对像素”存储/显示），只刷新 CSS 变量。
+    try {
+      applyFullscreenWidth(currentSettings.fullscreenWidth);
+    } catch (e) {
+      console.warn('缩放变化后重新应用全屏宽度失败（忽略）:', e);
+    }
   }
 
   function applyBackgroundImage(url, options = {}) {

@@ -608,18 +608,29 @@ export function applyStandaloneAdjustments(appContext) {
   root.classList.add('standalone-mode');
   // 独立页面沿用统一的「全屏模式」布局：使用“全屏内容宽度”控制居中内容列宽度
   root.classList.add('fullscreen-mode');
+  // 宽度相关 CSS 变量通常由 settings_manager 负责写入（并包含缩放校正）。
+  // 这里仅做兜底：当初始化异常导致变量未写入时，再根据当前设置补一次。
   try {
-    const settingsManager = appContext.services.settingsManager;
-    const configuredFullscreenWidth = settingsManager?.getSetting?.('fullscreenWidth');
-    const fallbackSidebarWidth = settingsManager?.getSetting?.('sidebarWidth');
-    const fullscreenWidth = (typeof configuredFullscreenWidth === 'number' && !Number.isNaN(configuredFullscreenWidth))
-      ? configuredFullscreenWidth
-      : ((typeof fallbackSidebarWidth === 'number' && !Number.isNaN(fallbackSidebarWidth)) ? fallbackSidebarWidth : 800);
+    const alreadyApplied = (root.style.getPropertyValue('--cerebr-fullscreen-width') || '').trim();
+    if (!alreadyApplied) {
+      const settingsManager = appContext.services.settingsManager;
+      const configuredFullscreenWidth = settingsManager?.getSetting?.('fullscreenWidth');
+      const fallbackSidebarWidth = settingsManager?.getSetting?.('sidebarWidth');
+      const configuredScaleFactor = settingsManager?.getSetting?.('scaleFactor');
 
-    root.style.setProperty('--cerebr-fullscreen-width', `${fullscreenWidth}px`);
+      const fullscreenWidth = (typeof configuredFullscreenWidth === 'number' && !Number.isNaN(configuredFullscreenWidth))
+        ? configuredFullscreenWidth
+        : ((typeof fallbackSidebarWidth === 'number' && !Number.isNaN(fallbackSidebarWidth)) ? fallbackSidebarWidth : 800);
+
+      const scaleFactor = (typeof configuredScaleFactor === 'number' && !Number.isNaN(configuredScaleFactor) && configuredScaleFactor > 0)
+        ? configuredScaleFactor
+        : 1;
+
+      root.style.setProperty('--cerebr-fullscreen-width', `${fullscreenWidth / scaleFactor}px`);
+    }
   } catch (e) {
     // 回退：在极端情况下保持可用布局，而不是让页面崩溃
-    console.warn('应用独立页面宽度设置失败，将使用默认布局宽度', e);
+    console.warn('应用独立页面宽度兜底设置失败（忽略）:', e);
   }
 
   const standaloneInfo = { url: '', title: '独立聊天', standalone: true };
