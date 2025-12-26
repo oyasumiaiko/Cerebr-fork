@@ -188,6 +188,63 @@ export function createChatHistoryUI(appContext) {
   100% { opacity: .7 }
 }
 .end-sentinel { height: 1px; width: 100%; }
+
+/* --- 分支会话树状视图（仅影响历史面板）---
+ * 说明：
+ * - 树状视图只在“无筛选”时启用树排序；这里仅提供缩进与引导线的视觉样式；
+ * - 缩进层级由 JS 写入 --branch-depth（见 createConversationItemElement）。
+ */
+#chat-history-panel[data-branch-view-mode="tree"] .chat-history-item {
+  --branch-depth: 0;
+}
+
+#chat-history-panel[data-branch-view-mode="tree"] .chat-history-item.branch-tree-child {
+  position: relative;
+  padding-left: calc((var(--branch-depth) * 14px) + 8px);
+}
+
+#chat-history-panel[data-branch-view-mode="tree"] .chat-history-item.branch-tree-child::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--branch-depth) * 14px);
+  background-image: repeating-linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.08) 0,
+    rgba(255, 255, 255, 0.08) 1px,
+    transparent 1px,
+    transparent 14px
+  );
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+#chat-history-panel[data-branch-view-mode="tree"] .chat-history-item.branch-tree-child::after {
+  content: '↳';
+  position: absolute;
+  left: calc((var(--branch-depth) * 14px) - 10px);
+  top: 7px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--cerebr-text-color);
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+/* 非树状模式下：对“分支会话”给一个轻量提示（不改结构，只提示有父会话） */
+#chat-history-panel .chat-history-item.forked-conversation .summary::before {
+  content: '↳ ';
+  opacity: 0.65;
+  font-weight: normal;
+}
+#chat-history-panel[data-branch-view-mode="tree"] .chat-history-item.forked-conversation .summary::before {
+  content: '';
+}
+#chat-history-panel .chat-history-item.forked-orphan .summary::before {
+  content: '↳? ';
+}
 `;
     document.head.appendChild(style);
     historyStylesInjected = true;
@@ -465,6 +522,9 @@ export function createChatHistoryUI(appContext) {
     let urlToSave = '';
     let titleToSave = '';
     let summaryToSave = summary;
+    // 分支元信息：仅在更新已有会话时需要“继承”下来，避免分支关系被覆盖丢失
+    let parentConversationIdToSave = null;
+    let forkedFromMessageIdToSave = null;
     
     // 如果是更新操作并且已存在记录，则固定使用首次保存的 url 和 title
     if (isUpdate && currentConversationId) {
@@ -474,6 +534,14 @@ export function createChatHistoryUI(appContext) {
         if (existingConversation) {
           urlToSave = existingConversation.url || '';
           titleToSave = existingConversation.title || '';
+
+          // 继承分支关系字段（如果存在）
+          if (typeof existingConversation.parentConversationId === 'string' && existingConversation.parentConversationId.trim()) {
+            parentConversationIdToSave = existingConversation.parentConversationId.trim();
+          }
+          if (typeof existingConversation.forkedFromMessageId === 'string' && existingConversation.forkedFromMessageId.trim()) {
+            forkedFromMessageIdToSave = existingConversation.forkedFromMessageId.trim();
+          }
           
           // 如果原有摘要存在，则保留原有摘要，避免覆盖用户手动重命名的摘要
           if (existingConversation.summary) {
@@ -502,6 +570,12 @@ export function createChatHistoryUI(appContext) {
       summary: summaryToSave,
       messageCount: messagesCopy.length
     };
+    if (parentConversationIdToSave) {
+      conversation.parentConversationId = parentConversationIdToSave;
+    }
+    if (forkedFromMessageIdToSave) {
+      conversation.forkedFromMessageId = forkedFromMessageIdToSave;
+    }
 
     // 使用 IndexedDB 存储对话记录
     await putConversation(conversation);
@@ -1185,6 +1259,133 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 纯函数：把“会话列表”按 parentConversationId 展开为可渲染的树状顺序。
+   *
+   * 设计目标：
+   * - UI 侧只关心“渲染顺序 + 缩进层级”；不在这里写 DOM；
+   * - 同级排序尽量稳定：置顶优先，其次按 endTime 倒序；URL 匹配模式下优先按 urlMatchLevel；
+   * - 允许父会话缺失（被删除/未加载）：子会话会作为顶层节点展示，并标记为 orphan。
+   *
+   * @param {Array<Object>} conversations
+   * @param {string[]} pinnedIds
+   * @returns {Array<Object>} 新数组：每项会附加 __branchDepth/__branchParentSummary/__branchIsOrphan 等 UI 字段
+   */
+  function buildConversationBranchTreeDisplayList(conversations, pinnedIds) {
+    const list = Array.isArray(conversations) ? conversations.filter(Boolean) : [];
+    const pinnedList = Array.isArray(pinnedIds) ? pinnedIds.filter(Boolean) : [];
+    const pinnedIndexMap = new Map(pinnedList.map((id, idx) => [id, idx]));
+
+    const idToConv = new Map();
+    for (const conv of list) {
+      const id = typeof conv?.id === 'string' ? conv.id : '';
+      if (!id) continue;
+      if (!idToConv.has(id)) {
+        idToConv.set(id, conv);
+      }
+    }
+
+    const safeUrlLevel = (conv) => {
+      const raw = conv?.urlMatchLevel;
+      return Number.isFinite(Number(raw)) ? Number(raw) : null;
+    };
+
+    const compareByDisplayPriority = (a, b) => {
+      if (!a || !b) return 0;
+      const aId = a.id;
+      const bId = b.id;
+      const aPinned = pinnedIndexMap.has(aId);
+      const bPinned = pinnedIndexMap.has(bId);
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) {
+        return (pinnedIndexMap.get(aId) ?? 0) - (pinnedIndexMap.get(bId) ?? 0);
+      }
+
+      // URL 筛选模式：更严格的匹配等级优先
+      const aLevel = safeUrlLevel(a);
+      const bLevel = safeUrlLevel(b);
+      if (aLevel !== null || bLevel !== null) {
+        const av = aLevel === null ? Number.POSITIVE_INFINITY : aLevel;
+        const bv = bLevel === null ? Number.POSITIVE_INFINITY : bLevel;
+        if (av !== bv) return av - bv;
+      }
+
+      const aEnd = Number(a?.endTime) || 0;
+      const bEnd = Number(b?.endTime) || 0;
+      if (aEnd !== bEnd) return bEnd - aEnd;
+
+      const aStart = Number(a?.startTime) || 0;
+      const bStart = Number(b?.startTime) || 0;
+      if (aStart !== bStart) return bStart - aStart;
+
+      const aSummary = String(a?.summary || '');
+      const bSummary = String(b?.summary || '');
+      return aSummary.localeCompare(bSummary);
+    };
+
+    // parentId -> childConv[]
+    const childrenMap = new Map();
+    const rootIds = [];
+
+    for (const [id, conv] of idToConv.entries()) {
+      const rawParent = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
+      const parentId = rawParent && rawParent !== id ? rawParent : '';
+      if (parentId && idToConv.has(parentId)) {
+        if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+        childrenMap.get(parentId).push(conv);
+      } else {
+        rootIds.push(id);
+      }
+    }
+
+    // 对 root/children 做一次排序，保证渲染稳定
+    rootIds.sort((aId, bId) => compareByDisplayPriority(idToConv.get(aId), idToConv.get(bId)));
+    for (const [parentId, children] of childrenMap.entries()) {
+      children.sort(compareByDisplayPriority);
+      childrenMap.set(parentId, children);
+    }
+
+    const ordered = [];
+    const visited = new Set();
+
+    const walk = (conv, depth, resolvedParentId) => {
+      if (!conv || !conv.id) return;
+      if (visited.has(conv.id)) return;
+      visited.add(conv.id);
+
+      const rawParent = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
+      const parentId = rawParent && rawParent !== conv.id ? rawParent : '';
+      const parentExists = !!(parentId && idToConv.has(parentId));
+      const parentSummary = parentExists ? String(idToConv.get(parentId)?.summary || '') : '';
+
+      ordered.push({
+        ...conv,
+        __branchDepth: Math.max(0, Number(depth) || 0),
+        __branchResolvedParentId: resolvedParentId || null,
+        __branchParentSummary: parentSummary,
+        __branchIsOrphan: !!(parentId && !parentExists)
+      });
+
+      const children = childrenMap.get(conv.id) || [];
+      for (const child of children) {
+        walk(child, (Number(depth) || 0) + 1, conv.id);
+      }
+    };
+
+    for (const rootId of rootIds) {
+      walk(idToConv.get(rootId), 0, null);
+    }
+
+    // 兜底：处理环/异常数据导致未被遍历到的节点
+    for (const conv of idToConv.values()) {
+      if (!visited.has(conv.id)) {
+        walk(conv, 0, null);
+      }
+    }
+
+    return ordered;
+  }
+
+  /**
    * 加载聊天历史记录列表
    * @param {HTMLElement} panel - 聊天历史面板元素
    * @param {string} filterText - 过滤文本
@@ -1222,6 +1423,10 @@ export function createChatHistoryUI(appContext) {
     // 任务可能已被新一轮加载替换
     if (panel.dataset.runId !== runId) return;
 
+    // 树状视图：只在“无筛选”场景下改变排序（否则会干扰全文搜索/筛选的直觉）
+    const isBranchTreeView = panel.dataset.branchViewMode === 'tree';
+    const shouldTreeOrder = isBranchTreeView && !isCountFilter && !filterText.trim();
+
     // 记录本轮“列表数据源模式”，供 renderMoreItems 继续分页追加
     // - paged：默认视图（置顶 + 最近 N 条），后续按需加载更多
     // - full：全文搜索/消息数筛选等，需要全量元数据
@@ -1248,7 +1453,7 @@ export function createChatHistoryUI(appContext) {
     // 默认视图（无输入筛选）走“快速分页”：
     // - 首次：置顶 + 最近 50（非置顶）
     // - 后续：滚动到底部再继续加载更多（renderMoreItems 内部触发）
-    if (!baseHistories && !isCountFilter && !filterText.trim()) {
+    if (!baseHistories && !isCountFilter && !filterText.trim() && !shouldTreeOrder) {
       panel._historyDataSource = { mode: 'paged', cursor: null, hasMore: false, pageSize: PAGED_UNPINNED_LOAD_SIZE };
       removeSearchSummary(panel);
 
@@ -1485,33 +1690,41 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
-    const pinnedItems = [];
-    const unpinnedItems = [];
-    const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
+    let pinnedItems = [];
+    let unpinnedItems = [];
+    let isTreeOrderingActive = false;
 
-    sourceHistories.forEach(hist => {
-      if (pinnedIds.includes(hist.id)) {
-        pinnedItems.push(hist);
-      } else {
-        unpinnedItems.push(hist);
-      }
-    });
-
-    pinnedItems.sort((a, b) => (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity));
-    if (panel?._historyDataSource?.mode === 'url') {
-      // URL 快速筛选模式：更严格的匹配等级优先，等级相同再按最近对话排序
-      unpinnedItems.sort((a, b) => {
-        const aLevel = Number.isFinite(Number(a?.urlMatchLevel)) ? Number(a.urlMatchLevel) : Number.POSITIVE_INFINITY;
-        const bLevel = Number.isFinite(Number(b?.urlMatchLevel)) ? Number(b.urlMatchLevel) : Number.POSITIVE_INFINITY;
-        if (aLevel !== bLevel) return aLevel - bLevel;
-        return (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0);
-      });
+    if (shouldTreeOrder) {
+      // 树状排序：保持父子关系连续展示，因此不再拆分“置顶/非置顶”两段，也不再按日期插入分组标题。
+      isTreeOrderingActive = true;
+      currentDisplayItems = buildConversationBranchTreeDisplayList(sourceHistories, pinnedIds);
+      currentPinnedItemsCountInDisplay = 0;
     } else {
-      unpinnedItems.sort((a, b) => (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0));
-    }
+      const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
+      sourceHistories.forEach(hist => {
+        if (pinnedIds.includes(hist.id)) {
+          pinnedItems.push(hist);
+        } else {
+          unpinnedItems.push(hist);
+        }
+      });
 
-    currentDisplayItems = [...pinnedItems, ...unpinnedItems];
-    currentPinnedItemsCountInDisplay = pinnedItems.length;
+      pinnedItems.sort((a, b) => (pinnedIndexMap.get(a.id) ?? Infinity) - (pinnedIndexMap.get(b.id) ?? Infinity));
+      if (panel?._historyDataSource?.mode === 'url') {
+        // URL 快速筛选模式：更严格的匹配等级优先，等级相同再按最近对话排序
+        unpinnedItems.sort((a, b) => {
+          const aLevel = Number.isFinite(Number(a?.urlMatchLevel)) ? Number(a.urlMatchLevel) : Number.POSITIVE_INFINITY;
+          const bLevel = Number.isFinite(Number(b?.urlMatchLevel)) ? Number(b.urlMatchLevel) : Number.POSITIVE_INFINITY;
+          if (aLevel !== bLevel) return aLevel - bLevel;
+          return (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0);
+        });
+      } else {
+        unpinnedItems.sort((a, b) => (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0));
+      }
+
+      currentDisplayItems = [...pinnedItems, ...unpinnedItems];
+      currentPinnedItemsCountInDisplay = pinnedItems.length;
+    }
 
     if (panel?._historyDataSource?.mode === 'paged') {
       // 用于后续分页追加时去重（极端情况下避免重复插入同一会话）
@@ -1536,7 +1749,7 @@ export function createChatHistoryUI(appContext) {
       return;
     }
 
-    if (pinnedItems.length > 0) {
+    if (!isTreeOrderingActive && pinnedItems.length > 0) {
       removeSkeleton(listContainer);
       const pinnedHeader = document.createElement('div');
       pinnedHeader.className = 'chat-history-group-header pinned-header';
@@ -1591,6 +1804,25 @@ export function createChatHistoryUI(appContext) {
     item.setAttribute('data-id', conv.id);
     if (isPinned) {
       item.classList.add('pinned');
+    }
+
+    // --- 分支树状显示（UI 专用字段，来自 buildConversationBranchTreeDisplayList）---
+    const branchDepth = Number.isFinite(Number(conv?.__branchDepth)) ? Number(conv.__branchDepth) : 0;
+    const declaredParentId = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
+    const isForkConversation = !!declaredParentId;
+    const isOrphanFork = !!conv?.__branchIsOrphan;
+
+    if (branchDepth > 0) {
+      item.classList.add('branch-tree-child');
+      item.style.setProperty('--branch-depth', String(branchDepth));
+    }
+    if (isForkConversation) {
+      item.classList.add('forked-conversation');
+      // 便于未来做“跳转父会话”等交互：把 parentId 放到 DOM dataset
+      try { item.dataset.parentConversationId = declaredParentId; } catch (_) {}
+    }
+    if (isOrphanFork) {
+      item.classList.add('forked-orphan');
     }
 
     const summaryDiv = document.createElement('div');
@@ -1661,8 +1893,19 @@ export function createChatHistoryUI(appContext) {
     } else {
       infoDiv.textContent = displayInfos;
     }
-    const details = `开始: ${convDate.toLocaleString()} (${relativeTime})\n最新: ${endTime.toLocaleString()} (${relativeEndTime})\n${title}\n${conv.url}`.split('\n').filter(Boolean).join('\n');
-    item.title = details;
+    const detailsLines = [
+      `开始: ${convDate.toLocaleString()} (${relativeTime})`,
+      `最新: ${endTime.toLocaleString()} (${relativeEndTime})`,
+      title,
+      conv.url
+    ].filter(Boolean);
+    if (isForkConversation) {
+      const parentLabel = (typeof conv?.__branchParentSummary === 'string' && conv.__branchParentSummary.trim())
+        ? conv.__branchParentSummary.trim()
+        : declaredParentId;
+      detailsLines.push(isOrphanFork ? `分支自: ${parentLabel}（父会话缺失）` : `分支自: ${parentLabel}`);
+    }
+    item.title = detailsLines.join('\n');
 
     item.appendChild(summaryDiv);
     item.appendChild(infoDiv);
@@ -1863,6 +2106,12 @@ export function createChatHistoryUI(appContext) {
       isLoadingMoreItems = false;
       return;
     }
+    // 树状视图（且无筛选）时：不插入“时间分组标题”，保证父子节点紧邻显示。
+    const isBranchTreeOrderingActive = !!(
+      panel &&
+      panel.dataset.branchViewMode === 'tree' &&
+      !(panel.dataset.currentFilter || '').trim()
+    );
 
     // 若已渲染到当前已加载数据末尾：在 paged 模式下尝试继续从 DB 追加下一页
     if (currentlyRenderedCount >= currentDisplayItems.length) {
@@ -1881,7 +2130,7 @@ export function createChatHistoryUI(appContext) {
       const conv = currentDisplayItems[convIndex];
       const isConvPinned = pinnedIds.includes(conv.id);
 
-      if (!isConvPinned) {
+      if (!isConvPinned && !isBranchTreeOrderingActive) {
         const isFirstUnpinnedAfterPinnedBlock = (convIndex === currentPinnedItemsCountInDisplay);
 
         let groupKey = '';
@@ -2492,8 +2741,20 @@ export function createChatHistoryUI(appContext) {
       // 当前 URL 快速筛选按钮：只显示与当前页面 URL 相关的历史会话（按前缀匹配分级）
       const urlFilterButton = document.createElement('button');
       urlFilterButton.textContent = '本页';
-      urlFilterButton.className = 'url-filter-btn';
+      // 说明：额外加 role class，避免未来同容器内出现多个“类似按钮”时 querySelector 误选
+      urlFilterButton.className = 'url-filter-btn url-filter-toggle';
       urlFilterButton.style.marginLeft = '5px';
+
+      const updateFilterInputPlaceholder = () => {
+        if (!filterInput) return;
+        const isUrlMode = panel.dataset.urlFilterMode === 'currentUrl';
+        const isTreeMode = panel.dataset.branchViewMode === 'tree';
+        const base = isUrlMode
+          ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
+          : '筛选文本 或 >10, <5, =20...';
+        // 树状视图本身只在“无筛选”时改变排序；这里仅提示用户当前处于该模式
+        filterInput.placeholder = isTreeMode ? `${base}（树状）` : base;
+      };
 
       const updateUrlFilterButtonState = () => {
         const currentUrl = state.pageInfo?.url;
@@ -2503,12 +2764,7 @@ export function createChatHistoryUI(appContext) {
           ? '快速筛选出与当前页面 URL 相关的历史会话（按 URL 前缀分级匹配）'
           : '未能获取当前页面 URL，无法启用“本页”筛选';
         urlFilterButton.classList.toggle('active', panel.dataset.urlFilterMode === 'currentUrl');
-        // 根据模式调整占位符，让用户知道当前筛选范围
-        if (filterInput) {
-          filterInput.placeholder = (panel.dataset.urlFilterMode === 'currentUrl')
-            ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
-            : '筛选文本 或 >10, <5, =20...';
-        }
+        updateFilterInputPlaceholder();
       };
 
       urlFilterButton.addEventListener('click', () => {
@@ -2524,6 +2780,30 @@ export function createChatHistoryUI(appContext) {
 
       updateUrlFilterButtonState();
       filterContainer.appendChild(urlFilterButton);
+
+      // 分支树状视图开关：按 parentConversationId 以缩进方式展示“分支会话”结构
+      const branchTreeButton = document.createElement('button');
+      branchTreeButton.textContent = '树状';
+      branchTreeButton.className = 'url-filter-btn branch-tree-btn';
+      branchTreeButton.style.marginLeft = '5px';
+      branchTreeButton.title = '树状显示分支对话（需要读取全部会话元数据，列表加载可能比默认模式稍慢）';
+
+      const updateBranchTreeButtonState = () => {
+        const active = panel.dataset.branchViewMode === 'tree';
+        branchTreeButton.classList.toggle('active', active);
+        updateFilterInputPlaceholder();
+      };
+
+      branchTreeButton.addEventListener('click', () => {
+        const nextActive = panel.dataset.branchViewMode !== 'tree';
+        panel.dataset.branchViewMode = nextActive ? 'tree' : '';
+        updateBranchTreeButtonState();
+        loadConversationHistories(panel, filterInput ? filterInput.value : '');
+        filterInput?.focus();
+      });
+
+      updateBranchTreeButtonState();
+      filterContainer.appendChild(branchTreeButton);
       
       historyContent.appendChild(filterContainer);
 
@@ -2608,7 +2888,8 @@ export function createChatHistoryUI(appContext) {
     } else {
       // 如果面板已存在，获取 filterInput 引用
       filterInput = panel.querySelector('.filter-container input[type="text"]');
-      const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn');
+      const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
+      const branchTreeButton = panel.querySelector('.filter-container .branch-tree-btn');
       if (urlFilterButton) {
         const currentUrl = state.pageInfo?.url;
         const hasUrl = !!(currentUrl && typeof currentUrl === 'string' && currentUrl.trim());
@@ -2618,10 +2899,16 @@ export function createChatHistoryUI(appContext) {
           : '未能获取当前页面 URL，无法启用“本页”筛选';
         urlFilterButton.classList.toggle('active', panel.dataset.urlFilterMode === 'currentUrl');
       }
+      if (branchTreeButton) {
+        branchTreeButton.classList.toggle('active', panel.dataset.branchViewMode === 'tree');
+      }
       if (filterInput) {
-        filterInput.placeholder = (panel.dataset.urlFilterMode === 'currentUrl')
+        const isUrlMode = panel.dataset.urlFilterMode === 'currentUrl';
+        const isTreeMode = panel.dataset.branchViewMode === 'tree';
+        const base = isUrlMode
           ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
           : '筛选文本 或 >10, <5, =20...';
+        filterInput.placeholder = isTreeMode ? `${base}（树状）` : base;
       }
     }
     
@@ -4602,6 +4889,8 @@ export function createChatHistoryUI(appContext) {
     try {
       // 先保存当前会话以确保所有更改都已保存
       await saveCurrentConversation(true);
+      // 记录分支来源（保存后 currentConversationId 必然存在）
+      const parentConversationId = currentConversationId || null;
 
       // 查找目标消息
       const targetMessage = services.chatHistoryManager.chatHistory.messages.find(msg => msg.id === targetMessageId);
@@ -4728,6 +5017,13 @@ export function createChatHistoryUI(appContext) {
         endTime: endTime,
         title: pageInfo?.title || '',
         url: pageInfo?.url || '',
+        // --- 分支元信息（用于“历史面板树状显示”）---
+        // 设计说明：
+        // - 分支对话本质上是“从某个会话的某条消息处截断并复制出一个新会话”；
+        // - 这里显式记录父会话 ID + 分支点消息 ID，避免后续只能靠正则/内容猜测；
+        // - 允许父会话被删除：UI 侧渲染树时可将其作为“孤儿分支”顶层展示。
+        parentConversationId,
+        forkedFromMessageId: targetMessageId || null,
         currentNode: newChatHistory.currentNode,
         root: newChatHistory.root
       };

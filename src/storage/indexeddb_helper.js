@@ -80,7 +80,7 @@ export function openChatHistoryDB() {
  * - 这不会减少数据库读取成本，但能显著减少 JS 堆里长期保留的数据量。
  *
  * @param {Object} conv
- * @returns {{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number}}
+ * @returns {{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, parentConversationId:string|null, forkedFromMessageId:string|null}}
  */
 function compactConversationToMetadata(conv) {
   const id = conv?.id || '';
@@ -90,7 +90,14 @@ function compactConversationToMetadata(conv) {
   const startTime = Number(conv?.startTime) || 0;
   const endTime = Number(conv?.endTime) || 0;
   const messageCount = Number(conv?.messageCount) || (Array.isArray(conv?.messages) ? conv.messages.length : 0) || 0;
-  return { id, url, title, summary, startTime, endTime, messageCount };
+  // 分支元信息：用于 UI 侧构建“会话分支树”
+  const parentConversationId = typeof conv?.parentConversationId === 'string' && conv.parentConversationId.trim()
+    ? conv.parentConversationId.trim()
+    : null;
+  const forkedFromMessageId = typeof conv?.forkedFromMessageId === 'string' && conv.forkedFromMessageId.trim()
+    ? conv.forkedFromMessageId.trim()
+    : null;
+  return { id, url, title, summary, startTime, endTime, messageCount, parentConversationId, forkedFromMessageId };
 }
 
 /**
@@ -136,7 +143,7 @@ export async function getAllConversationMetadata() {
 /**
  * 批量按 id 读取会话“轻量元数据”。
  * @param {string[]} ids
- * @returns {Promise<Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number}>>}
+ * @returns {Promise<Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, parentConversationId:string|null, forkedFromMessageId:string|null}>>}
  */
 export async function getConversationMetadataByIds(ids) {
   const idList = Array.isArray(ids) ? ids.filter(Boolean) : [];
@@ -171,7 +178,7 @@ export async function getConversationMetadataByIds(ids) {
  * @param {number} [options.limit=50]
  * @param {{endTime:number, seenIds:string[]}|null} [options.cursor=null]
  * @param {string[]|Set<string>} [options.excludeIds=[]] - 需要跳过的会话 id（例如置顶会话）
- * @returns {Promise<{items: Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number}>, cursor: {endTime:number, seenIds:string[]} | null, hasMore: boolean}>}
+ * @returns {Promise<{items: Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, parentConversationId:string|null, forkedFromMessageId:string|null}>, cursor: {endTime:number, seenIds:string[]} | null, hasMore: boolean}>}
  */
 export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
   const limit = Math.max(0, Number(options.limit) || 50);
@@ -305,7 +312,7 @@ export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
  * - 同一会话只会分配到最严格的那个等级（去重逻辑：先处理更严格的 candidate）。
  *
  * @param {string[]} candidateUrls
- * @returns {Promise<Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, urlMatchLevel:number, urlMatchPrefix:string}>>}
+ * @returns {Promise<Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, parentConversationId:string|null, forkedFromMessageId:string|null, urlMatchLevel:number, urlMatchPrefix:string}>>}
  */
 export async function listConversationMetadataByUrlCandidates(candidateUrls) {
   const candidates = Array.isArray(candidateUrls)
