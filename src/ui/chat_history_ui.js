@@ -72,8 +72,10 @@ export function createChatHistoryUI(appContext) {
   const STATS_CACHE_DURATION = 5 * 60 * 1000; // 5分钟更新一次统计数据
 
   // --- 元数据缓存（UI层） ---
-  let metaCache = { data: null, time: 0 };
-  const META_CACHE_TTL = 30 * 1000; // 30秒缓存元数据，打开面板/轻度操作极速响应
+  let metaCache = { data: null, time: 0, promise: null };
+  // 说明：默认列表使用 paged 模式，不会预先拉取全量元数据；一旦用户输入“全文搜索”，就必须拿到全量元数据。
+  // 为避免“输入停下后卡一秒才开始显示搜索进度”，这里把 TTL 设长一些，并对并发请求做去重。
+  const META_CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存元数据（有显式 invalidateMetadataCache 兜底）
 
   const galleryCache = {
     items: [],
@@ -123,6 +125,7 @@ export function createChatHistoryUI(appContext) {
   function invalidateMetadataCache() {
     metaCache.data = null;
     metaCache.time = 0;
+    metaCache.promise = null;
     invalidateGalleryCache();
     invalidateSearchCache();
   }
@@ -145,11 +148,72 @@ export function createChatHistoryUI(appContext) {
   }
 
   async function getAllConversationMetadataWithCache(forceUpdate = false) {
-    if (forceUpdate || !metaCache.data || (Date.now() - metaCache.time > META_CACHE_TTL)) {
-      metaCache.data = await getAllConversationMetadata();
-      metaCache.time = Date.now();
+    const stale = forceUpdate || !metaCache.data || (Date.now() - metaCache.time > META_CACHE_TTL);
+    if (!stale) return metaCache.data;
+
+    // 并发去重：同一时间只允许一次“全量元数据”加载，避免打开面板预热 + 输入搜索同时触发两次全量扫描。
+    if (metaCache.promise) {
+      try {
+        return await metaCache.promise;
+      } catch (_) {
+        // 若之前的 promise 失败，则允许继续走下面的重新加载逻辑。
+      }
     }
-    return metaCache.data;
+
+    metaCache.promise = (async () => {
+      const data = await getAllConversationMetadata();
+      metaCache.data = data;
+      metaCache.time = Date.now();
+      return data;
+    })();
+
+    try {
+      return await metaCache.promise;
+    } finally {
+      metaCache.promise = null;
+    }
+  }
+
+  function scheduleConversationMetadataWarmup(panel) {
+    // 说明：
+    // - 默认历史列表走 paged 模式，首屏速度快，但“第一次全文搜索”需要全量元数据；
+    // - 这里用 idle/延迟的方式预热元数据，降低用户输入后的启动延迟。
+    try {
+      if (!panel || !panel.classList.contains('visible')) return;
+    } catch (_) {
+      return;
+    }
+
+    // 已有缓存/正在加载则不重复预热
+    if (metaCache.data || metaCache.promise) return;
+
+    const runWarmup = async () => {
+      try {
+        await getAllConversationMetadataWithCache(false);
+      } catch (_) {}
+    };
+
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => {
+        try {
+          if (!panel.classList.contains('visible')) return;
+        } catch (_) {
+          return;
+        }
+        if (metaCache.data || metaCache.promise) return;
+        runWarmup();
+      }, { timeout: 1200 });
+    } else {
+      setTimeout(() => {
+        try {
+          if (!panel.classList.contains('visible')) return;
+        } catch (_) {
+          return;
+        }
+        if (metaCache.data || metaCache.promise) return;
+        runWarmup();
+      }, 600);
+    }
   }
 
   // --- 任务令牌（运行ID）用于取消过期的加载流程 ---
@@ -312,6 +376,8 @@ export function createChatHistoryUI(appContext) {
   // 默认视图性能优化：首次只取“置顶 + 最近 50 条（非置顶）”，后续按需再分页追加
   const INITIAL_UNPINNED_LOAD_LIMIT = 50;
   const PAGED_UNPINNED_LOAD_SIZE = 100;
+  // 搜索框输入防抖（越小越敏捷，但会更频繁触发全文扫描；runId 取消机制会兜底避免旧任务污染 UI）
+  const HISTORY_SEARCH_DEBOUNCE_MS = 80;
   let currentDisplayItems = []; // 当前筛选和排序后的所有项目
   let currentlyRenderedCount = 0; // 已渲染的项目数量
   let isLoadingMoreItems = false; // 防止并发加载的标志
@@ -1488,6 +1554,44 @@ export function createChatHistoryUI(appContext) {
     listContainer.scrollTop = 0;
     renderSkeleton(listContainer, 8);
 
+    // 清理上一轮搜索残留的进度条（避免在新一轮加载时出现“旧进度”闪烁）
+    try {
+      panel.querySelectorAll('.search-loading-indicator').forEach((n) => n.remove());
+    } catch (_) {}
+
+    const upsertSearchProgressIndicator = () => {
+      let indicator = null;
+      try {
+        indicator = panel.querySelector('.search-loading-indicator');
+      } catch (_) {
+        indicator = null;
+      }
+      if (indicator) return indicator;
+
+      indicator = document.createElement('div');
+      indicator.className = 'search-loading-indicator';
+
+      const filterBoxContainer = panel.querySelector('.filter-container');
+      if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
+        filterBoxContainer.insertAdjacentElement('afterend', indicator);
+      } else {
+        listContainer.insertBefore(indicator, listContainer.firstChild);
+      }
+      return indicator;
+    };
+
+    const setSearchProgressStage = (indicator, text) => {
+      if (!indicator) return;
+      indicator.innerHTML = `
+        <div class="search-progress">
+          <div class="search-progress-text">${text || ''}</div>
+          <div class="search-progress-bar">
+            <div class="search-progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+      `;
+    };
+
     // 解析筛选条件
     const countFilterMatch = filterText.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
     let isCountFilter = false;
@@ -1557,8 +1661,28 @@ export function createChatHistoryUI(appContext) {
     // 需要“全量元数据”的场景：消息数筛选 / 全文搜索
     if (!baseHistories) {
       panel._historyDataSource = { mode: 'full' };
-      baseHistories = await getAllConversationMetadataWithCache();
-      if (panel.dataset.runId !== runId) return;
+
+      // 说明：全文搜索需要先拿到“全量会话元数据列表”作为候选池，这一步在会话很多时可能需要 0.5~2s。
+      // 旧实现会等“元数据加载完成后”才插入进度条，导致用户感觉“停顿了一秒啥也没干”。
+      // 这里提前显示“准备阶段”，让用户能立刻看到反馈。
+      const isFullTextSearch = !isCountFilter && !!filterText.trim() && !urlFilterMode;
+      const canReuseSearchCache = isFullTextSearch && !!searchCache?.results && searchCache.normalized === normalizedFilter;
+
+      if (canReuseSearchCache) {
+        baseHistories = searchCache.results.slice();
+      } else {
+        let warmupIndicator = null;
+        if (isFullTextSearch) {
+          warmupIndicator = upsertSearchProgressIndicator();
+          setSearchProgressStage(warmupIndicator, '正在准备搜索…（加载会话列表）');
+        }
+
+        baseHistories = await getAllConversationMetadataWithCache();
+        if (panel.dataset.runId !== runId) {
+          if (warmupIndicator && warmupIndicator.parentNode) warmupIndicator.remove();
+          return;
+        }
+      }
     }
 
     let sourceHistories = [];
@@ -1628,15 +1752,7 @@ export function createChatHistoryUI(appContext) {
           let cancelled = false;
 
           // 在列表容器顶部插入搜索进度指示器
-          const searchProgressIndicator = document.createElement('div');
-          searchProgressIndicator.className = 'search-loading-indicator';
-
-          const filterBoxContainer = panel.querySelector('.filter-container');
-          if (filterBoxContainer && filterBoxContainer.parentNode === listContainer.parentNode) {
-            filterBoxContainer.insertAdjacentElement('afterend', searchProgressIndicator);
-          } else {
-            listContainer.insertBefore(searchProgressIndicator, listContainer.firstChild);
-          }
+          const searchProgressIndicator = upsertSearchProgressIndicator();
 
           const PROGRESS_UPDATE_INTERVAL = 10;
           const CONCURRENCY = Math.min(6, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
@@ -2785,12 +2901,25 @@ export function createChatHistoryUI(appContext) {
       const triggerSearch = () => loadConversationHistories(panel, filterInput.value);
       const onFilterInput = () => {
         if (isComposingFilter) return;
+        // 若输入值与当前已加载筛选一致，则无需重复触发（例如输入法 compositionend 后紧跟的 input 事件）
+        if (panel.dataset.currentFilter === filterInput.value) return;
         if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
-        filterDebounceTimer = setTimeout(triggerSearch, 200);
+        filterDebounceTimer = setTimeout(triggerSearch, HISTORY_SEARCH_DEBOUNCE_MS);
       };
       filterInput.addEventListener('input', onFilterInput);
       filterInput.addEventListener('compositionstart', () => { isComposingFilter = true; });
-      filterInput.addEventListener('compositionend', () => { isComposingFilter = false; triggerSearch(); });
+      filterInput.addEventListener('compositionend', () => {
+        isComposingFilter = false;
+        if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+        triggerSearch();
+      });
+      // Enter：立即触发一次搜索，适合“输入完成后快速确认”场景
+      filterInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        if (isComposingFilter) return;
+        if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+        triggerSearch();
+      });
       filterContainer.appendChild(filterInput);
       
       // 新增清除按钮，放在搜索框右边
@@ -2987,6 +3116,9 @@ export function createChatHistoryUI(appContext) {
     panel.style.display = 'flex';
     void panel.offsetWidth;  
     panel.classList.add('visible');
+
+    // 预热全量元数据（idle），降低“首次全文搜索”的启动延迟
+    scheduleConversationMetadataWarmup(panel);
     
     // --- 修改开始：打开面板后聚焦到 filterInput ---
     // 确保在 'history' 标签页激活时聚焦
