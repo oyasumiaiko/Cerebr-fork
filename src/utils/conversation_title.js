@@ -8,7 +8,7 @@
  * 4) 保持纯函数：不读写 DOM、不依赖全局状态，便于复用与后续演进。
  */
 
-const DEFAULT_MAX_LENGTH = 50;
+const DEFAULT_MAX_LENGTH = 80;
 
 /**
  * 提取消息的纯文本（兼容历史的多模态数组结构）
