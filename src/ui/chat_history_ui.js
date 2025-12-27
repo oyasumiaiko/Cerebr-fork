@@ -20,6 +20,7 @@ import { storageService } from '../utils/storage_service.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { generateCandidateUrls } from '../utils/url_candidates.js';
 import { buildConversationSummaryFromMessages } from '../utils/conversation_title.js';
+import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -653,6 +654,11 @@ export function createChatHistoryUI(appContext) {
 
     // 保存前确保 <think> 段落已转为 thoughtsRaw，避免思考内容混入正文
     messagesCopy.forEach(normalizeThinkingForMessage);
+    for (const msg of messagesCopy) {
+      try {
+        msg.content = normalizeStoredMessageContent(msg.content);
+      } catch (_) {}
+    }
     // 保存前先将消息中的 dataURL/远程图片落盘（仅操作副本），防止 base64 继续写入 IndexedDB
     try {
       for (const msg of messagesCopy) {
@@ -833,6 +839,18 @@ export function createChatHistoryUI(appContext) {
     try { await loadDownloadRoot(); } catch (_) {}
     const fragment = document.createDocumentFragment();
 
+    const extractInlineImgSrcs = (html) => {
+      const set = new Set();
+      if (typeof html !== 'string' || !html.includes('<img')) return set;
+      const re = /<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1/gi;
+      let m = null;
+      while ((m = re.exec(html)) !== null) {
+        const src = m[2] || '';
+        if (src) set.add(src);
+      }
+      return set;
+    };
+
     // 遍历对话中的每条消息并显示
     for (const msg of fullConversation.messages) {
       normalizeThinkingForMessage(msg);
@@ -840,47 +858,42 @@ export function createChatHistoryUI(appContext) {
       let messageElem = null;
       const thoughtsToDisplay = msg.thoughtsRaw || null; // 获取思考过程文本
 
-      if (Array.isArray(msg.content)) {
-        const legacyImagesContainer = document.createElement('div');
-        let combinedContent = '';
-        const legacyImageUrls = [];
+      msg.content = normalizeStoredMessageContent(msg.content);
 
-        for (const part of msg.content) {
-          if (part.type === 'text') {
-            combinedContent = part.text || '';
-          } else if (part.type === 'image_url' && part.image_url) {
-            const resolved = await resolveImageUrlForDisplay(part.image_url);
-            legacyImageUrls.push(resolved || part.image_url.url || '');
-          }
+      if (Array.isArray(msg.content)) {
+        const { text, images } = splitStoredMessageContent(msg.content);
+        let combinedContent = text || '';
+        const displayUrls = [];
+
+        for (const imageUrlObj of images) {
+          const resolved = await resolveImageUrlForDisplay(imageUrlObj);
+          const fallback = imageUrlObj?.url || imageUrlObj?.path || '';
+          const url = (resolved || fallback || '').trim();
+          if (url) displayUrls.push(url);
         }
 
-        const textHasInlineImages = typeof combinedContent === 'string' && /<img/i.test(combinedContent);
-        const shouldForceInline = !!msg.hasInlineImages || textHasInlineImages || (role === 'ai' && legacyImageUrls.length > 0);
-        let imagesHTML = null;
+        const uniqueDisplayUrls = Array.from(new Set(displayUrls));
 
-        if (shouldForceInline) {
-          // 若文本中已经包含内联图片，则直接使用文本；若没有，则在末尾补齐。
-          if (!textHasInlineImages && legacyImageUrls.length > 0) {
-            const inlineHtml = legacyImageUrls.map(url => {
-              const safeUrl = url || '';
-              return `<img class="ai-inline-image" src="${safeUrl}" alt="加载的图片">`;
-            }).join('');
-            combinedContent = (combinedContent || '') + inlineHtml;
-          }
-          msg.hasInlineImages = true;
-          const textPartIndex = msg.content.findIndex(part => part.type === 'text');
-          if (textPartIndex >= 0) {
-            msg.content[textPartIndex] = { ...msg.content[textPartIndex], text: combinedContent };
-          }
-        } else if (legacyImageUrls.length > 0) {
-          legacyImageUrls.forEach(url => {
-            const imageTag = createImageTag(url, null);
+        if (role === 'ai') {
+          const existingSrcs = extractInlineImgSrcs(combinedContent);
+          const inlineHtml = uniqueDisplayUrls
+            .filter((u) => u && !existingSrcs.has(u))
+            .map((u) => {
+              const safeUrl = String(u).replace(/"/g, '&quot;');
+              return `\n<img class="ai-inline-image" src="${safeUrl}" alt="加载的图片" />\n`;
+            })
+            .join('');
+          combinedContent = combinedContent + inlineHtml;
+          messageElem = appendMessage(combinedContent, role, true, fragment, null, thoughtsToDisplay);
+        } else {
+          const legacyImagesContainer = document.createElement('div');
+          uniqueDisplayUrls.forEach((u) => {
+            const imageTag = createImageTag(u, null);
             legacyImagesContainer.appendChild(imageTag);
           });
-          imagesHTML = legacyImagesContainer.innerHTML;
+          const imagesHTML = legacyImagesContainer.innerHTML;
+          messageElem = appendMessage(combinedContent, role, true, fragment, imagesHTML, thoughtsToDisplay);
         }
-
-        messageElem = appendMessage(combinedContent, role, true, fragment, imagesHTML, thoughtsToDisplay);
       } else {
         // 调用 appendMessage 时传递 thoughtsToDisplay
         messageElem = appendMessage(msg.content, role, true, fragment, null, thoughtsToDisplay);
@@ -2398,9 +2411,10 @@ export function createChatHistoryUI(appContext) {
       const convDomain = getDisplayUrl(conv.url);
       for (const msg of conv.messages) {
         const timestamp = Number(msg?.timestamp || conv.endTime || conv.startTime || Date.now());
-        if (Array.isArray(msg?.content)) {
-          for (let idx = 0; idx < msg.content.length; idx++) {
-            const part = msg.content[idx];
+        const normalizedContent = normalizeStoredMessageContent(msg?.content);
+        if (Array.isArray(normalizedContent)) {
+          for (let idx = 0; idx < normalizedContent.length; idx++) {
+            const part = normalizedContent[idx];
             if (!part || part.type !== 'image_url' || !part.image_url) continue;
             const resolvedUrl = await resolveImageUrlForDisplay(part.image_url);
             if (!resolvedUrl) continue;
@@ -5166,7 +5180,7 @@ export function createChatHistoryUI(appContext) {
           id: generateForkMessageId(),
           parentId: previousId,
           children: [],
-          content: resolvedContent
+          content: normalizeStoredMessageContent(resolvedContent)
         };
         // 永远不要复用旧会话的 contentRef（避免跨会话共享 messageContents 记录）
         if (newMsg.contentRef) delete newMsg.contentRef;

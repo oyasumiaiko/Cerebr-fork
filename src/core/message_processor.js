@@ -310,7 +310,7 @@ export function createMessageProcessor(appContext) {
           node.thoughtsRaw = thoughtsForMessage;
         }
         if (node) {
-          node.hasInlineImages = (!imagesHTML && typeof messageText === 'string' && /<img/i.test(messageText));
+          node.hasInlineImages = (!imagesHTML && Array.isArray(processedContent) && processedContent.some(p => p?.type === 'image_url'));
         }
         // 将“指令类型”等元信息写入历史节点（只对用户消息生效）
         // 说明：这类信息一旦持久化，后续功能（例如对话标题生成）即可完全脱离“字符串/正则”猜测。
@@ -384,7 +384,12 @@ export function createMessageProcessor(appContext) {
       console.warn('updateAIMessage: 处理图片标签失败，回退为纯文本内容:', e);
       node.content = safeAnswerContent;
     }
-    node.hasInlineImages = (typeof safeAnswerContent === 'string' && /<img/i.test(safeAnswerContent));
+    try {
+      const hasImageParts = Array.isArray(node.content) && node.content.some(p => p?.type === 'image_url');
+      node.hasInlineImages = (!imagesHTML && hasImageParts);
+    } catch (_) {
+      node.hasInlineImages = false;
+    }
 
     if (shouldUpdateThoughts) { // 允许显式将思考过程设置为 null/空字符串
       node.thoughtsRaw = resolvedThoughts;

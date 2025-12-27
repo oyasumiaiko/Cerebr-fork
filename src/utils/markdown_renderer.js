@@ -373,6 +373,7 @@ export function renderMarkdownSafe(markdownText, options = {}) {
   });
 
   let html = marked.parse(rebuilt);
+  html = html.replace(/<img\s*=/gi, '&lt;img=');
 
   // 4) DOMPurify 清洗（严格白名单）
   const purifyConfig = { ...DEFAULT_PURIFY_CONFIG };
