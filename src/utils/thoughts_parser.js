@@ -79,9 +79,12 @@ export function mergeStreamingThoughts(existing, incoming, options = {}) {
   }
 
   // 2) 兼容“边界重复”：寻找 prev 的最长后缀与 next 的最长前缀重叠并去重拼接
+  // 注意：不要对“单字符重叠”做去重。
+  // 因为流式分片的边界是随机的，若分片刚好切在双字母/重复字符处（例如 "free goods" 的 "ee"/"oo"），
+  // 将 len=1 的重叠视为“重复输出”会误删合法字符，导致文本变成 "fre gods"。
   const maxOverlap = Math.max(0, Number(options.maxOverlap) || 256);
   const cap = Math.min(prev.length, next.length, maxOverlap);
-  for (let len = cap; len >= 1; len--) {
+  for (let len = cap; len >= 2; len--) {
     if (prev.slice(prev.length - len) === next.slice(0, len)) {
       return prev + next.slice(len);
     }
