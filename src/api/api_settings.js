@@ -165,6 +165,20 @@ export function createApiManager(appContext) {
     return -1;
   }
 
+  function normalizeApiKeys(apiKey) {
+    // 说明：UI 支持「单 Key」或「逗号分隔的多 Key」两种输入形态。
+    // 只有在真正存在多个 Key 时（即拆分后长度 > 1），才启用黑名单筛选/轮换逻辑；
+    // 单 Key 场景下即便曾被加入黑名单，也继续尝试发起请求，避免被“永久/临时不可用”状态卡死。
+    if (Array.isArray(apiKey)) {
+      return apiKey.map(k => (typeof k === 'string' ? k.trim() : '')).filter(Boolean);
+    }
+    if (typeof apiKey !== 'string') return [];
+    const raw = apiKey.trim();
+    if (!raw) return [];
+    if (!raw.includes(',')) return [raw];
+    return raw.split(',').map(k => k.trim()).filter(Boolean);
+  }
+
   async function saveConfigsToSyncChunked(configs) {
     try {
       const slim = compactConfigsForSync(configs);
@@ -1356,19 +1370,11 @@ export function createApiManager(appContext) {
     let lastErrorResponse = null;
 
     // 计算首次尝试索引（数组）或校验单 key
-    const isArrayKeys = Array.isArray(config.apiKey);
-    const keysArray = isArrayKeys ? config.apiKey : [(config.apiKey || '').trim()].filter(Boolean);
+    const keysArray = normalizeApiKeys(config.apiKey);
+    const isArrayKeys = keysArray.length > 1;
     if (keysArray.length === 0) {
       console.error('API Key 缺失或无效:', config);
       throw new Error(`API Key for ${config.displayName || config.modelName} is missing or invalid.`);
-    }
-
-    // 单 Key 且已黑名单，直接错误
-    if (!isArrayKeys) {
-      const singleKey = keysArray[0];
-      if (isKeyBlacklisted(singleKey)) {
-        throw new Error('当前 API Key 已被标记为不可用，请更新配置后重试');
-      }
     }
 
     // 查找当前使用索引（若未设置，默认为 0）
@@ -1381,15 +1387,15 @@ export function createApiManager(appContext) {
       let selectedKey = '';
       if (isArrayKeys) {
         // 从当前索引开始，选择第一个不在黑名单且未尝试过的 key
-        const startIndex = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), config.apiKey.length - 1);
-        const idx = getNextUsableKeyIndex(config, startIndex, tried);
+        const startIndex = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), keysArray.length - 1);
+        const idx = getNextUsableKeyIndex({ apiKey: keysArray }, startIndex, tried);
         if (idx === -1) {
           // 无可用 key
           if (lastErrorResponse) return lastErrorResponse; // 返回最后一次错误响应，让上层按原逻辑处理
           throw new Error('没有可用的 API Key（全部黑名单或被删除）');
         }
         selectedIndex = idx;
-        selectedKey = (config.apiKey[selectedIndex] || '').trim();
+        selectedKey = keysArray[selectedIndex] || '';
       } else {
         // 单 key 情况
         selectedIndex = 0;
@@ -1404,7 +1410,7 @@ export function createApiManager(appContext) {
       emitStatus({
         stage: 'api_key_selected',
         keyIndex: selectedIndex,
-        keyCount: isArrayKeys ? (config.apiKey?.length || 0) : 1,
+        keyCount: isArrayKeys ? keysArray.length : 1,
         triedCount: tried.size,
         isKeyRotation: isArrayKeys,
         apiBase: config?.baseUrl || '',
@@ -1468,7 +1474,7 @@ export function createApiManager(appContext) {
         tried.add(selectedKey);
         if (isArrayKeys) {
           // 轮换到下一个可用 key（并更新“当前使用”索引）
-          const nextIdx = getNextUsableKeyIndex(config, (selectedIndex + 1) % config.apiKey.length, tried);
+          const nextIdx = getNextUsableKeyIndex({ apiKey: keysArray }, (selectedIndex + 1) % keysArray.length, tried);
           if (nextIdx === -1) {
             return response; // 无可用 key，返回 429 响应
           }
@@ -1492,8 +1498,8 @@ export function createApiManager(appContext) {
         lastErrorResponse = response;
         tried.add(selectedKey);
         try { await blacklistKey(selectedKey, -1); } catch (_) {}
-        if (Array.isArray(config.apiKey) && config.apiKey.length > 0) {
-          const nextIdx = getNextUsableKeyIndex(config, (selectedIndex + 1) % config.apiKey.length, tried);
+        if (isArrayKeys) {
+          const nextIdx = getNextUsableKeyIndex({ apiKey: keysArray }, (selectedIndex + 1) % keysArray.length, tried);
           if (nextIdx === -1) {
             return response;
           }
