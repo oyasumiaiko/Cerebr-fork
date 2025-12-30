@@ -199,6 +199,87 @@ function deleteMessageFromHistory(chatHistory, messageId) {
 }
 
 /**
+ * 新增：在指定消息之后插入一条新消息，并尽量保持“当前对话链/界面顺序”一致。
+ *
+ * 设计目标：
+ * - 允许在任意消息下方插入一条空白 user/assistant 消息（用于补位/手工编辑/后续重生成等）；
+ * - 插入后不应该打乱其他消息：
+ *   - 父子关系：默认让新节点成为 afterMessageId 的子节点；
+ *   - 若提供 nextMessageId（UI 中 afterMessageId 的下一条消息），则把 nextMessageId 迁移为新节点的子节点，形成：A -> 新节点 -> B；
+ * - 重要：messages 数组的顺序决定了会话回放时的渲染顺序（chat_history_ui 会按 messages 顺序逐条 append），
+ *   因此这里必须把新节点插入到数组的“正确位置”（通常是 afterMessageId 之后、nextMessageId 之前），
+ *   否则保存/重载会导致插入消息跑到末尾。
+ *
+ * 说明：
+ * - 这是对“线性链”场景的优化；若遇到分支（after 节点有多个 children），只有命中的 nextMessageId 会被迁移，其他分支保持不变。
+ *
+ * @param {ChatHistory} chatHistory
+ * @param {string} afterMessageId - 要插入到哪条消息之后
+ * @param {string} role - 'user' | 'assistant' | 'system'
+ * @param {any} content - 新消息内容（允许 string 或多模态数组）
+ * @param {{ nextMessageId?: string|null }} [options]
+ * @returns {MessageNode|null} 新插入的节点；失败返回 null
+ */
+function insertMessageAfterInHistory(chatHistory, afterMessageId, role, content, options = {}) {
+  if (!chatHistory || !afterMessageId) return null;
+  const afterNode = findMessageNode(chatHistory, afterMessageId);
+  if (!afterNode) return null;
+
+  const safeNextId = (typeof options?.nextMessageId === 'string' && options.nextMessageId.trim())
+    ? options.nextMessageId.trim()
+    : null;
+
+  // 1) 创建新节点（parentId 指向 afterMessageId）
+  const newNode = createMessageNode(role, content, afterMessageId);
+
+  // 2) 计算插入到 messages 数组中的位置：
+  //    - 默认插在 afterMessageId 之后；
+  //    - 若提供 nextMessageId 且其在数组中位于 after 之后，则插到 next 之前（保持 UI 顺序）。
+  const afterIndex = chatHistory.messages.findIndex(msg => msg.id === afterMessageId);
+  let insertIndex = (afterIndex >= 0) ? (afterIndex + 1) : chatHistory.messages.length;
+  if (safeNextId) {
+    const nextIndex = chatHistory.messages.findIndex(msg => msg.id === safeNextId);
+    if (nextIndex !== -1 && afterIndex !== -1 && nextIndex > afterIndex) {
+      insertIndex = nextIndex;
+    }
+  }
+  chatHistory.messages.splice(insertIndex, 0, newNode);
+
+  // 3) 维护 children/parentId 关系：若 nextMessageId 命中，则把它“挪到新节点下面”
+  if (safeNextId) {
+    const nextNode = findMessageNode(chatHistory, safeNextId);
+    const canRewire = !!(nextNode && nextNode.parentId === afterMessageId);
+    if (canRewire) {
+      // 用新节点替换 afterNode.children 中的 next（若未找到则追加）
+      const idx = Array.isArray(afterNode.children) ? afterNode.children.indexOf(safeNextId) : -1;
+      if (idx >= 0) {
+        afterNode.children.splice(idx, 1, newNode.id);
+      } else {
+        afterNode.children.push(newNode.id);
+      }
+      // nextNode 变为 newNode 的子节点
+      newNode.children = [safeNextId];
+      nextNode.parentId = newNode.id;
+    } else {
+      // 无法确认 next 是 after 的直系子节点：保守策略，不强行改写 next 的 parentId，仅把新节点作为 after 的新增 child。
+      afterNode.children.push(newNode.id);
+    }
+  } else {
+    // 没有 next：直接挂到 after 的 children 上
+    afterNode.children.push(newNode.id);
+  }
+
+  // 4) currentNode 更新策略：
+  // - 仅当插入点就是当前末尾（afterMessageId === currentNode 且没有 next）时，把 currentNode 推进到新节点；
+  // - 其它情况保持不变，避免把“正在聊天的末尾指针”跳到中间。
+  if (!safeNextId && chatHistory.currentNode === afterMessageId) {
+    chatHistory.currentNode = newNode.id;
+  }
+
+  return newNode;
+}
+
+/**
  * 创建一个新的 ChatHistory 对象以及相关操作函数
  * @returns {{
  *   chatHistory: ChatHistory,
@@ -223,6 +304,8 @@ export function createChatHistoryManager() {
     addMessageToTree: (role, content, parentId = null) => addMessageToTree(chatHistory, role, content, parentId),
     getCurrentConversationChain: () => getCurrentConversationChain(chatHistory),
     clearHistory: () => clearChatHistory(chatHistory),
-    deleteMessage: (messageId) => deleteMessageFromHistory(chatHistory, messageId)
+    deleteMessage: (messageId) => deleteMessageFromHistory(chatHistory, messageId),
+    insertMessageAfter: (afterMessageId, role, content, options = {}) =>
+      insertMessageAfterInHistory(chatHistory, afterMessageId, role, content, options)
   };
 } 

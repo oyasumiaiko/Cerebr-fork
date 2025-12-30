@@ -43,9 +43,13 @@ export function createContextMenuManager(appContext) {
   const forkConversationButton = dom.forkConversationButton;
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
   const editMessageButton = document.getElementById('edit-message');
+  // Shift+右键才显示的隐藏菜单项
+  const insertAiMessageButton = document.getElementById('insert-ai-message');
+  const insertUserMessageButton = document.getElementById('insert-user-message');
 
   // Services from appContext.services
   const messageSender = services.messageSender;
+  const messageProcessor = services.messageProcessor;
   const chatHistoryUI = services.chatHistoryUI;
   const chatHistoryManager = services.chatHistoryManager;
   const chatHistory = chatHistoryManager.chatHistory; // The actual history data object
@@ -179,6 +183,16 @@ export function createContextMenuManager(appContext) {
     // “重新生成”支持任意消息：根据当前消息解析目标是否可重生成
     const regenTarget = resolveRegenerateTarget(messageElement);
     regenerateButton.style.display = regenTarget ? 'flex' : 'none';
+
+    // Shift+右键：显示“插入消息”隐藏选项（仅对有 messageId 的正式消息生效）
+    const canShowInsertOptions = !!(
+      e?.shiftKey &&
+      messageElement &&
+      messageElement.getAttribute('data-message-id') &&
+      !messageElement.classList.contains('loading-message')
+    );
+    if (insertAiMessageButton) insertAiMessageButton.style.display = canShowInsertOptions ? 'flex' : 'none';
+    if (insertUserMessageButton) insertUserMessageButton.style.display = canShowInsertOptions ? 'flex' : 'none';
     // 始终显示创建分支对话按钮，但只有在有足够消息时才可用
     if (forkConversationButton) {
       const messageCount = chatContainer.querySelectorAll('.message').length;
@@ -271,6 +285,87 @@ export function createContextMenuManager(appContext) {
       });
     } catch (err) {
       console.error('准备重新生成消息时出错:', err);
+    } finally {
+      hideContextMenu();
+    }
+  }
+
+  /**
+   * 在“当前右键选中的消息”下方插入一条空白消息（Shift+右键的隐藏功能）。
+   *
+   * 设计说明：
+   * - UI 插入位置以 DOM 为准：插入到 currentMessageElement 的下方（也就是其后第一条 .message 之前）；
+   * - 历史插入以 messageId 为准：使用 chatHistoryManager.insertMessageAfter() 同步维护 parentId/children，
+   *   并把新节点插入到 messages 数组的正确位置，保证保存/重载后顺序一致。
+   *
+   * @param {'ai'|'user'} sender
+   */
+  async function insertBlankMessageBelow(sender) {
+    try {
+      if (!currentMessageElement) return;
+      const afterMessageId = currentMessageElement.getAttribute('data-message-id') || '';
+      if (!afterMessageId) return;
+      if (!chatHistoryManager || typeof chatHistoryManager.insertMessageAfter !== 'function') {
+        console.warn('insertMessageAfter 不存在，无法插入消息');
+        return;
+      }
+      if (!messageProcessor || typeof messageProcessor.appendMessage !== 'function') {
+        console.warn('messageProcessor.appendMessage 不存在，无法插入消息');
+        return;
+      }
+
+      // 找到“当前消息下方”的那条消息（如果存在），用于精确插入位置
+      const findNextMessageElement = (el) => {
+        let next = el ? el.nextElementSibling : null;
+        while (next && !(next.classList && next.classList.contains('message'))) {
+          next = next.nextElementSibling;
+        }
+        return next;
+      };
+
+      const nextMessageElement = findNextMessageElement(currentMessageElement);
+      const nextMessageId = nextMessageElement
+        ? (nextMessageElement.getAttribute('data-message-id') || null)
+        : null;
+
+      // 1) 先插入到历史结构中（生成新 messageId）
+      const role = (sender === 'ai') ? 'assistant' : 'user';
+      const newNode = chatHistoryManager.insertMessageAfter(
+        afterMessageId,
+        role,
+        '',
+        { nextMessageId }
+      );
+      if (!newNode || !newNode.id) return;
+
+      // 2) 构建消息 DOM（跳过历史写入），再移动到目标位置
+      const newMessageDiv = messageProcessor.appendMessage('', sender, true);
+      if (!newMessageDiv) return;
+      newMessageDiv.setAttribute('data-message-id', newNode.id);
+
+      // AI 消息：补一个空的 api-footer，保证样式稳定（与普通 AI 消息一致）
+      if (sender === 'ai') {
+        const footer = newMessageDiv.querySelector('.api-footer');
+        if (!footer) {
+          const apiFooter = document.createElement('div');
+          apiFooter.className = 'api-footer';
+          newMessageDiv.appendChild(apiFooter);
+        }
+      }
+
+      // 将新消息插到“当前消息的下方”
+      if (nextMessageElement && nextMessageElement.parentNode === chatContainer) {
+        chatContainer.insertBefore(newMessageDiv, nextMessageElement);
+      } else {
+        // 没有下一条消息：插到末尾（appendMessage 已经 append 到末尾，这里确保位置正确即可）
+        if (newMessageDiv.parentNode !== chatContainer) {
+          chatContainer.appendChild(newMessageDiv);
+        }
+      }
+
+      await chatHistoryUI.saveCurrentConversation(true);
+    } catch (e) {
+      console.error('插入空白消息失败:', e);
     } finally {
       hideContextMenu();
     }
@@ -420,8 +515,11 @@ export function createContextMenuManager(appContext) {
       // 检查是否有文本被选中
       const selectedText = window.getSelection().toString();
       
-      // 如果有选中文本或按住了Ctrl、Shift或Alt键，则显示默认菜单
-      if (selectedText || e.ctrlKey || e.shiftKey || e.altKey) {
+      // 说明：
+      // - 有选中文本时，优先保留浏览器默认菜单（复制/查找等）；
+      // - Ctrl/Alt 作为“强制默认菜单”的快捷方式；
+      // - Shift 则被用作“高级右键菜单”（显示隐藏选项）。
+      if (selectedText || e.ctrlKey || e.altKey) {
         return;
       }
       
@@ -455,6 +553,14 @@ export function createContextMenuManager(appContext) {
       }
     });
     regenerateButton.addEventListener('click', regenerateMessage);
+
+    // Shift+右键显示的隐藏菜单项：在此处插入消息（AI / 用户）
+    if (insertAiMessageButton) {
+      insertAiMessageButton.addEventListener('click', () => insertBlankMessageBelow('ai'));
+    }
+    if (insertUserMessageButton) {
+      insertUserMessageButton.addEventListener('click', () => insertBlankMessageBelow('user'));
+    }
     clearChatContextButton.addEventListener('click', async () => {
       await clearChatHistory();
       hideContextMenu();

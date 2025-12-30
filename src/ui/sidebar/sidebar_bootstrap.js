@@ -19,8 +19,22 @@ import { applyStandaloneAdjustments } from './sidebar_app_context.js';
  * @returns {Promise<void>} 初始化完成。
  */
 export async function initializeSidebarServices(appContext) {
-  const { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage } = createChatHistoryManager(appContext);
-  appContext.services.chatHistoryManager = { chatHistory, addMessageToTree, getCurrentConversationChain, clearHistory, deleteMessage };
+  const {
+    chatHistory,
+    addMessageToTree,
+    getCurrentConversationChain,
+    clearHistory,
+    deleteMessage,
+    insertMessageAfter
+  } = createChatHistoryManager(appContext);
+  appContext.services.chatHistoryManager = {
+    chatHistory,
+    addMessageToTree,
+    getCurrentConversationChain,
+    clearHistory,
+    deleteMessage,
+    insertMessageAfter
+  };
 
   appContext.services.promptSettingsManager = new PromptSettings(appContext);
   appContext.services.settingsManager = createSettingsManager(appContext);
