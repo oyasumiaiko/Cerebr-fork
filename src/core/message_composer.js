@@ -92,12 +92,15 @@ export function composeMessages(args) {
     const thoughtSignature = node?.thoughtSignature || null;
     const thoughtSignatureSource = node?.thoughtSignatureSource || null;
     const hasThoughtSignature = (typeof thoughtSignature === 'string') && !!thoughtSignature;
+    const apiModelId = (typeof node?.apiModelId === 'string' && node.apiModelId.trim()) ? node.apiModelId.trim() : null;
 
     const msg = {
       role,
       content: sanitizeContentForSend(node?.content),
       thoughtSignature,
-      thoughtSignatureSource
+      thoughtSignatureSource,
+      // 记录该条历史消息生成时的模型ID快照，供下游决定是否可回传 signature（避免跨模型导致校验失败）。
+      apiModelId
     };
 
     if (role === 'assistant' && thoughtSignatureSource === 'openai') {

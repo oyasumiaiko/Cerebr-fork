@@ -36,9 +36,12 @@ export function createApiManager(appContext) {
 
   const {
     dom,
-    // services, // services.uiManager can be used for closeExclusivePanels
+    services,
     utils // utils.closeExclusivePanels (which might call uiManager internally)
   } = appContext;
+
+  // Settings manager（用于读取“是否发送 signature”等全局开关）
+  const settingsManager = services?.settingsManager;
 
   const apiSettingsPanel = dom.apiSettingsPanel; // Use renamed dom property
   const apiCardsContainer = dom.apiCardsContainer;
@@ -1135,6 +1138,57 @@ export function createApiManager(appContext) {
     return null;
   }
 
+  function normalizeModelIdForSignatureMatch(value) {
+    return (typeof value === 'string') ? value.trim().toLowerCase() : '';
+  }
+
+  function detectModelFamily(modelId) {
+    const id = normalizeModelIdForSignatureMatch(modelId);
+    if (!id) return '';
+    if (id.includes('claude')) return 'claude';
+    if (id.includes('gemini')) return 'gemini';
+    return '';
+  }
+
+  /**
+   * 判断“某条历史消息上的 signature”是否允许回传到当前请求的模型。
+   *
+   * 背景（线上报错示例）：
+   * - 不同模型/不同供应商的 thought signature 不可互传；
+   * - 误回传时上游可能返回 400：Corrupted thought signature / signature required；
+   *
+   * 规则（按用户诉求做“每条消息单独判断”）：
+   * - 若双方模型名都包含 claude，则认为同族，可回传；
+   * - 若双方模型名都包含 gemini，则认为同族，可回传；
+   * - 其他情况：仅当模型 id 完全一致时才回传；
+   * - 若缺少任一侧模型 id，则保守不回传（避免误发触发校验失败）。
+   *
+   * @param {string|null|undefined} messageModelId 历史消息记录的模型ID（apiModelId）
+   * @param {string|null|undefined} currentModelId 当前请求使用的模型ID（config.modelName）
+   * @returns {boolean}
+   */
+  function isSignatureCompatibleWithModel(messageModelId, currentModelId) {
+    const msgId = normalizeModelIdForSignatureMatch(messageModelId);
+    const curId = normalizeModelIdForSignatureMatch(currentModelId);
+    if (!msgId || !curId) return false;
+
+    const msgFamily = detectModelFamily(msgId);
+    const curFamily = detectModelFamily(curId);
+    if (msgFamily && curFamily) {
+      return msgFamily === curFamily;
+    }
+    return msgId === curId;
+  }
+
+  function getShouldSendSignatureSetting() {
+    try {
+      const value = settingsManager?.getSetting?.('shouldSendSignature');
+      if (typeof value === 'boolean') return value;
+    } catch (_) {}
+    // 默认开启：保持与历史行为兼容（Gemini Thought Signature 以及 OpenAI 兼容签名都可用）
+    return true;
+  }
+
   /**
    * 构建 API 请求
    * @param {Object} options - 请求选项
@@ -1146,6 +1200,8 @@ export function createApiManager(appContext) {
   async function buildRequest({ messages, config, overrides = {} }) {
     // 构造请求基本结构
     let requestBody = {};
+    // 全局开关：是否发送 signature（无论是否发送，接收端解析到 signature 仍会照常存入历史）
+    const shouldSendSignature = getShouldSendSignatureSetting();
 
     // 复制并规范化消息，按需注入“自定义提示词”至系统提示词最顶端
     //
@@ -1203,17 +1259,20 @@ export function createApiManager(appContext) {
         // - 只在模型消息（assistant/model）上回传，以符合官方文档建议；
         // - 读取历史消息上记录的 Thought Signature，兼容下划线与驼峰命名；
         // - 重要：若该签名来自 OpenAI 兼容接口（thoughtSignatureSource==='openai'），则不能发给 Gemini。
-        const thoughtSignature =
-          (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
-          (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
-          null;
-        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
-        const canSendGeminiSignature = (thoughtSignatureSource !== 'openai');
-        if (canSendGeminiSignature && thoughtSignature && parts.length > 0 && (msg.role === 'assistant' || role === 'model')) {
-          const lastPart = parts[parts.length - 1];
-          if (lastPart && typeof lastPart === 'object') {
-            // 文档中非函数调用场景为 Part-level 字段 thought_signature
-            lastPart.thought_signature = thoughtSignature;
+	        const thoughtSignature =
+	          (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
+	          (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
+	          null;
+	        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
+	        const canSendGeminiSignature =
+	          shouldSendSignature &&
+	          (thoughtSignatureSource !== 'openai') &&
+	          isSignatureCompatibleWithModel(msg.apiModelId, config?.modelName);
+	        if (canSendGeminiSignature && thoughtSignature && parts.length > 0 && (msg.role === 'assistant' || role === 'model')) {
+	          const lastPart = parts[parts.length - 1];
+	          if (lastPart && typeof lastPart === 'object') {
+	            // 文档中非函数调用场景为 Part-level 字段 thought_signature
+	            lastPart.thought_signature = thoughtSignature;
             // 同时写入驼峰形式以兼容可能的服务端实现
             lastPart.thoughtSignature = thoughtSignature;
           }
@@ -1292,20 +1351,42 @@ export function createApiManager(appContext) {
       }
 
     } else {
-      // 其他 API (如 OpenAI) 请求格式
-      // 仅保留 OpenAI 兼容字段，并将本地/相对图片转回可发送的 dataURL
-      const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
-        const base = { role: msg.role };
-        if (msg.name) base.name = msg.name;
-        if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
-        if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-          base.tool_calls = msg.tool_calls;
-        }
+	      // 其他 API (如 OpenAI) 请求格式
+	      // 仅保留 OpenAI 兼容字段，并将本地/相对图片转回可发送的 dataURL
+	      const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
+	        const base = { role: msg.role };
+	        if (msg.name) base.name = msg.name;
+	        if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
 
-        // OpenAI 兼容：推理签名透传（可选）
-        // 仅在 thoughtSignatureSource==='openai' 时回传，避免把 Gemini 的签名/字段发给 OpenAI 接口。
-        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
-	        if (thoughtSignatureSource === 'openai' && msg.role === 'assistant') {
+	        // OpenAI 兼容：对每条历史消息单独判断是否允许回传 signature（避免跨模型导致 Corrupted thought signature）
+	        // 仅在 thoughtSignatureSource==='openai' 时才考虑回传，避免把 Gemini 的签名/字段发给 OpenAI 接口。
+	        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
+	        const isAssistant = msg.role === 'assistant';
+	        const canSendOpenAISignature =
+	          shouldSendSignature &&
+	          thoughtSignatureSource === 'openai' &&
+	          isAssistant &&
+	          isSignatureCompatibleWithModel(msg.apiModelId, config?.modelName);
+
+	        // tool_calls：如果该片段带签名但当前不允许回传，则整个 tool_calls 片段都不发送（遵循“不要回传带签名的 tool 片段”原则）
+	        const rawToolCalls = (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ? msg.tool_calls : null;
+	        if (rawToolCalls) {
+	          const toolCallsHasSignature = rawToolCalls.some((tc) => {
+	            if (!tc || typeof tc !== 'object') return false;
+	            const ts = (typeof tc.thoughtSignature === 'string' && tc.thoughtSignature) ||
+	              (typeof tc.thought_signature === 'string' && tc.thought_signature) ||
+	              null;
+	            return !!ts;
+	          });
+	          if (!toolCallsHasSignature) {
+	            base.tool_calls = rawToolCalls;
+	          } else if (canSendOpenAISignature) {
+	            base.tool_calls = rawToolCalls;
+	          }
+	        }
+
+	        // message-level thoughtSignature（对应 reasoning_content 的签名）
+	        if (canSendOpenAISignature) {
 	          const thoughtSignature =
 	            (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
 	            (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
@@ -1321,10 +1402,10 @@ export function createApiManager(appContext) {
 	            }
 	          }
 	        }
-
-        if (Array.isArray(msg.content)) {
-          const parts = [];
-          for (const item of msg.content) {
+	
+	        if (Array.isArray(msg.content)) {
+	          const parts = [];
+	          for (const item of msg.content) {
             if (item.type === 'text') {
               parts.push({ type: 'text', text: item.text });
             } else if (item.type === 'image_url' && item.image_url) {

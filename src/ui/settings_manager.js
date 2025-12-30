@@ -87,6 +87,9 @@ export function createSettingsManager(appContext) {
     autoScroll: true,
     clearOnSearch: true, // This might be specific to a search feature, not a general setting
     shouldSendChatHistory: true,
+    // 是否在发送请求时回传 thoughtSignature 等签名字段（用于部分代理的推理校验/连续性）。
+    // 说明：即使关闭该开关，Cerebr 仍会在接收响应时照常把 signature 存入历史，便于用户随时重新开启。
+    shouldSendSignature: true,
     autoRetry: false,
     showReference: true,
     sidebarPosition: 'right', // 'left' 或 'right'
@@ -194,6 +197,14 @@ export function createSettingsManager(appContext) {
       label: '发送聊天历史',
       defaultValue: DEFAULT_SETTINGS.shouldSendChatHistory,
       apply: (v) => applySendChatHistory(v)
+    },
+    // 发送 signature（推理签名透传）
+    {
+      key: 'shouldSendSignature',
+      type: 'toggle',
+      id: 'send-signature-switch',
+      label: '发送 signature（推理签名）',
+      defaultValue: DEFAULT_SETTINGS.shouldSendSignature
     },
     {
       key: 'autoRetry',
