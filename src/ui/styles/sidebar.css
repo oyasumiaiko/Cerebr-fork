@@ -4664,11 +4664,21 @@ html.fullscreen-mode::before {
 }
 
 /* 全屏模式下的设置面板宽度限制 */
-.fullscreen-mode #settings-menu,
 .fullscreen-mode #prompt-settings,
 .fullscreen-mode #api-settings {
-  /* max-width: 1000px; */
-  /* margin: 0 auto; */
+  /* 说明：
+     - 全屏布局的“主消息列”由 --cerebr-fullscreen-width 控制；
+     - #api-settings / #prompt-settings 在嵌入侧栏里本来就不会太宽，但在全屏/独立页面里会铺满整屏；
+     - 这里沿用 #chat-container / #input-container 的做法：面板仍占满宽度（便于滚动与遮罩），
+       但通过左右 padding 把“内容列”限制到与消息区一致的宽度。 */
+  padding-left: max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2));
+  padding-right: max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2));
+}
+
+/* 全屏模式下的聊天记录面板：跟随主消息列宽度，避免与消息区宽度不一致 */
+.fullscreen-mode #chat-history-panel {
+  width: min(var(--cerebr-fullscreen-width), calc(100vw - 30px));
+  max-width: none;
 }
 
 /* 全屏模式下的聊天历史宽度限制 */
