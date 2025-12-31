@@ -771,6 +771,122 @@ export async function getConversationById(conversationId, loadFullContent = true
 }
 
 /**
+ * 批量按 id 读取会话记录，可选择是否加载完整消息内容。
+ *
+ * 性能说明：
+ * - 全文搜索会短时间内读取大量会话；若逐条调用 getConversationById，会产生大量 transaction 开销；
+ * - 这里用“一次 transaction + 多个 store.get”来批量读取，显著减少事务次数。
+ *
+ * 注意：
+ * - 返回数组会尽量保持与入参 ids 的顺序一致（缺失项返回 null 并在最终结果中过滤掉）。
+ * - loadFullContent=true 时会再开一个 messageContents 事务解引用 contentRef（与 getConversationById 一致）。
+ *
+ * @param {string[]} ids - 会话 id 列表
+ * @param {boolean} [loadFullContent=true] - 是否加载完整消息内容
+ * @returns {Promise<Array<Object>>} 会话对象数组（不包含 null）
+ */
+export async function getConversationsByIds(ids, loadFullContent = true) {
+  const idList = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (idList.length === 0) return [];
+
+  const db = await openChatHistoryDB();
+
+  // 1) 批量读取 conversations
+  const conversations = await new Promise((resolve) => {
+    try {
+      const transaction = db.transaction('conversations', 'readonly');
+      const store = transaction.objectStore('conversations');
+
+      const tasks = idList.map((id) => new Promise((taskResolve) => {
+        try {
+          const request = store.get(id);
+          request.onsuccess = () => taskResolve(request.result || null);
+          request.onerror = () => taskResolve(null);
+        } catch (_) {
+          taskResolve(null);
+        }
+      }));
+
+      Promise.all(tasks)
+        .then(resolve)
+        .catch(() => resolve([]));
+    } catch (_) {
+      resolve([]);
+    }
+  });
+
+  const results = Array.isArray(conversations) ? conversations.filter(Boolean) : [];
+  if (!loadFullContent || results.length === 0) return results;
+
+  // 2) 需要完整内容：批量解引用 messageContents（复用 attachContentToMessage 的逻辑）
+  try {
+    const transaction = db.transaction('messageContents', 'readonly');
+    const contentStore = transaction.objectStore('messageContents');
+    for (const conversation of results) {
+      if (!conversation?.messages || !Array.isArray(conversation.messages)) continue;
+      for (let i = 0; i < conversation.messages.length; i++) {
+        const msg = conversation.messages[i];
+        if (msg?.contentRef) {
+          conversation.messages[i] = await attachContentToMessage(msg, contentStore);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('批量加载会话完整内容失败，将返回未解引用的 messages:', error);
+  }
+
+  return results;
+}
+
+/**
+ * 批量按 contentRefId 读取 messageContents.content。
+ *
+ * 主要用于“全文搜索”在需要检查 contentRef（图片/多模态消息）时，减少多次事务开销。
+ *
+ * @param {string[]} contentRefIds
+ * @returns {Promise<Map<string, any>>} Map: contentRefId -> content
+ */
+export async function loadMessageContentsByIds(contentRefIds) {
+  const idList = Array.isArray(contentRefIds) ? contentRefIds.filter(Boolean) : [];
+  if (idList.length === 0) return new Map();
+
+  const db = await openChatHistoryDB();
+  const results = await new Promise((resolve) => {
+    try {
+      const transaction = db.transaction('messageContents', 'readonly');
+      const store = transaction.objectStore('messageContents');
+
+      const tasks = idList.map((id) => new Promise((taskResolve) => {
+        try {
+          const request = store.get(id);
+          request.onsuccess = () => taskResolve({ id, record: request.result || null });
+          request.onerror = () => taskResolve({ id, record: null });
+        } catch (_) {
+          taskResolve({ id, record: null });
+        }
+      }));
+
+      Promise.all(tasks)
+        .then(resolve)
+        .catch(() => resolve([]));
+    } catch (_) {
+      resolve([]);
+    }
+  });
+
+  const map = new Map();
+  const list = Array.isArray(results) ? results : [];
+  for (const item of list) {
+    const id = item?.id;
+    const content = item?.record?.content;
+    if (typeof id !== 'string' || !id) continue;
+    if (content === undefined) continue;
+    map.set(id, content);
+  }
+  return map;
+}
+
+/**
  * 加载指定消息的内容
  * @param {string} contentRefId - 内容引用ID
  * @returns {Promise<any>} 消息内容

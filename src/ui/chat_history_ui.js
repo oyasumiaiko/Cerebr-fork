@@ -12,7 +12,9 @@ import {
   putConversation, 
   deleteConversation, 
   getConversationById,
+  getConversationsByIds,
   loadMessageContent,
+  loadMessageContentsByIds,
   getDatabaseStats,
   purgeOrphanMessageContents
 } from '../storage/indexeddb_helper.js';
@@ -501,6 +503,113 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 创建“全文搜索取消检查器”。
+   *
+   * 说明：
+   * - 搜索是长任务；用户每次输入都会触发新一轮 runId；
+   * - 旧任务必须尽快退出，否则会造成无谓的 IndexedDB 读取与 UI 抖动。
+   *
+   * @param {HTMLElement} panel
+   * @param {string} runId
+   * @returns {() => boolean} 返回 true 表示本轮任务已取消
+   */
+  function createSearchCancelledChecker(panel, runId) {
+    return () => panel?.dataset?.runId !== runId;
+  }
+
+  /**
+   * 全文搜索（阶段1）：仅扫描 conversations 记录内联 messages 的文本内容。
+   *
+   * 返回值约定：
+   * - matched=true：matchInfo 已包含 excerpts，可直接使用；
+   * - matched=false：若 pendingContentRefs 非空，则说明需要进一步解引用 messageContents 才能保证搜索正确性。
+   *
+   * @param {Object} conversation
+   * @param {string} filterText
+   * @param {string} lowerFilter
+   * @param {() => boolean} isCancelled
+   * @returns {{ cancelled: boolean, matched: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string}, pendingContentRefs: Array<{messageId:string|null, contentRef:string}> }}
+   */
+  function scanConversationInlineMessagesForMatch(conversation, filterText, lowerFilter, isCancelled) {
+    const empty = { cancelled: false, matched: false, matchInfo: { messageId: null, excerpts: [], reason: 'message' }, pendingContentRefs: [] };
+    if (!conversation || !Array.isArray(conversation.messages)) return empty;
+
+    const matchInfo = { messageId: null, excerpts: [], reason: 'message' };
+    const MAX_EXCERPTS = 20;
+    const pendingContentRefs = [];
+    let matched = false;
+
+    for (const message of conversation.messages) {
+      if (isCancelled()) return { ...empty, cancelled: true };
+      if (!message) continue;
+
+      const plainText = extractMessagePlainText(message);
+      if (plainText) {
+        if (plainText.toLowerCase().includes(lowerFilter)) {
+          matched = true;
+          if (!matchInfo.messageId && message.id) matchInfo.messageId = message.id;
+          if (matchInfo.excerpts.length < MAX_EXCERPTS) {
+            const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
+            if (excerpt) matchInfo.excerpts.push(excerpt);
+          }
+          if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
+        }
+        continue;
+      }
+
+      // contentRef：大型内容（例如图片消息）会被单独存入 messageContents。
+      if (message.contentRef) {
+        pendingContentRefs.push({ messageId: message.id || null, contentRef: message.contentRef });
+      }
+    }
+
+    return { cancelled: false, matched, matchInfo, pendingContentRefs };
+  }
+
+  /**
+   * 全文搜索（阶段2）：对 pendingContentRefs 执行解引用并扫描文本。
+   *
+   * 注意：该函数不做“是否需要扫描”的判断；调用方应当只在阶段1未命中时调用。
+   *
+   * @param {Array<{messageId:string|null, contentRef:string}>} pendingContentRefs
+   * @param {Map<string, any>} contentMap - contentRefId -> content
+   * @param {string} filterText
+   * @param {string} lowerFilter
+   * @param {() => boolean} isCancelled
+   * @param {{messageId:string|null, excerpts:Array<Object>, reason:string}} matchInfo - 会被原地追加 excerpts/messageId
+   * @returns {{ cancelled: boolean, matched: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string} }}
+   */
+  function scanConversationContentRefsForMatch(pendingContentRefs, contentMap, filterText, lowerFilter, isCancelled, matchInfo) {
+    const MAX_EXCERPTS = 20;
+    const refs = Array.isArray(pendingContentRefs) ? pendingContentRefs : [];
+    const map = contentMap instanceof Map ? contentMap : new Map();
+    const info = matchInfo && typeof matchInfo === 'object' ? matchInfo : { messageId: null, excerpts: [], reason: 'message' };
+
+    let matched = false;
+    for (const ref of refs) {
+      if (isCancelled()) return { cancelled: true, matched: false, matchInfo: info };
+      if (!ref?.contentRef) continue;
+
+      const content = map.get(ref.contentRef);
+      if (content == null) continue;
+
+      const plainText = extractPlainTextFromMessageContent(content);
+      if (!plainText) continue;
+      if (!plainText.toLowerCase().includes(lowerFilter)) continue;
+
+      matched = true;
+      if (!info.messageId && ref.messageId) info.messageId = ref.messageId;
+      if (info.excerpts.length < MAX_EXCERPTS) {
+        const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
+        if (excerpt) info.excerpts.push(excerpt);
+      }
+      if (info.excerpts.length >= MAX_EXCERPTS) break;
+    }
+
+    return { cancelled: false, matched, matchInfo: info };
+  }
+
+  /**
    * 全文搜索：按需从 IndexedDB 读取会话并扫描消息内容，返回匹配信息。
    *
    * 设计目标（关键性能点）：
@@ -528,67 +637,30 @@ export function createChatHistoryUI(appContext) {
     }
 
     if (!conversation || !Array.isArray(conversation.messages)) return null;
-    if (panel?.dataset?.runId !== runId) return null;
+    const isCancelled = createSearchCancelledChecker(panel, runId);
+    if (isCancelled()) return null;
 
-    const matchInfo = { messageId: null, excerpts: [], reason: 'message' };
-    const MAX_EXCERPTS = 20;
-    let matched = false;
+    // 阶段1：扫描 conversations 记录内的消息文本（不解引用 contentRef）
+    const inlineScan = scanConversationInlineMessagesForMatch(conversation, filterText, lowerFilter, isCancelled);
+    if (inlineScan.cancelled) return null;
+    if (inlineScan.matched) return inlineScan.matchInfo;
 
-    // 先扫描“直接存在于 conversations 记录内”的文本（绝大多数对话都会命中这里）。
-    const pendingContentRefs = [];
-    for (const message of conversation.messages) {
-      if (panel?.dataset?.runId !== runId) return null;
-      if (!message) continue;
+    // 阶段2：仅在阶段1未命中时，按需解引用 contentRef（批量读取，避免多次事务）
+    const pendingRefs = Array.isArray(inlineScan.pendingContentRefs) ? inlineScan.pendingContentRefs : [];
+    if (pendingRefs.length === 0) return null;
 
-      const plainText = extractMessagePlainText(message);
-      if (plainText) {
-        if (plainText.toLowerCase().includes(lowerFilter)) {
-          matched = true;
-          if (!matchInfo.messageId && message.id) matchInfo.messageId = message.id;
-          if (matchInfo.excerpts.length < MAX_EXCERPTS) {
-            const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
-            if (excerpt) matchInfo.excerpts.push(excerpt);
-          }
-          if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
-        }
-        continue;
-      }
-
-      // contentRef：大型内容（例如图片消息）会被单独存入 messageContents。
-      if (message.contentRef) {
-        pendingContentRefs.push({ messageId: message.id || null, contentRef: message.contentRef });
-      }
+    const contentRefIds = pendingRefs.map((r) => r?.contentRef).filter(Boolean);
+    let contentMap = new Map();
+    try {
+      contentMap = await loadMessageContentsByIds(contentRefIds);
+    } catch (_) {
+      // contentRef 缺失/读取失败时不阻断整个搜索流程，直接按“未命中”处理。
+      contentMap = new Map();
     }
 
-    // 只有在“内联文本没有命中”的情况下，才按需解引用 contentRef。
-    if (!matched && pendingContentRefs.length > 0) {
-      for (const ref of pendingContentRefs) {
-        if (panel?.dataset?.runId !== runId) return null;
-        if (!ref?.contentRef) continue;
-
-        let content = null;
-        try {
-          content = await loadMessageContent(ref.contentRef);
-        } catch (_) {
-          // contentRef 缺失时不阻断整个搜索流程，直接跳过。
-          continue;
-        }
-
-        const plainText = extractPlainTextFromMessageContent(content);
-        if (!plainText) continue;
-        if (!plainText.toLowerCase().includes(lowerFilter)) continue;
-
-        matched = true;
-        if (!matchInfo.messageId && ref.messageId) matchInfo.messageId = ref.messageId;
-        if (matchInfo.excerpts.length < MAX_EXCERPTS) {
-          const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
-          if (excerpt) matchInfo.excerpts.push(excerpt);
-        }
-        if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
-      }
-    }
-
-    return matched ? matchInfo : null;
+    const refScan = scanConversationContentRefsForMatch(pendingRefs, contentMap, filterText, lowerFilter, isCancelled, inlineScan.matchInfo);
+    if (refScan.cancelled) return null;
+    return refScan.matched ? refScan.matchInfo : null;
   }
 
   function buildExcerptSegments(sourceText, filterText, lowerFilter, contextLength = 32) {
@@ -1752,102 +1824,248 @@ export function createChatHistoryUI(appContext) {
             scannedCount: meta.scannedCount,
             reused: true
           });
-        } else {
-          removeSearchSummary(panel);
-          const lowerFilter = normalizedFilter;
-          const searchStartTime = performance.now();
-          const matchedEntries = [];
-          const matchInfoMap = new Map();
-          const totalItems = allHistoriesMeta.length;
-          let nextIndex = 0;
-          let processedCount = 0;
-          let lastProgressUpdate = 0;
-          let cancelled = false;
+	        } else {
+	          removeSearchSummary(panel);
+	          const lowerFilter = normalizedFilter;
+	          const searchStartTime = performance.now();
+	          const matchedEntries = [];
+	          const matchInfoMap = new Map();
+	          // 连续输入优化：若本次查询是“上次查询的前缀扩展”，则只需要在上次结果集合里继续筛即可。
+	          // 典型场景：用户从 "http" 继续输入到 "https://..."，无需每次都从全量会话重扫。
+	          const previousNormalized = (typeof searchCache?.normalized === 'string') ? searchCache.normalized : '';
+	          const canReusePrefixCache = (
+	            !!previousNormalized &&
+	            previousNormalized !== normalizedFilter &&
+	            normalizedFilter.startsWith(previousNormalized) &&
+	            Array.isArray(searchCache?.results)
+	          );
 
-          // 在列表容器顶部插入搜索进度指示器
-          const searchProgressIndicator = upsertSearchProgressIndicator();
+	          const candidateMetas = canReusePrefixCache ? searchCache.results.slice() : allHistoriesMeta;
+	          const totalItems = candidateMetas.length;
+	          let nextIndex = 0;
+	          let processedCount = 0;
+	          let lastProgressUpdate = 0;
+	          let cancelled = false;
 
-          const PROGRESS_UPDATE_INTERVAL = 10;
-          const CONCURRENCY = Math.min(6, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-          let lastYieldTime = performance.now();
+	          // 在列表容器顶部插入搜索进度指示器
+	          const searchProgressIndicator = upsertSearchProgressIndicator();
 
-          const updateProgress = (force = false) => {
-            if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
-            lastProgressUpdate = processedCount;
-            const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
-            const matchCount = matchedEntries.length;
-            searchProgressIndicator.innerHTML = `
-              <div class="search-progress">
-                <div class="search-progress-text">
-                  正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''})
-                </div>
-                <div class="search-progress-bar">
-                  <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
-                </div>
-              </div>
-            `;
-          };
+	          const PROGRESS_UPDATE_INTERVAL = 10;
+	          // 批量读取会话后，每个 worker 的“单次工作量”更大；并发过高反而可能造成 IndexedDB 竞争与 UI 抖动。
+	          const CONCURRENCY = Math.min(4, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
+	          const SEARCH_SCAN_BATCH_SIZE = 12;
+	          let lastYieldTime = performance.now();
+	          const isCancelled = createSearchCancelledChecker(panel, runId);
 
-          updateProgress(true);
+	          const updateProgress = (force = false) => {
+	            if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
+	            lastProgressUpdate = processedCount;
+	            const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
+	            const matchCount = matchedEntries.length;
+	            const reuseHint = canReusePrefixCache ? ' · 候选池来自缓存' : '';
+	            searchProgressIndicator.innerHTML = `
+	              <div class="search-progress">
+	                <div class="search-progress-text">
+	                  正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''}${reuseHint})
+	                </div>
+	                <div class="search-progress-bar">
+	                  <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
+	                </div>
+	              </div>
+	            `;
+	          };
 
-          const workers = Array.from({ length: CONCURRENCY }).map(async () => {
-            while (true) {
-              const currentIndex = nextIndex++;
-              if (currentIndex >= totalItems || cancelled) break;
+	          updateProgress(true);
 
-              if (panel.dataset.runId !== runId) {
-                cancelled = true;
-                break;
-              }
+	          const workers = Array.from({ length: CONCURRENCY }).map(async () => {
+	            while (true) {
+	              const batchStart = nextIndex;
+	              nextIndex += SEARCH_SCAN_BATCH_SIZE;
+	              if (batchStart >= totalItems || cancelled) break;
 
-              const historyMeta = allHistoriesMeta[currentIndex];
-              const url = (historyMeta.url || '').toLowerCase();
-              const summary = (historyMeta.summary || '').toLowerCase();
-              const title = (historyMeta.title || '').toLowerCase();
-              let matched = false;
+	              if (isCancelled()) {
+	                cancelled = true;
+	                break;
+	              }
 
-              if (url.includes(lowerFilter) || summary.includes(lowerFilter) || title.includes(lowerFilter)) {
-                matchedEntries.push({ index: currentIndex, data: historyMeta });
-                matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
-                matched = true;
-              }
+	              const batchEnd = Math.min(totalItems, batchStart + SEARCH_SCAN_BATCH_SIZE);
+	              const batchMetas = candidateMetas.slice(batchStart, batchEnd);
+	              const batchToScan = [];
 
-              if (!matched) {
-                try {
-                  const matchInfo = await scanConversationForTextMatch(historyMeta.id, filterText, lowerFilter, panel, runId);
-                  if (panel.dataset.runId !== runId) {
-                    cancelled = true;
-                    break;
-                  }
-                  if (matchInfo) {
-                    matchInfoMap.set(historyMeta.id, matchInfo);
-                    // 重要：搜索结果只返回“元数据”，不要把完整 messages 放进结果数组/缓存，避免内存暴涨。
-                    matchedEntries.push({ index: currentIndex, data: historyMeta });
-                  }
-                } catch (error) {
-                  console.error(`搜索会话 ${historyMeta.id} 失败:`, error);
-                }
-              }
+	              // 1) 先在“元数据字段”上做快速命中（无需读 messages）
+	              for (let offset = 0; offset < batchMetas.length; offset++) {
+	                const historyMeta = batchMetas[offset];
+	                if (!historyMeta?.id) {
+	                  processedCount++;
+	                  updateProgress();
+	                  continue;
+	                }
+	                if (isCancelled()) {
+	                  cancelled = true;
+	                  break;
+	                }
 
-              processedCount++;
-              updateProgress();
+	                const url = (historyMeta.url || '').toLowerCase();
+	                const summary = (historyMeta.summary || '').toLowerCase();
+	                const title = (historyMeta.title || '').toLowerCase();
+	                const metaMatched = url.includes(lowerFilter) || summary.includes(lowerFilter) || title.includes(lowerFilter);
 
-              // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
-              // 注意：不必每条都 setTimeout(0)，否则会明显拖慢搜索；这里按时间片让出即可。
-              const now = performance.now();
-              if (now - lastYieldTime >= 16) {
-                lastYieldTime = now;
-                await new Promise(resolve => setTimeout(resolve, 0));
-              }
-            }
-          });
+	                if (metaMatched) {
+	                  matchedEntries.push({ index: batchStart + offset, data: historyMeta });
+	                  matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
+	                  processedCount++;
+	                  updateProgress();
+	                } else {
+	                  batchToScan.push({ index: batchStart + offset, meta: historyMeta });
+	                }
+	              }
 
-          await Promise.all(workers);
+	              if (cancelled) break;
 
-          if (panel.dataset.runId !== runId || cancelled) {
-            if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-            return;
-          }
+	              // 2) 未命中元数据的条目：批量读取会话并扫描 messages（减少 transaction 次数）
+	              if (batchToScan.length > 0) {
+	                const idsToLoad = batchToScan.map((item) => item.meta.id).filter(Boolean);
+	                let conversations = [];
+	                try {
+	                  conversations = await getConversationsByIds(idsToLoad, false);
+	                } catch (error) {
+	                  console.error('批量加载会话失败（全文搜索）:', error);
+	                  conversations = [];
+	                }
+
+	                if (isCancelled()) {
+	                  cancelled = true;
+	                  break;
+	                }
+
+	                const conversationById = new Map();
+	                for (const conv of conversations) {
+	                  if (conv?.id) conversationById.set(conv.id, conv);
+	                }
+
+	                // 2.1 先扫内联 messages；必要时收集 contentRef，后续批量解引用
+	                const pendingRefByConversationId = new Map();
+	                const pendingRefIdSet = new Set();
+
+	                for (const item of batchToScan) {
+	                  if (isCancelled()) {
+	                    cancelled = true;
+	                    break;
+	                  }
+
+	                  const conv = conversationById.get(item.meta.id);
+	                  if (!conv || !Array.isArray(conv.messages)) {
+	                    processedCount++;
+	                    updateProgress();
+	                    continue;
+	                  }
+
+	                  const inlineScan = scanConversationInlineMessagesForMatch(conv, filterText, lowerFilter, isCancelled);
+	                  if (inlineScan.cancelled) {
+	                    cancelled = true;
+	                    break;
+	                  }
+
+	                  if (inlineScan.matched) {
+	                    matchInfoMap.set(item.meta.id, inlineScan.matchInfo);
+	                    matchedEntries.push({ index: item.index, data: item.meta });
+	                    processedCount++;
+	                    updateProgress();
+	                  } else if (Array.isArray(inlineScan.pendingContentRefs) && inlineScan.pendingContentRefs.length > 0) {
+	                    pendingRefByConversationId.set(item.meta.id, {
+	                      index: item.index,
+	                      meta: item.meta,
+	                      matchInfo: inlineScan.matchInfo,
+	                      pendingRefs: inlineScan.pendingContentRefs
+	                    });
+	                    inlineScan.pendingContentRefs.forEach((ref) => {
+	                      if (ref?.contentRef) pendingRefIdSet.add(ref.contentRef);
+	                    });
+	                  } else {
+	                    processedCount++;
+	                    updateProgress();
+	                  }
+
+	                  // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
+	                  const now = performance.now();
+	                  if (now - lastYieldTime >= 16) {
+	                    lastYieldTime = now;
+	                    await new Promise(resolve => setTimeout(resolve, 0));
+	                  }
+	                }
+
+	                if (cancelled) break;
+
+	                // 2.2 仍未命中：批量解引用 messageContents 并扫描文本（图片/多模态消息）
+	                if (pendingRefByConversationId.size > 0 && pendingRefIdSet.size > 0) {
+	                  let contentMap = new Map();
+	                  try {
+	                    contentMap = await loadMessageContentsByIds(Array.from(pendingRefIdSet));
+	                  } catch (_) {
+	                    contentMap = new Map();
+	                  }
+
+	                  if (isCancelled()) {
+	                    cancelled = true;
+	                    break;
+	                  }
+
+	                  for (const [conversationId, payload] of pendingRefByConversationId.entries()) {
+	                    if (isCancelled()) {
+	                      cancelled = true;
+	                      break;
+	                    }
+
+	                    const refScan = scanConversationContentRefsForMatch(
+	                      payload.pendingRefs,
+	                      contentMap,
+	                      filterText,
+	                      lowerFilter,
+	                      isCancelled,
+	                      payload.matchInfo
+	                    );
+	                    if (refScan.cancelled) {
+	                      cancelled = true;
+	                      break;
+	                    }
+
+	                    if (refScan.matched) {
+	                      matchInfoMap.set(conversationId, refScan.matchInfo);
+	                      matchedEntries.push({ index: payload.index, data: payload.meta });
+	                    }
+
+	                    processedCount++;
+	                    updateProgress();
+
+	                    const now = performance.now();
+	                    if (now - lastYieldTime >= 16) {
+	                      lastYieldTime = now;
+	                      await new Promise(resolve => setTimeout(resolve, 0));
+	                    }
+	                  }
+	                } else if (pendingRefByConversationId.size > 0) {
+	                  // 无法解引用（极少数异常情况），也要推进进度，避免进度条卡死。
+	                  processedCount += pendingRefByConversationId.size;
+	                  updateProgress(true);
+	                }
+	              }
+
+	              // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
+	              // 注意：不必每条都 setTimeout(0)，否则会明显拖慢搜索；这里按时间片让出即可。
+	              const now = performance.now();
+	              if (now - lastYieldTime >= 16) {
+	                lastYieldTime = now;
+	                await new Promise(resolve => setTimeout(resolve, 0));
+	              }
+	            }
+	          });
+
+	          await Promise.all(workers);
+
+	          if (panel.dataset.runId !== runId || cancelled) {
+	            if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
+	            return;
+	          }
 
           updateProgress(true);
           if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
@@ -1857,33 +2075,33 @@ export function createChatHistoryUI(appContext) {
           const durationMs = performance.now() - searchStartTime;
           const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
           const scannedCount = Math.min(processedCount, totalItems);
-          searchCache = {
-            query: filterText,
-            normalized: normalizedFilter,
-            results: finalResults.slice(),
-            matchMap: matchInfoMap,
-            timestamp: Date.now(),
-            meta: {
-              durationMs,
-              resultCount: finalResults.length,
-              excerptCount,
-              scannedCount
-            }
-          };
-          sourceHistories = searchCache.results.slice();
-          renderSearchSummary(panel, {
-            query: filterText,
-            normalized: normalizedFilter,
-            durationMs,
-            resultCount: finalResults.length,
-            excerptCount,
-            scannedCount,
-            reused: false
-          });
-        }
-      } else {
-        removeSearchSummary(panel);
-        sourceHistories = allHistoriesMeta;
+	          searchCache = {
+	            query: filterText,
+	            normalized: normalizedFilter,
+	            results: finalResults.slice(),
+	            matchMap: matchInfoMap,
+	            timestamp: Date.now(),
+	            meta: {
+	              durationMs,
+	              resultCount: finalResults.length,
+	              excerptCount,
+	              scannedCount
+	            }
+	          };
+	          sourceHistories = searchCache.results.slice();
+	          renderSearchSummary(panel, {
+	            query: filterText,
+	            normalized: normalizedFilter,
+	            durationMs,
+	            resultCount: finalResults.length,
+	            excerptCount,
+	            scannedCount,
+	            reused: canReusePrefixCache
+	          });
+	        }
+	      } else {
+	        removeSearchSummary(panel);
+	        sourceHistories = allHistoriesMeta;
         effectiveFilterTextForHighlight = '';
       }
     }
