@@ -2299,41 +2299,6 @@ export function createChatHistoryUI(appContext) {
     } catch (_) {}
   }
 
-  async function guardOpenConversationElsewhere(conversationId) {
-    if (!conversationPresence?.getConversationTabs) return false;
-
-    // 若尚未拿到 tabId，先尝试刷新一次快照（避免“明明其它标签页已打开但仍误判为空”）
-    if (conversationPresence.getSelfTabId?.() == null && conversationPresence.refreshOpenConversations) {
-      try { await conversationPresence.refreshOpenConversations(); } catch (_) {}
-    }
-
-    let { selfTabId, otherTabs } = getConversationOpenTabsState(conversationId);
-    // 兜底：若当前快照尚未到达（tabs 为空），在用户点击打开时再补刷一次
-    if ((!otherTabs || otherTabs.length === 0) && conversationPresence.refreshOpenConversations) {
-      try { await conversationPresence.refreshOpenConversations(); } catch (_) {}
-      ({ selfTabId, otherTabs } = getConversationOpenTabsState(conversationId));
-    }
-    if (!otherTabs || otherTabs.length === 0) return false;
-
-    const ok = await appContext.utils.showConfirm({
-      message: '该会话已在其它标签页打开',
-      description: '为避免多开同一会话导致保存冲突，建议直接跳转到已打开的标签页继续对话。',
-      confirmText: '跳转',
-      cancelText: '仍然在此处打开',
-      type: 'warning'
-    });
-    if (!ok) return false;
-
-    const result = await conversationPresence.focusConversation(conversationId, { excludeTabId: selfTabId });
-    if (result?.status === 'ok') {
-      closeChatHistoryPanel();
-      return true;
-    }
-
-    showNotification?.({ message: '跳转失败', type: 'error', description: result?.message || '' });
-    return false;
-  }
-
   // 订阅存在性快照更新：仅在聊天记录面板可见时增量更新右侧标记
   if (conversationPresence?.subscribe) {
     conversationPresence.subscribe(() => refreshOpenTabUiIfPanelVisible());
@@ -2573,12 +2538,6 @@ export function createChatHistoryUI(appContext) {
     }
 
     item.addEventListener('click', async () => {
-      // 若该会话已在其它标签页打开，先提示用户跳转，避免不小心多开造成保存冲突
-      try {
-        const handled = await guardOpenConversationElsewhere(conv.id);
-        if (handled) return;
-      } catch (_) {}
-
       const conversation = await getConversationFromCacheOrLoad(conv.id);
       if (conversation) {
         await loadConversationIntoChat(conversation);
