@@ -1962,7 +1962,12 @@ export function createMessageSender(appContext) {
       aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventThoughtsDelta);
       const thinkExtraction = extractThinkingFromText(aiResponse);
       aiResponse = thinkExtraction.cleanText;
-      aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+      // 注意：在流式场景中，换行/缩进可能以“分片边界的空白字符”出现。
+      // mergeThoughts() 内部会对 existing 做 trim()，若在这里每帧都调用，会把这些空白误删，导致换行丢失。
+      // 因此仅在确实提取到了新的 <think> 段落时才合并，避免对流式思考内容做多余的预处理。
+      if (thinkExtraction.thoughtText) {
+        aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+      }
 
 	      if (!hasStartedResponse) {
 	        // 首次收到内容（文本或图片）：移除“正在处理...”提示
@@ -2169,7 +2174,10 @@ export function createMessageSender(appContext) {
           }
           const thinkExtraction = extractThinkingFromText(aiResponse);
           aiResponse = thinkExtraction.cleanText;
-          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+          // 同 Gemini：避免每帧 mergeThoughts() 触发 trim() 破坏流式思考文本中的换行/空白。
+          if (thinkExtraction.thoughtText) {
+            aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+          }
 
           // 【关键逻辑】检查这是否是流式响应的第一个数据块
       if (!hasStartedResponse) {
