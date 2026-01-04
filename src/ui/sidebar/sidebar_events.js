@@ -507,24 +507,86 @@ function setupSlashFocusShortcut(appContext) {
   });
 }
 
+/**
+ * 将「全屏/侧栏」布局状态同步到 iframe 内部的 DOM，并更新相关入口的提示文案。
+ *
+ * 说明：
+ * - 父页面（content script）负责真正把侧边栏容器扩展为 100vw/100vh；
+ * - iframe 里只需要切换 html.fullscreen-mode，用来调整内部内容布局（居中宽度等）。
+ * - 这里统一封装，避免不同入口（菜单项、左侧细长把手）各自维护一套状态导致漂移。
+ *
+ * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
+ * @param {boolean} isFullscreen
+ */
+function applyFullscreenMode(appContext, isFullscreen) {
+  appContext.state.isFullscreen = !!isFullscreen;
+  document.documentElement.classList.toggle('fullscreen-mode', appContext.state.isFullscreen);
+  updateFullscreenToggleHints(appContext);
+}
+
+/**
+ * 根据当前布局模式刷新「全屏」菜单项与左侧把手的提示文案。
+ * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
+ */
+function updateFullscreenToggleHints(appContext) {
+  const isFullscreen = !!appContext.state.isFullscreen;
+
+  const collapseButton = appContext.dom.collapseButton;
+  if (collapseButton) {
+    const label = isFullscreen ? '退出全屏（侧栏模式）' : '切换全屏（沉浸模式）';
+    collapseButton.title = label;
+    collapseButton.setAttribute('aria-label', label);
+  }
+
+  const fullscreenToggle = appContext.dom.fullscreenToggle;
+  if (fullscreenToggle) {
+    const text = fullscreenToggle.querySelector('span');
+    if (text) {
+      text.textContent = isFullscreen ? '侧栏模式' : '全屏模式';
+    }
+    const icon = fullscreenToggle.querySelector('i');
+    if (icon) {
+      icon.classList.remove('fa-expand', 'fa-compress');
+      icon.classList.add(isFullscreen ? 'fa-compress' : 'fa-expand');
+    }
+  }
+}
+
+/**
+ * 由 iframe 主动发起全屏切换请求（通知父页面执行真实的全屏/退出全屏）。
+ * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
+ */
+function requestToggleFullscreen(appContext) {
+  if (appContext.state.isStandalone) {
+    appContext.utils.showNotification('独立聊天页面始终为全屏布局');
+    return;
+  }
+
+  // 先在 iframe 内即时切换布局（避免等待父页面处理消息造成“闪一下/不跟手”）
+  applyFullscreenMode(appContext, !appContext.state.isFullscreen);
+  window.parent.postMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' }, '*');
+}
+
 function setupFullscreenToggle(appContext) {
-  if (!appContext.dom.fullscreenToggle) return;
+  // 初始化时用 DOM class 做一次兜底同步，避免 iframe 刷新导致提示文案与实际布局不一致
+  if (!appContext.state.isStandalone) {
+    appContext.state.isFullscreen = document.documentElement.classList.contains('fullscreen-mode');
+  }
+  updateFullscreenToggleHints(appContext);
 
-  appContext.dom.fullscreenToggle.addEventListener('click', async () => {
-    if (appContext.state.isStandalone) {
-      appContext.utils.showNotification('独立聊天页面始终为全屏布局');
-      return;
-    }
-    appContext.state.isFullscreen = !appContext.state.isFullscreen;
+  if (appContext.dom.fullscreenToggle) {
+    appContext.dom.fullscreenToggle.addEventListener('click', () => requestToggleFullscreen(appContext));
+  }
 
-    if (appContext.state.isFullscreen) {
-      document.documentElement.classList.add('fullscreen-mode');
-    } else {
-      document.documentElement.classList.remove('fullscreen-mode');
-    }
-
-    window.parent.postMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' }, '*');
-  });
+  // 左侧（或左侧布局时出现在右侧）的细长把手：改为切换「全屏/侧栏」布局
+  if (appContext.dom.collapseButton) {
+    appContext.dom.collapseButton.addEventListener('click', () => requestToggleFullscreen(appContext));
+    appContext.dom.collapseButton.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      requestToggleFullscreen(appContext);
+    });
+  }
 }
 
 function setupScreenshotButton(appContext) {
@@ -639,12 +701,7 @@ function setupWindowMessageHandlers(appContext) {
         if (appContext.state.isStandalone) {
           break;
         }
-        appContext.state.isFullscreen = data.isFullscreen;
-        if (data.isFullscreen) {
-          document.documentElement.classList.add('fullscreen-mode');
-        } else {
-          document.documentElement.classList.remove('fullscreen-mode');
-        }
+        applyFullscreenMode(appContext, data.isFullscreen);
         break;
       default:
         break;
