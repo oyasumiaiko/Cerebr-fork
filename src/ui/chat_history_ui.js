@@ -1201,6 +1201,8 @@ export function createChatHistoryUI(appContext) {
   function closeChatHistoryPanel() {
     const panel = document.getElementById('chat-history-panel');
     if (panel && panel.classList.contains('visible')) {
+      // 关闭面板时一并关闭 hover 预览 tooltip，避免遗留浮层
+      hideChatHistoryPreviewTooltip();
       panel.classList.remove('visible');
       panel.addEventListener('transitionend', function handler(e) {
         if (e.propertyName === 'opacity' && !panel.classList.contains('visible')) {
@@ -2188,6 +2190,8 @@ export function createChatHistoryUI(appContext) {
       listContainer.removeEventListener('scroll', listContainer._scrollListener);
     }
     listContainer._scrollListener = async () => {
+      // 滚动列表时隐藏 hover 预览 tooltip（避免位置错乱/误遮挡）
+      hideChatHistoryPreviewTooltip();
       const panelNow = listContainer.closest('#chat-history-panel');
       if (!panelNow) return;
       if (panelNow.dataset.runId !== runId) return;
@@ -2304,6 +2308,364 @@ export function createChatHistoryUI(appContext) {
     conversationPresence.subscribe(() => refreshOpenTabUiIfPanelVisible());
   }
 
+  // ==========================================================================
+  //  聊天记录条目 hover 预览 tooltip（首两条 + 尾两条）
+  //
+  // 设计目标：
+  // - 用自绘 tooltip 替换浏览器原生 title（原生 tooltip 难以排版/无法显示消息预览）；
+  // - hover 时展示会话前两条与最后两条消息，帮助用户快速识别会话内容；
+  // - 避免性能问题：只在 hover 触发时按需读取会话，并对结果做短 TTL 缓存与并发去重。
+  //
+  // 注意：
+  // - tooltip 使用 fixed 定位并挂到 body，避免被 #chat-history-panel/#chat-history-list 的 overflow 裁剪；
+  // - tooltip 不可交互（pointer-events: none），只作为“视觉预览”。
+  // ==========================================================================
+
+  const CONVERSATION_PREVIEW_CACHE_TTL = 2 * 60 * 1000; // 2分钟：足够应对频繁 hover，同时避免长期过期数据
+  const conversationPreviewCache = new Map(); // id -> { time:number, data:any|null, promise:Promise|null }
+
+  let chatHistoryPreviewTooltipEl = null;
+  let activePreviewConversationId = null;
+  let activePreviewAnchorEl = null;
+  let previewTooltipHideTimer = null;
+
+  function ensureChatHistoryPreviewTooltip() {
+    if (chatHistoryPreviewTooltipEl) return chatHistoryPreviewTooltipEl;
+
+    const tooltip = document.createElement('div');
+    tooltip.id = 'chat-history-preview-tooltip';
+    tooltip.className = 'chat-history-preview-tooltip';
+    tooltip.dataset.visible = '0';
+    tooltip.dataset.placement = 'right';
+
+    const header = document.createElement('div');
+    header.className = 'preview-header';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'preview-title';
+    const metaEl = document.createElement('div');
+    metaEl.className = 'preview-meta';
+    const subMetaEl = document.createElement('div');
+    subMetaEl.className = 'preview-submeta';
+
+    header.appendChild(titleEl);
+    header.appendChild(metaEl);
+    header.appendChild(subMetaEl);
+
+    const messagesEl = document.createElement('div');
+    messagesEl.className = 'preview-messages';
+
+    tooltip.appendChild(header);
+    tooltip.appendChild(messagesEl);
+
+    // 将节点挂到 body：避免被滚动容器裁剪
+    document.body.appendChild(tooltip);
+
+    // 将内部引用挂到 DOM 上，减少重复 querySelector
+    tooltip._parts = { titleEl, metaEl, subMetaEl, messagesEl };
+
+    chatHistoryPreviewTooltipEl = tooltip;
+    return tooltip;
+  }
+
+  function hideChatHistoryPreviewTooltip() {
+    const tooltip = chatHistoryPreviewTooltipEl;
+    if (!tooltip) return;
+    tooltip.dataset.visible = '0';
+    activePreviewConversationId = null;
+    activePreviewAnchorEl = null;
+  }
+
+  function cancelHideChatHistoryPreviewTooltip() {
+    if (!previewTooltipHideTimer) return;
+    clearTimeout(previewTooltipHideTimer);
+    previewTooltipHideTimer = null;
+  }
+
+  function scheduleHideChatHistoryPreviewTooltip(delayMs = 80) {
+    cancelHideChatHistoryPreviewTooltip();
+    previewTooltipHideTimer = setTimeout(() => {
+      previewTooltipHideTimer = null;
+      hideChatHistoryPreviewTooltip();
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  function normalizeChatHistoryPreviewText(text) {
+    const raw = typeof text === 'string' ? text : String(text || '');
+    // 1) 先把常见的 <img> 标签替换为 [图片]，避免预览里出现长属性字符串
+    let out = raw.replace(/<img\b[^>]*>/gi, '[图片]');
+    // 2) 再粗略移除其它 HTML 标签（历史里可能混入由图片处理器生成的 HTML 片段）
+    out = out.replace(/<[^>]+>/g, ' ');
+    // 3) 合并空白并裁剪
+    out = out.replace(/\s+/g, ' ').trim();
+
+    // 空文本兜底
+    if (!out) return '';
+
+    const maxLen = 140;
+    if (out.length > maxLen) {
+      out = out.slice(0, maxLen - 1).trimEnd() + '…';
+    }
+    return out;
+  }
+
+  function normalizeChatHistoryPreviewRole(role) {
+    const raw = typeof role === 'string' ? role : String(role || '');
+    const lower = raw.trim().toLowerCase();
+    if (lower === 'assistant' || lower === 'ai') return { roleClass: 'ai', roleLabel: 'AI' };
+    if (lower === 'user') return { roleClass: 'user', roleLabel: '你' };
+    if (lower === 'system') return { roleClass: 'system', roleLabel: '系统' };
+    return { roleClass: 'system', roleLabel: raw.trim() || '消息' };
+  }
+
+  function buildPreviewMessageModel(msg, resolvedContent) {
+    const roleInfo = normalizeChatHistoryPreviewRole(msg?.role);
+    const plain = extractPlainTextFromMessageContent(resolvedContent);
+    const previewText = normalizeChatHistoryPreviewText(plain) || '[空消息]';
+    return {
+      kind: 'message',
+      roleClass: roleInfo.roleClass,
+      roleLabel: roleInfo.roleLabel,
+      text: previewText
+    };
+  }
+
+  function computeConversationPreviewMessageList(messages) {
+    const list = Array.isArray(messages) ? messages.filter(Boolean) : [];
+    const total = list.length;
+    if (total === 0) return { totalCount: 0, selected: [], hasGap: false };
+
+    if (total <= 4) {
+      return { totalCount: total, selected: list.slice(0), hasGap: false };
+    }
+
+    return {
+      totalCount: total,
+      selected: [list[0], list[1], list[total - 2], list[total - 1]].filter(Boolean),
+      hasGap: true
+    };
+  }
+
+  async function getConversationPreviewData(conversationId) {
+    const id = typeof conversationId === 'string' ? conversationId.trim() : '';
+    if (!id) return { totalCount: 0, items: [] };
+
+    const cached = conversationPreviewCache.get(id) || null;
+    const now = Date.now();
+    const isFresh = cached?.data && (now - (cached.time || 0) <= CONVERSATION_PREVIEW_CACHE_TTL);
+    if (isFresh) return cached.data;
+
+    if (cached?.promise) {
+      try { return await cached.promise; } catch (_) {}
+    }
+
+    const promise = (async () => {
+      // 1) 优先从内存缓存读取（若该会话近期被打开过，可避免额外的 IndexedDB 开销）
+      let messages = null;
+      try {
+        if (activeConversation?.id === id && Array.isArray(activeConversation?.messages)) {
+          messages = activeConversation.messages;
+        } else if (loadedConversations?.has?.(id)) {
+          const inMem = loadedConversations.get(id);
+          if (Array.isArray(inMem?.messages)) messages = inMem.messages;
+        }
+      } catch (_) {}
+
+      // 2) 内存没有则从 IndexedDB 取“轻量会话”（不解引用全部 contentRef）
+      if (!messages) {
+        try {
+          const conv = await getConversationById(id, false);
+          messages = Array.isArray(conv?.messages) ? conv.messages : [];
+        } catch (_) {
+          messages = [];
+        }
+      }
+
+      const { totalCount, selected, hasGap } = computeConversationPreviewMessageList(messages);
+      if (selected.length === 0) return { totalCount, items: [] };
+
+      // 3) 只为“预览需要的消息”解引用 contentRef，避免全量加载造成卡顿
+      const contentRefIds = [];
+      for (const msg of selected) {
+        if (!msg) continue;
+        const hasInlineContent = msg.content !== undefined && msg.content !== null;
+        if (!hasInlineContent && typeof msg.contentRef === 'string' && msg.contentRef.trim()) {
+          contentRefIds.push(msg.contentRef.trim());
+        }
+      }
+
+      let contentMap = new Map();
+      if (contentRefIds.length > 0) {
+        try {
+          contentMap = await loadMessageContentsByIds(Array.from(new Set(contentRefIds)));
+        } catch (_) {
+          contentMap = new Map();
+        }
+      }
+
+      const items = [];
+      const firstTwo = selected.slice(0, Math.min(2, selected.length));
+      const lastTwo = selected.slice(Math.max(0, selected.length - 2));
+
+      const resolveContent = (msg) => {
+        if (!msg) return '';
+        if (msg.content !== undefined && msg.content !== null) return msg.content;
+        const ref = typeof msg.contentRef === 'string' ? msg.contentRef.trim() : '';
+        if (ref && contentMap.has(ref)) return contentMap.get(ref);
+        return '';
+      };
+
+      firstTwo.forEach((msg) => items.push(buildPreviewMessageModel(msg, resolveContent(msg))));
+      if (hasGap) items.push({ kind: 'gap' });
+      // 避免与 firstTwo 重复（当总消息数 <= 2 时不会出现 gap；但这里仍做防御）
+      lastTwo.forEach((msg) => {
+        if (firstTwo.includes(msg)) return;
+        items.push(buildPreviewMessageModel(msg, resolveContent(msg)));
+      });
+
+      return { totalCount, items };
+    })();
+
+    conversationPreviewCache.set(id, { time: now, data: null, promise });
+    try {
+      const data = await promise;
+      conversationPreviewCache.set(id, { time: Date.now(), data, promise: null });
+      return data;
+    } catch (error) {
+      conversationPreviewCache.set(id, { time: Date.now(), data: null, promise: null });
+      throw error;
+    }
+  }
+
+  function renderChatHistoryPreviewTooltip(tooltip, meta, previewData) {
+    if (!tooltip?._parts) return;
+    const { titleEl, metaEl, subMetaEl, messagesEl } = tooltip._parts;
+
+    titleEl.textContent = (meta?.title || '').trim() || '聊天预览';
+    metaEl.textContent = (meta?.meta || '').trim();
+    const subMetaText = (meta?.submeta || '').trim();
+    subMetaEl.textContent = subMetaText;
+    subMetaEl.style.display = subMetaText ? '' : 'none';
+
+    messagesEl.textContent = '';
+    const items = Array.isArray(previewData?.items) ? previewData.items : [];
+    if (items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'preview-loading';
+      empty.textContent = '暂无消息';
+      messagesEl.appendChild(empty);
+      return;
+    }
+
+    items.forEach((it) => {
+      if (it?.kind === 'gap') {
+        const gap = document.createElement('div');
+        gap.className = 'preview-ellipsis';
+        gap.textContent = '…';
+        messagesEl.appendChild(gap);
+        return;
+      }
+
+      const row = document.createElement('div');
+      row.className = `preview-message ${it?.roleClass || 'system'}`;
+
+      const role = document.createElement('span');
+      role.className = 'preview-role';
+      role.textContent = it?.roleLabel || '';
+
+      const text = document.createElement('span');
+      text.className = 'preview-text';
+      text.textContent = it?.text || '';
+
+      row.appendChild(role);
+      row.appendChild(text);
+      messagesEl.appendChild(row);
+    });
+  }
+
+  function positionChatHistoryPreviewTooltip(tooltip, anchorEl) {
+    if (!tooltip || !anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const gap = 12;
+    const padding = 10;
+    const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    const tooltipW = tooltip.offsetWidth || 0;
+    const tooltipH = tooltip.offsetHeight || 0;
+
+    // 默认放右侧，若超出屏幕则放左侧
+    let placement = 'right';
+    let left = rect.right + gap;
+    if (left + tooltipW + padding > viewportW) {
+      placement = 'left';
+      left = rect.left - gap - tooltipW;
+    }
+    left = Math.min(viewportW - tooltipW - padding, Math.max(padding, left));
+
+    // 顶部对齐（更稳定），必要时向上挪以避免溢出
+    let top = rect.top;
+    top = Math.min(viewportH - tooltipH - padding, Math.max(padding, top));
+
+    // 箭头尽量对齐到 anchor 的垂直中心
+    const anchorCenterY = rect.top + rect.height / 2;
+    const arrowTop = Math.min(Math.max(12, anchorCenterY - top - 5), Math.max(12, tooltipH - 18));
+    tooltip.style.setProperty('--arrow-top', `${Math.round(arrowTop)}px`);
+
+    tooltip.dataset.placement = placement;
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+  }
+
+  function showChatHistoryPreviewTooltip(anchorEl, meta) {
+    cancelHideChatHistoryPreviewTooltip();
+
+    const tooltip = ensureChatHistoryPreviewTooltip();
+    activePreviewConversationId = meta?.conversationId || null;
+    activePreviewAnchorEl = anchorEl || null;
+
+    tooltip.dataset.visible = '1';
+    tooltip.dataset.placement = 'right';
+
+    if (tooltip?._parts) {
+      const { titleEl, metaEl, subMetaEl, messagesEl } = tooltip._parts;
+      titleEl.textContent = (meta?.title || '').trim() || '聊天预览';
+      metaEl.textContent = (meta?.meta || '').trim();
+      const subMetaText = (meta?.submeta || '').trim();
+      subMetaEl.textContent = subMetaText;
+      subMetaEl.style.display = subMetaText ? '' : 'none';
+      messagesEl.textContent = '';
+      const loading = document.createElement('div');
+      loading.className = 'preview-loading';
+      loading.textContent = '正在加载预览...';
+      messagesEl.appendChild(loading);
+    }
+
+    positionChatHistoryPreviewTooltip(tooltip, anchorEl);
+
+    const requestId = activePreviewConversationId;
+    if (!requestId) return;
+
+    getConversationPreviewData(requestId)
+      .then((data) => {
+        if (activePreviewConversationId !== requestId) return;
+        renderChatHistoryPreviewTooltip(tooltip, meta, data);
+        positionChatHistoryPreviewTooltip(tooltip, anchorEl);
+      })
+      .catch(() => {
+        if (activePreviewConversationId !== requestId) return;
+        if (tooltip?._parts) {
+          const { messagesEl } = tooltip._parts;
+          messagesEl.textContent = '';
+          const err = document.createElement('div');
+          err.className = 'preview-loading';
+          err.textContent = '加载预览失败';
+          messagesEl.appendChild(err);
+        }
+        positionChatHistoryPreviewTooltip(tooltip, anchorEl);
+      });
+  }
+
   function createConversationItemElement(conv, filterText, isPinned) {
     const item = document.createElement('div');
     item.className = 'chat-history-item';
@@ -2378,7 +2740,6 @@ export function createChatHistoryUI(appContext) {
     const relativeTime = formatRelativeTime(convDate);
     const relativeEndTime = formatRelativeTime(endTime);
     const domain = getDisplayUrl(conv.url);
-    let title = conv.title;
     const chatTimeSpan = relativeTime === relativeEndTime ? relativeTime : `${relativeTime} - ${relativeEndTime}`;
     const displayInfos = `${chatTimeSpan} · 消息数: ${conv.messageCount} · ${domain}`;
     // URL 快速筛选模式下，为每条会话标注“匹配等级”，便于用户理解来源范围
@@ -2399,19 +2760,9 @@ export function createChatHistoryUI(appContext) {
     } else {
       infoDiv.textContent = displayInfos;
     }
-    const detailsLines = [
-      `开始: ${convDate.toLocaleString()} (${relativeTime})`,
-      `最新: ${endTime.toLocaleString()} (${relativeEndTime})`,
-      title,
-      conv.url
-    ].filter(Boolean);
-    if (isForkConversation) {
-      const parentLabel = (typeof conv?.__branchParentSummary === 'string' && conv.__branchParentSummary.trim())
-        ? conv.__branchParentSummary.trim()
-        : declaredParentId;
-      detailsLines.push(isOrphanFork ? `分支自: ${parentLabel}（父会话缺失）` : `分支自: ${parentLabel}`);
-    }
-    item.title = detailsLines.join('\n');
+    // 说明：
+    // - 过去通过 item.title 触发浏览器原生 tooltip（展示时间/URL 等）；
+    // - 现在改为 hover 自绘 tooltip，展示消息预览，因此这里不再设置 title，避免原生 tooltip 与自绘 tooltip 冲突。
 
     const mainDiv = document.createElement('div');
     mainDiv.className = 'chat-history-item-main';
@@ -2452,6 +2803,30 @@ export function createChatHistoryUI(appContext) {
 
     item.appendChild(mainDiv);
     item.appendChild(actionsDiv);
+
+    // hover 预览 tooltip：延迟触发，避免鼠标快速扫过时造成大量数据库读取
+    const hoverMeta = {
+      conversationId: conv.id,
+      title: (typeof conv?.summary === 'string' && conv.summary.trim()) ? conv.summary.trim() : '无摘要',
+      meta: displayInfos,
+      submeta: [conv?.title, conv?.url].map(v => (typeof v === 'string' ? v.trim() : '')).filter(Boolean).join(' · ')
+    };
+    item.addEventListener('mouseenter', () => {
+      cancelHideChatHistoryPreviewTooltip();
+      if (item._previewHoverTimer) clearTimeout(item._previewHoverTimer);
+      item._previewHoverTimer = setTimeout(() => {
+        item._previewHoverTimer = null;
+        showChatHistoryPreviewTooltip(item, hoverMeta);
+      }, 180);
+    });
+    item.addEventListener('mouseleave', () => {
+      if (item._previewHoverTimer) {
+        clearTimeout(item._previewHoverTimer);
+        item._previewHoverTimer = null;
+      }
+      // 若离开的是当前激活条目，则隐藏 tooltip；若用户迅速移到下一个条目，mouseenter 会取消该隐藏
+      scheduleHideChatHistoryPreviewTooltip(80);
+    });
 
     let snippetRendered = false;
     if (isTextFilterActive && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
@@ -2538,6 +2913,7 @@ export function createChatHistoryUI(appContext) {
     }
 
     item.addEventListener('click', async () => {
+      hideChatHistoryPreviewTooltip();
       const conversation = await getConversationFromCacheOrLoad(conv.id);
       if (conversation) {
         await loadConversationIntoChat(conversation);
