@@ -24,6 +24,7 @@
  * @property {boolean} [hasInlineImages] - 是否包含内联图片 (可选)
  * @property {string|null} [promptType] - 发送时记录的“指令/提示词类型”（如 summary/selection/query 等，可选）
  * @property {Object|null} [promptMeta] - 与 promptType 配套的元信息（例如 { selectionText }，可选）
+ * @property {{url: string, title: string}|null} [pageMeta] - 首条用户消息发出时的页面元数据快照（仅 url/title，用于固定会话来源）
  */
 
 /**
@@ -71,7 +72,12 @@ function createMessageNode(role, content, parentId = null) {
     // - 过去通过“字符串/正则”去猜测 prompt 类型，容易被用户自定义提示词破坏（例如模板以 <SELECTION> 开头时前缀为空）。
     // - 这里在发送时把类型与关键变量显式落在消息节点上，后续任何功能（标题、统计、过滤等）都可直接读取，避免重复解析。
     promptType: null,
-    promptMeta: null
+    promptMeta: null,
+    // --- 页面元信息（用于固定“会话来源页”，避免生成过程中切换标签页导致 URL/标题错绑）---
+    // 说明：
+    // - 仅在“首条用户消息”创建时写入；后续消息不重复写，避免冗余。
+    // - 只保存 url/title，不保存 pageInfo.content 等大字段，防止 IndexedDB 膨胀。
+    pageMeta: null
   };
 }
 

@@ -744,15 +744,52 @@ export function createChatHistoryUI(appContext) {
     const startTime = Math.min(...timestamps);
     const endTime = Math.max(...timestamps);
 
+    /**
+     * 纯函数：解析“会话来源页”的元数据（仅 url/title）。
+     *
+     * 设计背景：
+     * - 在 AI 生成过程中，用户可能会切换到其它标签页，sidebar 的 state.pageInfo 会实时变更；
+     * - 若首次落盘会话时直接读取 state.pageInfo，则会出现“会话内容来自 A，但 URL/标题却被写成 B”的错觉；
+     * - 更符合直觉的规则是：以首条用户消息发出时所在页面为准。
+     *
+     * 实现策略：
+     * - 首选首条用户消息节点上冻结的 pageMeta（见 core/message_processor.js）；
+     * - 若不存在（兼容旧数据/异常路径），回退到当前 state.pageInfo。
+     *
+     * @param {Array<any>} messages
+     * @param {any} fallbackPageInfo
+     * @returns {{url: string, title: string, source: 'first_user_message'|'state_pageInfo'}}
+     */
+    const resolveConversationStartPageMeta = (messages, fallbackPageInfo) => {
+      const list = Array.isArray(messages) ? messages : [];
+      const firstUser = list.find(m => String(m?.role || '').toLowerCase() === 'user') || null;
+
+      const fromNode = firstUser?.pageMeta || null;
+      const urlFromNode = typeof fromNode?.url === 'string' ? fromNode.url.trim() : '';
+      const titleFromNode = typeof fromNode?.title === 'string' ? fromNode.title.trim() : '';
+      if (urlFromNode || titleFromNode) {
+        return { url: urlFromNode, title: titleFromNode, source: 'first_user_message' };
+      }
+
+      const urlFallback = typeof fallbackPageInfo?.url === 'string' ? fallbackPageInfo.url.trim() : '';
+      const titleFallback = typeof fallbackPageInfo?.title === 'string' ? fallbackPageInfo.title.trim() : '';
+      return { url: urlFallback, title: titleFallback, source: 'state_pageInfo' };
+    };
+
+    const startPageMeta = resolveConversationStartPageMeta(messagesCopy, state.pageInfo);
+
     // 对话摘要（对话列表显示的标题）：
     // - 优先使用发送时写入到消息节点的 promptType/promptMeta（避免基于字符串/正则猜测）；
     // - 对于 selection/query：标题为「[划词解释] + 划词内容」；
     // - 对于 summary/pdf/image：标题使用固定标签；
     // - 其它情况回退为第一条用户消息的摘要。
+    //
+    // 重要：summary/promptType === 'summary' 时会拼接页面标题，因此这里必须使用“会话起始页”的 title，
+    //      而不是 state.pageInfo（它可能在生成过程中被切到其它标签页）。
     const promptsConfig = promptSettingsManager.getPrompts();
     const summary = buildConversationSummaryFromMessages(messagesCopy, {
       promptsConfig,
-      pageTitle: state.pageInfo?.title || '',
+      pageTitle: startPageMeta.title || '',
       maxLength: 50
     });
 
@@ -763,6 +800,10 @@ export function createChatHistoryUI(appContext) {
     let parentConversationIdToSave = null;
     let forkedFromMessageIdToSave = null;
     
+    // 默认使用“会话起始页”的页面元数据（首条用户消息冻结的 pageMeta）
+    urlToSave = startPageMeta.url || '';
+    titleToSave = startPageMeta.title || '';
+
     // 如果是更新操作并且已存在记录，则固定使用首次保存的 url 和 title
     if (isUpdate && currentConversationId) {
       try {
@@ -783,17 +824,23 @@ export function createChatHistoryUI(appContext) {
           // 如果原有摘要存在，则保留原有摘要，避免覆盖用户手动重命名的摘要
           if (existingConversation.summary) {
             summaryToSave = existingConversation.summary;
+          } else if (existingConversation.title) {
+            // 若用户未手动改名，且该会话已有固定 title，则用固定 title 重算摘要（避免用到“当前标签页标题”）
+            summaryToSave = buildConversationSummaryFromMessages(messagesCopy, {
+              promptsConfig,
+              pageTitle: existingConversation.title || '',
+              maxLength: 50
+            });
           }
         }
       } catch (error) {
         console.error("获取会话记录失败:", error);
       }
     } else {
-      // 如果是首次保存，使用当前页面信息 from appContext.state.pageInfo
-      urlToSave = state.pageInfo?.url || '';
-      titleToSave = state.pageInfo?.title || '';
-      
-      console.log(`首次保存会话，使用当前页面信息: URL=${urlToSave}, 标题=${titleToSave}`);
+      console.log(
+        `首次保存会话，使用${startPageMeta.source === 'first_user_message' ? '首条用户消息的页面快照' : '当前页面信息'}: ` +
+        `URL=${urlToSave}, 标题=${titleToSave}`
+      );
     }
 
     const generateConversationId = () => `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;

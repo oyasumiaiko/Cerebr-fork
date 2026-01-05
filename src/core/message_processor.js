@@ -15,10 +15,33 @@
 import { renderMarkdownSafe } from '../utils/markdown_renderer.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 
+/**
+ * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
+ *
+ * 为什么要做这一步：
+ * - sidebar 里的 state.pageInfo 会随着用户切换标签页实时更新；
+ * - 但“对话记录的来源页面”更符合直觉的语义是：以首条用户消息发出时所在的页面为准；
+ * - 因此在创建首条用户消息节点时，冻结一份小而稳定的 {url,title}，供首次落盘会话时使用。
+ *
+ * 注意：
+ * - 这里刻意不保存 pageInfo.content 等大字段，避免 IndexedDB 膨胀；
+ * - 若 url/title 都为空，则返回 null（表示无法确定来源页）。
+ *
+ * @param {any} pageInfo
+ * @returns {{url: string, title: string} | null}
+ */
+function createPageMetaSnapshot(pageInfo) {
+  const url = typeof pageInfo?.url === 'string' ? pageInfo.url.trim() : '';
+  const title = typeof pageInfo?.title === 'string' ? pageInfo.title.trim() : '';
+  if (!url && !title) return null;
+  return { url, title };
+}
+
 export function createMessageProcessor(appContext) {
   const {
     dom,
     services,
+    state,
     utils
   } = appContext;
 
@@ -321,6 +344,22 @@ export function createMessageProcessor(appContext) {
           if (meta.promptMeta && typeof meta.promptMeta === 'object') {
             node.promptMeta = meta.promptMeta;
           }
+        }
+
+        // 关键：仅在“首条用户消息”写入页面元数据快照，用于固定会话来源页。
+        // 这样即使在 AI 生成过程中用户切换到其它标签页，最终落盘的会话 URL/标题也不会被错误覆盖。
+        try {
+          if (node && node.role === 'user') {
+            const hasOtherUserMessage = chatHistoryManager.chatHistory.messages.some(
+              (m) => m && m.id !== node.id && String(m.role || '').toLowerCase() === 'user'
+            );
+            if (!hasOtherUserMessage) {
+              const snapshot = createPageMetaSnapshot(state?.pageInfo);
+              if (snapshot) node.pageMeta = snapshot;
+            }
+          }
+        } catch (e) {
+          console.warn('写入首条用户消息 pageMeta 失败（将回退为保存时读取 pageInfo）:', e);
         }
         messageDiv.setAttribute('data-message-id', node.id);
         // 初次创建 AI 消息时插入一个空的 API footer，占位以便样式稳定

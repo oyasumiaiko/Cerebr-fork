@@ -1032,6 +1032,37 @@ export function createMessageSender(appContext) {
         }
         if (pageContentResponse) {
           pageContentLength = state.pageInfo?.content?.length || 0;
+
+          // 兜底：为“首条用户消息”补齐 pageMeta（固定会话来源页）
+          //
+          // 背景：
+          // - appendMessage 时会尝试从 state.pageInfo 冻结 {url,title} 到首条用户消息节点上；
+          // - 但极端情况下（例如 sidebar 刚打开、pageInfo 还没来得及同步）这一步可能拿不到 url/title；
+          // - 此处使用本次请求实际用到的 pageContentResponse 作为兜底补齐，确保首次落盘会话不会错绑到后续切换的标签页。
+          try {
+            if (!regenerateMode && userMessageDiv) {
+              const userMessageId = userMessageDiv.getAttribute('data-message-id') || '';
+              const node = userMessageId
+                ? chatHistoryManager?.chatHistory?.messages?.find(m => m.id === userMessageId)
+                : null;
+              const isUser = !!(node && String(node.role || '').toLowerCase() === 'user');
+              if (isUser) {
+                const hasOtherUserMessage = chatHistoryManager.chatHistory.messages.some(
+                  (m) => m && m.id !== node.id && String(m.role || '').toLowerCase() === 'user'
+                );
+                const alreadyHasPageMeta = !!(node.pageMeta && (node.pageMeta.url || node.pageMeta.title));
+                if (!hasOtherUserMessage && !alreadyHasPageMeta) {
+                  const url = typeof pageContentResponse?.url === 'string' ? pageContentResponse.url.trim() : '';
+                  const title = typeof pageContentResponse?.title === 'string' ? pageContentResponse.title.trim() : '';
+                  if (url || title) {
+                    node.pageMeta = { url, title };
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('补齐首条用户消息 pageMeta 失败（将回退为保存时读取 pageInfo）:', e);
+          }
         } else {
           console.error('获取网页内容失败。');
         }
