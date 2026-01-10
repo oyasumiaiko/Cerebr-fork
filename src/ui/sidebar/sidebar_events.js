@@ -740,7 +740,14 @@ function setupMessageInputHandlers(appContext) {
     // 特别是 Alt+Enter 仅用于“添加到历史（未发送）”，不应触发其他逻辑
     e.stopPropagation();
 
-    if (e.altKey) {
+    // 兼容右 Alt（AltGr）：
+    // - 在部分键盘布局/浏览器实现中，右 Alt 会表现为 AltGraph；
+    // - 此时 event.altKey 可能为 false，导致“右 Alt + Enter”被当作普通 Enter 直接发送；
+    // - 因此这里将 AltGraph 也视为 Alt 修饰键，确保左右 Alt 行为一致。
+    const hasAltGraph = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph');
+    const hasAltModifier = e.altKey || hasAltGraph;
+
+    if (hasAltModifier) {
       // Alt+Enter：只添加到历史，不发送
       // 说明：有些环境下可能还存在捕获阶段/冒泡阶段的监听，显式阻断
       if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
@@ -818,7 +825,7 @@ function setupMessageInputHandlers(appContext) {
       }
     }
     // 兜底保护：若仍检测到 Alt/Ctrl/Meta 修饰键，则不发送，避免误发
-    if (e.altKey || e.ctrlKey || e.metaKey) {
+    if (e.altKey || hasAltGraph || e.ctrlKey || e.metaKey) {
       return;
     }
     appContext.services.messageSender.sendMessage();
