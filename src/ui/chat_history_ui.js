@@ -386,7 +386,7 @@ export function createChatHistoryUI(appContext) {
   let currentlyRenderedCount = 0; // 已渲染的项目数量
   let isLoadingMoreItems = false; // 防止并发加载的标志
   let currentGroupLabelForBatchRender = null; // 跨批次跟踪“分组 key”（默认按日期；URL 模式按匹配等级）
-  let currentPinnedItemsCountInDisplay = 0; // 当前显示列表中置顶项的数量，用于辅助分组逻辑
+  let currentPinnedItemsCountInDisplay = 0; // 当前显示列表中“置顶分段”包含的条目数（树状模式下是“树级置顶”，可能包含未置顶的祖先节点）
 
   // --- 置顶功能相关 ---
   const PINNED_STORAGE_KEY = 'pinnedConversationIds';
@@ -1545,12 +1545,13 @@ export function createChatHistoryUI(appContext) {
    *
    * 设计目标：
    * - UI 侧只关心“渲染顺序 + 缩进层级”；不在这里写 DOM；
-   * - 同级排序尽量稳定：置顶优先，其次按 endTime 倒序；URL 匹配模式下优先按 urlMatchLevel；
+   * - 同级排序尽量稳定：置顶优先，其次按“子树最新 endTime”倒序（这样某个分支有新消息时，整棵树会被整体抬到更靠前的位置）；
+   * - URL 匹配模式下优先按 urlMatchLevel（等级相同再按“子树最新 endTime”排序）；
    * - 允许父会话缺失（被删除/未加载）：子会话会作为顶层节点展示，并标记为 orphan。
    *
    * @param {Array<Object>} conversations
    * @param {string[]} pinnedIds
-   * @returns {Array<Object>} 新数组：每项会附加 __branchDepth/__branchParentSummary/__branchIsOrphan 等 UI 字段
+   * @returns {{items: Array<Object>, pinnedCountInDisplay: number}} 新数组：每项会附加 __branchDepth/__branchParentSummary/__branchIsOrphan/__treeSortEndTime 等 UI 字段
    */
   function buildConversationBranchTreeDisplayList(conversations, pinnedIds) {
     const list = Array.isArray(conversations) ? conversations.filter(Boolean) : [];
@@ -1565,6 +1566,59 @@ export function createChatHistoryUI(appContext) {
         idToConv.set(id, conv);
       }
     }
+
+    // parentId -> childConv[]
+    const childrenMap = new Map();
+    const rootIds = [];
+
+    for (const [id, conv] of idToConv.entries()) {
+      const rawParent = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
+      const parentId = rawParent && rawParent !== id ? rawParent : '';
+      if (parentId && idToConv.has(parentId)) {
+        if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+        childrenMap.get(parentId).push(conv);
+      } else {
+        rootIds.push(id);
+      }
+    }
+
+    // 计算“子树最新 endTime”（整棵树排序的关键）
+    // 说明：
+    // - endTime 本身代表单条会话的最新消息时间；
+    // - 当 parentConversationId 存在时，用户更关心“整棵树最近有没有更新”，而不是根节点本身是否更新；
+    // - 因此同级排序以“子树 max(endTime)”为准：只要某个分支更新，根节点就会被整体抬到更靠前的位置。
+    const subtreeLatestEndTimeCache = new Map();
+    const subtreeComputeStack = new Set();
+    const getOwnEndTime = (conv) => (Number(conv?.endTime) || 0);
+
+    const getSubtreeLatestEndTime = (conversationId) => {
+      const id = typeof conversationId === 'string' ? conversationId : '';
+      if (!id) return 0;
+      if (subtreeLatestEndTimeCache.has(id)) return subtreeLatestEndTimeCache.get(id);
+
+      // 兜底：防止坏数据导致环（A->B->A）造成无限递归
+      if (subtreeComputeStack.has(id)) {
+        const fallback = getOwnEndTime(idToConv.get(id));
+        subtreeLatestEndTimeCache.set(id, fallback);
+        return fallback;
+      }
+
+      subtreeComputeStack.add(id);
+      const conv = idToConv.get(id);
+      let latest = getOwnEndTime(conv);
+
+      const children = childrenMap.get(id) || [];
+      for (const child of children) {
+        const childId = typeof child?.id === 'string' ? child.id : '';
+        if (!childId) continue;
+        const childLatest = getSubtreeLatestEndTime(childId);
+        if (childLatest > latest) latest = childLatest;
+      }
+
+      subtreeComputeStack.delete(id);
+      subtreeLatestEndTimeCache.set(id, latest);
+      return latest;
+    };
 
     const safeUrlLevel = (conv) => {
       const raw = conv?.urlMatchLevel;
@@ -1591,8 +1645,14 @@ export function createChatHistoryUI(appContext) {
         if (av !== bv) return av - bv;
       }
 
-      const aEnd = Number(a?.endTime) || 0;
-      const bEnd = Number(b?.endTime) || 0;
+      // 关键：按“子树最新 endTime”排序，使得树内任一分支更新都会带动整棵树的顺序更新。
+      const aTreeEnd = getSubtreeLatestEndTime(aId);
+      const bTreeEnd = getSubtreeLatestEndTime(bId);
+      if (aTreeEnd !== bTreeEnd) return bTreeEnd - aTreeEnd;
+
+      // 次级兜底：若两者子树最新时间相同，则回退到自身 endTime/startTime 做稳定排序。
+      const aEnd = getOwnEndTime(a);
+      const bEnd = getOwnEndTime(b);
       if (aEnd !== bEnd) return bEnd - aEnd;
 
       const aStart = Number(a?.startTime) || 0;
@@ -1604,23 +1664,50 @@ export function createChatHistoryUI(appContext) {
       return aSummary.localeCompare(bSummary);
     };
 
-    // parentId -> childConv[]
-    const childrenMap = new Map();
-    const rootIds = [];
+    // 树状视图下仍要显示“已置顶”分段，但 pinnedIds 是“会话级”而不是“树级”。
+    // 为了避免同一棵树被拆开/重复渲染，这里把“置顶”提升到树级：只要树内任意会话被置顶，就把整棵树放到置顶分段。
+    const rootResolveCache = new Map();
+    const resolveRootId = (conversationId) => {
+      const inputId = typeof conversationId === 'string' ? conversationId : '';
+      if (!inputId || !idToConv.has(inputId)) return '';
+      if (rootResolveCache.has(inputId)) return rootResolveCache.get(inputId);
 
-    for (const [id, conv] of idToConv.entries()) {
-      const rawParent = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
-      const parentId = rawParent && rawParent !== id ? rawParent : '';
-      if (parentId && idToConv.has(parentId)) {
-        if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
-        childrenMap.get(parentId).push(conv);
-      } else {
-        rootIds.push(id);
+      const localVisited = new Set();
+      let currentId = inputId;
+      while (true) {
+        if (localVisited.has(currentId)) {
+          // 兜底：出现环时，将其视为“自成一棵树”，避免无限追溯
+          currentId = inputId;
+          break;
+        }
+        localVisited.add(currentId);
+
+        const conv = idToConv.get(currentId);
+        const rawParent = typeof conv?.parentConversationId === 'string' ? conv.parentConversationId.trim() : '';
+        const parentId = rawParent && rawParent !== currentId ? rawParent : '';
+        if (!parentId || !idToConv.has(parentId)) break;
+        currentId = parentId;
+      }
+
+      rootResolveCache.set(inputId, currentId);
+      return currentId;
+    };
+
+    const pinnedRootIdSet = new Set();
+    const rootToMinPinnedIndex = new Map();
+    for (let idx = 0; idx < pinnedList.length; idx++) {
+      const pinnedId = pinnedList[idx];
+      if (!idToConv.has(pinnedId)) continue;
+      const rootId = resolveRootId(pinnedId);
+      if (!rootId) continue;
+      pinnedRootIdSet.add(rootId);
+      const currentMin = rootToMinPinnedIndex.get(rootId);
+      if (currentMin === undefined || idx < currentMin) {
+        rootToMinPinnedIndex.set(rootId, idx);
       }
     }
 
-    // 对 root/children 做一次排序，保证渲染稳定
-    rootIds.sort((aId, bId) => compareByDisplayPriority(idToConv.get(aId), idToConv.get(bId)));
+    // 对 children 做一次排序，保证渲染稳定
     for (const [parentId, children] of childrenMap.entries()) {
       children.sort(compareByDisplayPriority);
       childrenMap.set(parentId, children);
@@ -1629,7 +1716,7 @@ export function createChatHistoryUI(appContext) {
     const ordered = [];
     const visited = new Set();
 
-    const walk = (conv, depth, resolvedParentId) => {
+    const walk = (conv, depth, resolvedParentId, treeSortEndTime) => {
       if (!conv || !conv.id) return;
       if (visited.has(conv.id)) return;
       visited.add(conv.id);
@@ -1644,27 +1731,50 @@ export function createChatHistoryUI(appContext) {
         __branchDepth: Math.max(0, Number(depth) || 0),
         __branchResolvedParentId: resolvedParentId || null,
         __branchParentSummary: parentSummary,
-        __branchIsOrphan: !!(parentId && !parentExists)
+        __branchIsOrphan: !!(parentId && !parentExists),
+        // 树状 + 时间分组需要“整棵树的排序时间”：
+        // - 分组标题只在根节点处插入，但子节点需要携带同一个 key，避免跨批次渲染时重复插入标题；
+        // - treeSortEndTime 取“子树最新 endTime（max）”，这样树内任意分支更新都会带动整棵树的顺序与分组。
+        __treeSortEndTime: Number(treeSortEndTime) || 0
       });
 
       const children = childrenMap.get(conv.id) || [];
       for (const child of children) {
-        walk(child, (Number(depth) || 0) + 1, conv.id);
+        walk(child, (Number(depth) || 0) + 1, conv.id, treeSortEndTime);
       }
     };
 
-    for (const rootId of rootIds) {
-      walk(idToConv.get(rootId), 0, null);
+    const pinnedRootIds = Array.from(pinnedRootIdSet).sort((aId, bId) => {
+      const ai = rootToMinPinnedIndex.get(aId) ?? Number.POSITIVE_INFINITY;
+      const bi = rootToMinPinnedIndex.get(bId) ?? Number.POSITIVE_INFINITY;
+      if (ai !== bi) return ai - bi;
+      return compareByDisplayPriority(idToConv.get(aId), idToConv.get(bId));
+    });
+
+    const unpinnedRootIds = rootIds
+      .filter((id) => !pinnedRootIdSet.has(id))
+      .sort((aId, bId) => compareByDisplayPriority(idToConv.get(aId), idToConv.get(bId)));
+
+    for (const rootId of pinnedRootIds) {
+      const treeEndTime = getSubtreeLatestEndTime(rootId);
+      walk(idToConv.get(rootId), 0, null, treeEndTime);
+    }
+    const pinnedCountInDisplay = ordered.length;
+
+    for (const rootId of unpinnedRootIds) {
+      const treeEndTime = getSubtreeLatestEndTime(rootId);
+      walk(idToConv.get(rootId), 0, null, treeEndTime);
     }
 
     // 兜底：处理环/异常数据导致未被遍历到的节点
     for (const conv of idToConv.values()) {
       if (!visited.has(conv.id)) {
-        walk(conv, 0, null);
+        const treeEndTime = getSubtreeLatestEndTime(conv.id);
+        walk(conv, 0, null, treeEndTime);
       }
     }
 
-    return ordered;
+    return { items: ordered, pinnedCountInDisplay };
   }
 
   /**
@@ -2161,10 +2271,15 @@ export function createChatHistoryUI(appContext) {
     let isTreeOrderingActive = false;
 
     if (shouldTreeOrder) {
-      // 树状排序：保持父子关系连续展示，因此不再拆分“置顶/非置顶”两段，也不再按日期插入分组标题。
+      // 树状排序：
+      // - 保持父子关系连续展示；
+      // - “置顶”提升为树级（树内任一会话被置顶，则整棵树进入置顶分段），避免同一棵树被拆开/重复渲染；
+      // - 时间分组同样按树级（基于子树最新 endTime），保证分组标题不会把父子节点拆开。
       isTreeOrderingActive = true;
-      currentDisplayItems = buildConversationBranchTreeDisplayList(sourceHistories, pinnedIds);
-      currentPinnedItemsCountInDisplay = 0;
+      const treeDisplay = buildConversationBranchTreeDisplayList(sourceHistories, pinnedIds);
+      currentDisplayItems = treeDisplay.items;
+      // 注意：树状模式下“置顶”以“整棵树”为单位，因此 pinnedCountInDisplay 可能包含未置顶的根/祖先节点。
+      currentPinnedItemsCountInDisplay = Math.max(0, Number(treeDisplay.pinnedCountInDisplay) || 0);
     } else {
       const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
       sourceHistories.forEach(hist => {
@@ -2215,7 +2330,7 @@ export function createChatHistoryUI(appContext) {
       return;
     }
 
-    if (!isTreeOrderingActive && pinnedItems.length > 0) {
+    if (currentPinnedItemsCountInDisplay > 0) {
       removeSkeleton(listContainer);
       const pinnedHeader = document.createElement('div');
       pinnedHeader.className = 'chat-history-group-header pinned-header';
@@ -2356,12 +2471,13 @@ export function createChatHistoryUI(appContext) {
   }
 
   // ==========================================================================
-  //  聊天记录条目 hover 预览 tooltip（首两条 + 尾两条）
+  //  聊天记录条目预览 tooltip（首两条 + 尾两条）
   //
   // 设计目标：
   // - 用自绘 tooltip 替换浏览器原生 title（原生 tooltip 难以排版/无法显示消息预览）；
-  // - hover 时展示会话前两条与最后两条消息，帮助用户快速识别会话内容；
-  // - 避免性能问题：只在 hover 触发时按需读取会话，并对结果做短 TTL 缓存与并发去重。
+  // - 仅在用户“按住 Alt”时展示预览，避免日常浏览时被预览框遮挡；
+  // - 按住 Alt 后立即读取鼠标下方会话（无 300ms 延迟），并跟随鼠标显示在右下/右上；
+  // - 避免性能问题：只在会话切换时按需读取会话，并对结果做短 TTL 缓存与并发去重。
   //
   // 注意：
   // - tooltip 使用 fixed 定位并挂到 body，避免被 #chat-history-panel/#chat-history-list 的 overflow 裁剪；
@@ -2375,6 +2491,10 @@ export function createChatHistoryUI(appContext) {
   let activePreviewConversationId = null;
   let activePreviewAnchorEl = null;
   let previewTooltipHideTimer = null;
+  let altPreviewActive = false;
+  let altPreviewHandlersBound = false;
+  let altPreviewRafId = 0;
+  let altPreviewLastPoint = { x: 0, y: 0 };
 
   function ensureChatHistoryPreviewTooltip() {
     if (chatHistoryPreviewTooltipEl) return chatHistoryPreviewTooltipEl;
@@ -2664,6 +2784,45 @@ export function createChatHistoryUI(appContext) {
     tooltip.style.top = `${Math.round(top)}px`;
   }
 
+  function positionChatHistoryPreviewTooltipByPoint(tooltip, point) {
+    if (!tooltip || !point) return;
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+    const gap = 12;
+    const padding = 10;
+    const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    const tooltipW = tooltip.offsetWidth || 0;
+    const tooltipH = tooltip.offsetHeight || 0;
+
+    // 期望位置：鼠标右侧；若空间不足则放左侧，避免出屏
+    let placement = 'right';
+    let left = x + gap;
+    if (left + tooltipW + padding > viewportW) {
+      placement = 'left';
+      left = x - gap - tooltipW;
+    }
+    left = Math.min(viewportW - tooltipW - padding, Math.max(padding, left));
+
+    // 期望位置：鼠标右下；若下方空间不足则放右上
+    let top = y + gap;
+    if (top + tooltipH + padding > viewportH) {
+      top = y - gap - tooltipH;
+    }
+    top = Math.min(viewportH - tooltipH - padding, Math.max(padding, top));
+
+    // 箭头尽量对齐到鼠标的垂直位置
+    const arrowTop = Math.min(Math.max(12, y - top - 5), Math.max(12, tooltipH - 18));
+    tooltip.style.setProperty('--arrow-top', `${Math.round(arrowTop)}px`);
+
+    tooltip.dataset.placement = placement;
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+  }
+
   function showChatHistoryPreviewTooltip(anchorEl, meta) {
     cancelHideChatHistoryPreviewTooltip();
 
@@ -2712,6 +2871,154 @@ export function createChatHistoryUI(appContext) {
         positionChatHistoryPreviewTooltip(tooltip, anchorEl);
       });
   }
+
+  function showChatHistoryPreviewTooltipAtPoint(anchorEl, meta, point) {
+    cancelHideChatHistoryPreviewTooltip();
+
+    const tooltip = ensureChatHistoryPreviewTooltip();
+    activePreviewConversationId = meta?.conversationId || null;
+    activePreviewAnchorEl = anchorEl || null;
+
+    tooltip.dataset.visible = '1';
+    tooltip.dataset.placement = 'right';
+
+    if (tooltip?._parts) {
+      const { titleEl, metaEl, subMetaEl, messagesEl } = tooltip._parts;
+      titleEl.textContent = (meta?.title || '').trim() || '聊天预览';
+      metaEl.textContent = (meta?.meta || '').trim();
+      const subMetaText = (meta?.submeta || '').trim();
+      subMetaEl.textContent = subMetaText;
+      subMetaEl.style.display = subMetaText ? '' : 'none';
+      messagesEl.textContent = '';
+      const loading = document.createElement('div');
+      loading.className = 'preview-loading';
+      loading.textContent = '正在加载预览...';
+      messagesEl.appendChild(loading);
+    }
+
+    positionChatHistoryPreviewTooltipByPoint(tooltip, point);
+
+    const requestId = activePreviewConversationId;
+    if (!requestId) return;
+
+    getConversationPreviewData(requestId)
+      .then((data) => {
+        if (activePreviewConversationId !== requestId) return;
+        renderChatHistoryPreviewTooltip(tooltip, meta, data);
+        // 内容渲染后高度可能变化：使用“最后一次鼠标位置”重新定位，避免抖动/跳动
+        positionChatHistoryPreviewTooltipByPoint(tooltip, altPreviewLastPoint);
+      })
+      .catch(() => {
+        if (activePreviewConversationId !== requestId) return;
+        if (tooltip?._parts) {
+          const { messagesEl } = tooltip._parts;
+          messagesEl.textContent = '';
+          const err = document.createElement('div');
+          err.className = 'preview-loading';
+          err.textContent = '加载预览失败';
+          messagesEl.appendChild(err);
+        }
+        positionChatHistoryPreviewTooltipByPoint(tooltip, altPreviewLastPoint);
+      });
+  }
+
+  function resolveChatHistoryItemFromPoint(x, y) {
+    const pointX = Number(x);
+    const pointY = Number(y);
+    if (!Number.isFinite(pointX) || !Number.isFinite(pointY)) return null;
+
+    let el = null;
+    try {
+      el = document.elementFromPoint(pointX, pointY);
+    } catch (_) {
+      el = null;
+    }
+    if (!el || typeof el.closest !== 'function') return null;
+
+    const item = el.closest('.chat-history-item');
+    if (!item) return null;
+
+    const panel = document.getElementById('chat-history-panel');
+    if (!panel || !panel.classList.contains('visible')) return null;
+    if (!panel.contains(item)) return null;
+    return item;
+  }
+
+  function updateAltPreviewAtPoint(point) {
+    if (!altPreviewActive) return;
+    if (!point) return;
+
+    const panel = document.getElementById('chat-history-panel');
+    if (!panel || !panel.classList.contains('visible')) {
+      hideChatHistoryPreviewTooltip();
+      return;
+    }
+
+    const item = resolveChatHistoryItemFromPoint(point.x, point.y);
+    if (!item) {
+      hideChatHistoryPreviewTooltip();
+      return;
+    }
+
+    const hoverMeta = item._previewHoverMeta || null;
+    const conversationId = hoverMeta?.conversationId || (item.getAttribute('data-id') || '');
+    if (!conversationId) {
+      hideChatHistoryPreviewTooltip();
+      return;
+    }
+
+    // 仅当“鼠标下方会话发生变化”时才触发读取；否则只更新位置，避免拖慢鼠标移动。
+    const tooltip = ensureChatHistoryPreviewTooltip();
+    const shouldReload = activePreviewConversationId !== conversationId || tooltip.dataset.visible !== '1';
+    if (shouldReload) {
+      showChatHistoryPreviewTooltipAtPoint(item, hoverMeta || { conversationId }, point);
+    } else {
+      positionChatHistoryPreviewTooltipByPoint(tooltip, point);
+    }
+  }
+
+  function scheduleAltPreviewUpdate(point) {
+    altPreviewLastPoint = point || altPreviewLastPoint;
+    if (!altPreviewActive) return;
+    if (altPreviewRafId) return;
+    altPreviewRafId = requestAnimationFrame(() => {
+      altPreviewRafId = 0;
+      updateAltPreviewAtPoint(altPreviewLastPoint);
+    });
+  }
+
+  function bindAltPreviewHandlersOnce() {
+    if (altPreviewHandlersBound) return;
+    altPreviewHandlersBound = true;
+
+    // 记录鼠标位置：Alt 按下时可立即定位到“鼠标下方的会话”
+    document.addEventListener('mousemove', (e) => {
+      altPreviewLastPoint = { x: e.clientX, y: e.clientY };
+      if (!altPreviewActive) return;
+      scheduleAltPreviewUpdate(altPreviewLastPoint);
+    }, { passive: true });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Alt') return;
+      if (altPreviewActive) return;
+      altPreviewActive = true;
+      // 立即更新一次：不需要任何 hover 延迟
+      scheduleAltPreviewUpdate(altPreviewLastPoint);
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.key !== 'Alt') return;
+      altPreviewActive = false;
+      hideChatHistoryPreviewTooltip();
+    });
+
+    window.addEventListener('blur', () => {
+      altPreviewActive = false;
+      hideChatHistoryPreviewTooltip();
+    });
+  }
+
+  bindAltPreviewHandlersOnce();
 
   function createConversationItemElement(conv, filterText, isPinned) {
     const item = document.createElement('div');
@@ -2858,22 +3165,9 @@ export function createChatHistoryUI(appContext) {
       meta: displayInfos,
       submeta: [conv?.title, conv?.url].map(v => (typeof v === 'string' ? v.trim() : '')).filter(Boolean).join(' · ')
     };
-    item.addEventListener('mouseenter', () => {
-      cancelHideChatHistoryPreviewTooltip();
-      if (item._previewHoverTimer) clearTimeout(item._previewHoverTimer);
-      item._previewHoverTimer = setTimeout(() => {
-        item._previewHoverTimer = null;
-        showChatHistoryPreviewTooltip(item, hoverMeta);
-      }, 180);
-    });
-    item.addEventListener('mouseleave', () => {
-      if (item._previewHoverTimer) {
-        clearTimeout(item._previewHoverTimer);
-        item._previewHoverTimer = null;
-      }
-      // 若离开的是当前激活条目，则隐藏 tooltip；若用户迅速移到下一个条目，mouseenter 会取消该隐藏
-      scheduleHideChatHistoryPreviewTooltip(80);
-    });
+    // Alt 预览模式：把元信息挂到 DOM 节点上，供全局的 Alt+MouseMove 快速读取。
+    // 说明：不再使用“纯 hover + 延迟”的方式触发，避免日常浏览时预览框频繁弹出遮挡内容。
+    item._previewHoverMeta = hoverMeta;
 
     let snippetRendered = false;
     if (isTextFilterActive && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
@@ -3075,7 +3369,9 @@ export function createChatHistoryUI(appContext) {
       isLoadingMoreItems = false;
       return;
     }
-    // 树状视图（且无筛选）时：不插入“时间分组标题”，保证父子节点紧邻显示。
+    // 树状视图（且无筛选）时：
+    // - 仍然按时间分组，但分组依据改为“整棵树的最新 endTime（max）”，并且只会在树根节点处插入一次；
+    // - 这样既保留树状父子连续展示，也保留用户熟悉的“今天/昨天/本周...”分组体验。
     const isBranchTreeOrderingActive = !!(
       panel &&
       panel.dataset.branchViewMode === 'tree' &&
@@ -3098,8 +3394,9 @@ export function createChatHistoryUI(appContext) {
       const convIndex = currentlyRenderedCount + i;
       const conv = currentDisplayItems[convIndex];
       const isConvPinned = pinnedIds.includes(conv.id);
+      const isInPinnedSection = convIndex < currentPinnedItemsCountInDisplay;
 
-      if (!isConvPinned && !isBranchTreeOrderingActive) {
+      if (!isInPinnedSection) {
         const isFirstUnpinnedAfterPinnedBlock = (convIndex === currentPinnedItemsCountInDisplay);
 
         let groupKey = '';
@@ -3120,7 +3417,11 @@ export function createChatHistoryUI(appContext) {
               : `URL 匹配等级：L${level}（越小越精确）`;
           }
         } else {
-          const convDate = new Date(conv.endTime);
+          // 默认按 endTime 分组；树状模式下改用“整棵树的排序时间”（来自 buildConversationBranchTreeDisplayList 的 __treeSortEndTime）。
+          const groupTime = isBranchTreeOrderingActive
+            ? (Number(conv?.__treeSortEndTime) || Number(conv?.endTime) || 0)
+            : (Number(conv?.endTime) || 0);
+          const convDate = groupTime ? new Date(groupTime) : new Date();
           const groupLabel = getGroupLabel(convDate);
           groupKey = groupLabel;
           groupText = groupLabel;
@@ -3680,6 +3981,11 @@ export function createChatHistoryUI(appContext) {
       panel = document.createElement('div');
       panel.id = 'chat-history-panel';
 
+      // 默认启用“树状”视图：
+      // - 需求背景：聊天记录默认以分支树展示，并且按“整棵树的最新更新时间”排序；
+      // - 兼容性：仅在面板首次创建时写入默认值；后续用户手动切换（data-branch-view-mode=""）不应被覆盖。
+      panel.dataset.branchViewMode = 'tree';
+
       // 添加标题栏
       const header = document.createElement('div');
       header.className = 'panel-header';
@@ -3948,6 +4254,12 @@ export function createChatHistoryUI(appContext) {
       
       document.body.appendChild(panel);
     } else {
+      // 兼容旧 DOM：如果历史面板是由旧版本创建出来的（没有 data-branch-view-mode），则补上默认值。
+      // 注意：不要用 `if (!panel.dataset.branchViewMode)` 判断，因为用户关闭树状模式时值为 ''（也属于 falsy）。
+      if (!panel.hasAttribute('data-branch-view-mode')) {
+        panel.dataset.branchViewMode = 'tree';
+      }
+
       // 如果面板已存在，获取 filterInput 引用
       filterInput = panel.querySelector('.filter-container input[type="text"]');
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
