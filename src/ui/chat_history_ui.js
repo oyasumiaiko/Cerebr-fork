@@ -2383,7 +2383,7 @@ export function createChatHistoryUI(appContext) {
    */
 
   // ==========================================================================
-  //  聊天记录列表：标注“已在其它标签页打开”并提供跳转按钮
+  //  聊天记录列表：标注“该会话已在其它标签页打开”（右上角绿点）并提供跳转
   // ==========================================================================
 
   function buildOpenTabsTooltipText(tabs, selfTabId) {
@@ -2422,34 +2422,35 @@ export function createChatHistoryUI(appContext) {
 
   function updateConversationItemOpenTabUi(item, conversationId) {
     if (!item || !conversationId) return;
-    const actions = item.querySelector('.chat-history-item-actions');
-    if (!actions) return;
-
-    const statusEl = actions.querySelector('.open-tab-status');
-    const jumpBtn = actions.querySelector('.jump-to-open-tab-btn');
-    if (!statusEl || !jumpBtn) return;
+    const dot = item.querySelector('.chat-history-open-dot');
+    if (!dot) return;
 
     const { tabs, selfTabId, otherTabs } = getConversationOpenTabsState(conversationId);
     const isOpen = tabs.length > 0;
     const isOpenElsewhere = otherTabs.length > 0;
-    const tooltip = buildOpenTabsTooltipText(tabs, selfTabId);
 
     if (!isOpen) {
-      statusEl.style.display = 'none';
-      jumpBtn.style.display = 'none';
-      statusEl.classList.remove('open-self', 'open-elsewhere');
+      dot.classList.remove('active');
+      dot.title = '';
+      dot.dataset.openStateKey = '';
       return;
     }
 
-    statusEl.style.display = 'inline-flex';
-    statusEl.classList.toggle('open-elsewhere', isOpenElsewhere);
-    statusEl.classList.toggle('open-self', !isOpenElsewhere);
-    statusEl.title = tooltip;
-    statusEl.textContent = isOpenElsewhere ? `已在 ${tabs.length} 个标签页打开` : '当前标签页已打开';
+    const tooltip = buildOpenTabsTooltipText(tabs, selfTabId);
+    const nextTitle = isOpenElsewhere
+      ? (tooltip ? `${tooltip}\n\n点击跳转到已打开的标签页` : '点击跳转到已打开的标签页')
+      : (tooltip || '该会话已在当前标签页打开');
+    const nextKey = `${tabs.length}:${isOpenElsewhere ? 1 : 0}`;
 
-    // 只有当“其它标签页”确实存在时才显示跳转按钮（避免跳转回当前标签页造成困惑）
-    jumpBtn.style.display = isOpenElsewhere ? 'inline-flex' : 'none';
-    jumpBtn.title = tooltip ? `${tooltip}\n\n点击跳转到已打开的标签页` : '点击跳转到已打开的标签页';
+    // 性能/体验：避免在存在性快照频繁更新时重复写 title 导致浏览器 tooltip 抖动
+    if (dot.dataset.openStateKey !== nextKey) {
+      dot.dataset.openStateKey = nextKey;
+      dot.title = nextTitle;
+    } else if (dot.title !== nextTitle) {
+      dot.title = nextTitle;
+    }
+
+    dot.classList.add('active');
   }
 
   function refreshOpenTabUiIfPanelVisible() {
@@ -3123,42 +3124,42 @@ export function createChatHistoryUI(appContext) {
     mainDiv.appendChild(summaryDiv);
     mainDiv.appendChild(infoDiv);
 
-    const actionsDiv = document.createElement('div');
-    actionsDiv.className = 'chat-history-item-actions';
-    const openStatusEl = document.createElement('div');
-    openStatusEl.className = 'open-tab-status';
-    openStatusEl.style.display = 'none';
-    const jumpBtn = document.createElement('button');
-    jumpBtn.className = 'jump-to-open-tab-btn';
-    jumpBtn.type = 'button';
-    jumpBtn.style.display = 'none';
-    jumpBtn.setAttribute('aria-label', '跳转到已打开该会话的标签页');
-    jumpBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i>';
-    jumpBtn.addEventListener('click', async (e) => {
+    item.appendChild(mainDiv);
+    // 右上角“已打开”绿点：不占布局空间，只在会话已被其它标签页/当前标签页打开时显示。
+    const openDot = document.createElement('button');
+    openDot.className = 'chat-history-open-dot';
+    openDot.type = 'button';
+    openDot.tabIndex = -1; // 避免在键盘 Tab 流中“抢焦点”，不影响主列表的使用体验
+    openDot.setAttribute('aria-label', '该会话已在标签页打开');
+    openDot.dataset.openStateKey = '';
+    openDot.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (!conversationPresence?.focusConversation) return;
+      if (openDot.dataset.busy === '1') return;
+
+      // 只有当“其它标签页”确实存在时才跳转（避免跳回当前标签页造成困惑）
+      const { otherTabs } = getConversationOpenTabsState(conv.id);
+      if (!Array.isArray(otherTabs) || otherTabs.length === 0) return;
 
       try {
-        jumpBtn.disabled = true;
+        openDot.dataset.busy = '1';
         const selfTabId = conversationPresence.getSelfTabId?.() ?? null;
         const result = await conversationPresence.focusConversation(conv.id, { excludeTabId: selfTabId });
         if (result?.status === 'ok') {
           closeChatHistoryPanel();
           return;
         }
-        showNotification?.({ message: '跳转失败', type: 'error', description: result?.message || '' });
+        if (result?.status && result.status !== 'not_found') {
+          showNotification?.({ message: '跳转失败', type: 'error', duration: 1800 });
+        }
       } finally {
-        jumpBtn.disabled = false;
+        openDot.dataset.busy = '';
       }
     });
-    actionsDiv.appendChild(openStatusEl);
-    actionsDiv.appendChild(jumpBtn);
+    item.appendChild(openDot);
 
-    item.appendChild(mainDiv);
-    item.appendChild(actionsDiv);
-
-    // hover 预览 tooltip：延迟触发，避免鼠标快速扫过时造成大量数据库读取
+    // 预览 tooltip 元信息：供 Alt 预览模式使用（按住 Alt 才展示）
     const hoverMeta = {
       conversationId: conv.id,
       title: (typeof conv?.summary === 'string' && conv.summary.trim()) ? conv.summary.trim() : '无摘要',

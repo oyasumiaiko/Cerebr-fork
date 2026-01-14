@@ -3159,6 +3159,7 @@ body.hide-references .reference-number.superscript {
     border-bottom: 1px solid var(--cerebr-border-color);
     padding: 6px 0;
     cursor: pointer;
+    position: relative;
     display: flex;
     align-items: flex-start;
     gap: 10px;
@@ -3169,63 +3170,32 @@ body.hide-references .reference-number.superscript {
     min-width: 0;
 }
 
-.chat-history-item-actions {
-    flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-    padding-top: 2px;
-}
-
-.open-tab-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 18px;
-    padding: 0 8px;
+/* 会话“已打开”提示：右上角小绿点（不占布局空间） */
+.chat-history-open-dot {
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
     border-radius: 999px;
-    font-size: 11px;
-    line-height: 18px;
-    border: 1px solid var(--cerebr-control-border);
-    background: var(--cerebr-control-bg);
-    color: var(--cerebr-text-color);
-    white-space: nowrap;
-    user-select: none;
-    opacity: 0.92;
-}
-
-.open-tab-status.open-self {
-    border-color: color-mix(in srgb, var(--cerebr-green) 65%, transparent);
-    background: color-mix(in srgb, var(--cerebr-green) 18%, transparent);
-}
-
-.open-tab-status.open-elsewhere {
-    border-color: color-mix(in srgb, var(--cerebr-orange) 65%, transparent);
-    background: color-mix(in srgb, var(--cerebr-orange) 18%, transparent);
-}
-
-.jump-to-open-tab-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    border: 1px solid var(--cerebr-control-border);
-    background: var(--cerebr-control-bg);
-    color: var(--cerebr-text-color);
-    cursor: pointer;
+    background: var(--cerebr-green);
+    border: 1px solid color-mix(in srgb, var(--cerebr-green) 62%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
     padding: 0;
+    margin: 0;
+    opacity: 0;
+    pointer-events: none;
+    cursor: pointer;
 }
 
-.jump-to-open-tab-btn:hover {
-    background-color: var(--cerebr-hover-color);
+.chat-history-open-dot.active {
+    opacity: 0.92;
+    pointer-events: auto;
 }
 
-.jump-to-open-tab-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
+.chat-history-open-dot:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--cerebr-green) 70%, white);
+    outline-offset: 2px;
 }
 
 /* 聊天记录条目预览 tooltip（替代浏览器原生 title tooltip） */
