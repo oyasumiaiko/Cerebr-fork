@@ -19,6 +19,7 @@ export function createSidebarAppContext(isStandalone) {
     threadContainer: document.getElementById('thread-container'),
     threadPanelTitle: document.getElementById('thread-panel-title'),
     threadExitButton: document.getElementById('thread-exit'),
+    threadDeleteButton: document.getElementById('thread-delete'),
     messageInput: document.getElementById('message-input'),
     contextMenu: document.getElementById('context-menu'),
     copyMessageButton: document.getElementById('copy-message'),

@@ -17,7 +17,9 @@ export function createSelectionThreadManager(appContext) {
   const threadContainer = dom.threadContainer;
   const threadPanelTitle = dom.threadPanelTitle;
   const threadExitButton = dom.threadExitButton;
+  const threadDeleteButton = dom.threadDeleteButton;
   const chatHistoryManager = services.chatHistoryManager;
+  const chatHistoryUI = services.chatHistoryUI;
   const messageProcessor = services.messageProcessor;
   const imageHandler = services.imageHandler;
   const apiManager = services.apiManager;
@@ -750,15 +752,25 @@ export function createSelectionThreadManager(appContext) {
     return false;
   }
 
-  function applyHighlightForAnnotation(textContainer, annotation) {
-    if (!textContainer || !annotation?.selectionText) return;
+  function buildAnnotationHighlightRanges(textContainer, annotations) {
+    if (!textContainer || !annotations.length) return [];
     const fullText = textContainer.textContent || '';
-    const selectionText = annotation.selectionText;
-    const matchIndex = Number.isFinite(annotation.matchIndex) ? annotation.matchIndex : 0;
-    const startPos = findNthOccurrence(fullText, selectionText, matchIndex);
-    if (startPos < 0) return;
-    const endPos = startPos + selectionText.length;
+    return annotations.map((annotation) => {
+      const selectionText = annotation?.selectionText || '';
+      if (!selectionText) return null;
+      const matchIndex = Number.isFinite(annotation.matchIndex) ? annotation.matchIndex : 0;
+      const startPos = findNthOccurrence(fullText, selectionText, matchIndex);
+      if (startPos < 0) return null;
+      return {
+        annotation,
+        startPos,
+        endPos: startPos + selectionText.length
+      };
+    }).filter(Boolean);
+  }
 
+  function applyHighlightRange(textContainer, annotation, startPos, endPos) {
+    if (!textContainer || !annotation || startPos < 0 || endPos <= startPos) return;
     const range = resolveRangeFromIndices(textContainer, startPos, endPos);
     if (!range) return;
 
@@ -766,7 +778,7 @@ export function createSelectionThreadManager(appContext) {
     span.className = 'thread-highlight';
     span.dataset.threadId = annotation.id;
     span.dataset.threadAnchorId = annotation.anchorMessageId || '';
-    span.dataset.selectionText = selectionText;
+    span.dataset.selectionText = annotation.selectionText || '';
 
     wrapRangeWithSpan(range, span);
   }
@@ -776,14 +788,17 @@ export function createSelectionThreadManager(appContext) {
     const annotations = Array.isArray(messageNode.threadAnnotations)
       ? messageNode.threadAnnotations
       : [];
-    if (!annotations.length) return;
 
     const textContainer = messageElement.querySelector('.text-content');
     if (!textContainer) return;
 
     unwrapThreadHighlights(textContainer);
-    annotations.forEach((annotation) => {
-      applyHighlightForAnnotation(textContainer, annotation);
+    if (!annotations.length) return;
+    const ranges = buildAnnotationHighlightRanges(textContainer, annotations);
+    // 从后往前包裹高亮，避免前面的高亮拆分文本节点后导致索引偏移。
+    ranges.sort((a, b) => b.startPos - a.startPos);
+    ranges.forEach(({ annotation, startPos, endPos }) => {
+      applyHighlightRange(textContainer, annotation, startPos, endPos);
     });
   }
 
@@ -871,6 +886,57 @@ export function createSelectionThreadManager(appContext) {
     updateThreadPanelTitle(state.activeSelectionText);
     applyThreadLayout();
     renderThreadMessages(threadId);
+  }
+
+  function removeThreadMessageElements(messageId) {
+    if (!messageId) return;
+    document.querySelectorAll(`[data-message-id="${messageId}"]`).forEach((node) => {
+      node.remove();
+    });
+  }
+
+  async function deleteThreadById(threadId) {
+    if (!threadId) return;
+    const info = findThreadById(threadId);
+    if (!info || !info.annotation) {
+      showNotification?.({ message: '未找到要删除的划词对话', type: 'warning' });
+      return;
+    }
+
+    const anchorNode = chatHistoryManager?.chatHistory?.messages?.find(m => m.id === info.anchorMessageId) || null;
+    const chain = collectThreadChain(info.annotation)
+      .filter(node => node?.threadId === threadId || node?.threadRootId === info.annotation?.rootMessageId);
+
+    // 先从线程末端开始删除，避免父子关系被提前改写导致链路错乱。
+    chain.slice().reverse().forEach((node) => {
+      removeThreadMessageElements(node.id);
+      chatHistoryManager?.deleteMessage?.(node.id);
+    });
+
+    if (anchorNode && Array.isArray(anchorNode.threadAnnotations)) {
+      anchorNode.threadAnnotations = anchorNode.threadAnnotations.filter(item => item?.id !== threadId);
+    }
+
+    const anchorElement = anchorNode ? getMessageElementFromNode(anchorNode) : null;
+    if (anchorElement && anchorNode) {
+      decorateMessageElement(anchorElement, anchorNode);
+    }
+
+    if (state.activeThreadId === threadId) {
+      exitThread();
+    }
+
+    if (chatHistoryUI?.saveCurrentConversation) {
+      await chatHistoryUI.saveCurrentConversation(true);
+    }
+
+    showNotification?.({ message: '已删除划词对话', type: 'info' });
+  }
+
+  async function deleteActiveThread() {
+    const threadId = state.activeThreadId;
+    if (!threadId) return;
+    await deleteThreadById(threadId);
   }
 
   function exitThread() {
@@ -981,6 +1047,11 @@ export function createSelectionThreadManager(appContext) {
     bindHighlightEvents(chatContainer);
     if (threadExitButton) {
       threadExitButton.addEventListener('click', () => exitThread());
+    }
+    if (threadDeleteButton) {
+      threadDeleteButton.addEventListener('click', () => {
+        deleteActiveThread();
+      });
     }
     if (threadPanel) {
       threadPanel.setAttribute('aria-hidden', 'true');

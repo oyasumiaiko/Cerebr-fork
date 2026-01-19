@@ -459,6 +459,13 @@ body.thread-mode-active #thread-panel {
     color: var(--cerebr-text-color);
 }
 
+.thread-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.thread-panel-delete,
 .thread-panel-exit {
     padding: 4px 10px;
     border-radius: 8px;
