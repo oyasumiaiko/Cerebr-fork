@@ -935,6 +935,10 @@ export function createSelectionThreadManager(appContext) {
     if (!bubbleEl || bubbleEl.style.display === 'none') return;
     if (bubbleEl.contains(event.target)) return;
     if (event.target.closest('.thread-highlight')) return;
+    if (state.bubbleType === 'selection') {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+    }
     hideBubble(true);
   }
 

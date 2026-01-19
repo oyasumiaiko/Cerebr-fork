@@ -5043,6 +5043,19 @@ html.fullscreen-mode::before {
 
 .fullscreen-mode body.thread-mode-active #thread-panel {
   max-width: var(--cerebr-fullscreen-width);
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fullscreen-mode body.thread-mode-active .thread-panel-header {
+  background: transparent;
+  border-bottom: none;
+}
+
+.fullscreen-mode body.thread-mode-active #thread-container {
+  padding-top: 15px;
+  padding-bottom: 15px;
 }
 
 /* 全屏下：AI 消息不再强制充满整行，避免超宽 */

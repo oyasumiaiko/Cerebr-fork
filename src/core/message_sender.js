@@ -29,7 +29,6 @@ export function createMessageSender(appContext) {
   const chatHistoryUI = services.chatHistoryUI;
   const chatHistoryManager = services.chatHistoryManager;
   const inputController = services.inputController;
-  const selectionThreadManager = services.selectionThreadManager;
   const getCurrentConversationChain = chatHistoryManager.getCurrentConversationChain;
   const chatContainer = dom.chatContainer;
   const threadContainer = dom.threadContainer;
@@ -295,12 +294,13 @@ export function createMessageSender(appContext) {
    * @returns {{threadId: string, anchorMessageId: string, selectionText: string, annotation: Object}|null}
    */
   function resolveActiveThreadContext() {
-    if (!selectionThreadManager?.isThreadModeActive?.()) return null;
-    const threadId = selectionThreadManager.getActiveThreadId?.();
+    const threadManager = services.selectionThreadManager;
+    if (!threadManager?.isThreadModeActive?.()) return null;
+    const threadId = threadManager.getActiveThreadId?.();
     if (!threadId) return null;
-    const info = selectionThreadManager.findThreadById?.(threadId);
+    const info = threadManager.findThreadById?.(threadId);
     if (!info || !info.annotation) return null;
-    const anchorMessageId = info.anchorMessageId || selectionThreadManager.getActiveAnchorMessageId?.();
+    const anchorMessageId = info.anchorMessageId || threadManager.getActiveAnchorMessageId?.();
     if (!anchorMessageId) return null;
 
     const anchorNode = chatHistoryManager?.chatHistory?.messages?.find(m => m.id === anchorMessageId);
@@ -308,14 +308,14 @@ export function createMessageSender(appContext) {
       if (typeof showNotification === 'function') {
         showNotification({ message: '划词线程锚点已丢失，已退出线程模式', type: 'warning' });
       }
-      selectionThreadManager.exitThread?.();
+      threadManager.exitThread?.();
       return null;
     }
 
     return {
       threadId,
       anchorMessageId,
-      selectionText: info.annotation?.selectionText || selectionThreadManager.getActiveSelectionText?.() || '',
+      selectionText: info.annotation?.selectionText || threadManager.getActiveSelectionText?.() || '',
       annotation: info.annotation
     };
   }
