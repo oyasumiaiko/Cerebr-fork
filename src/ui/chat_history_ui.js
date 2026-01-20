@@ -4039,10 +4039,10 @@ export function createChatHistoryUI(appContext) {
       panel = document.createElement('div');
       panel.id = 'chat-history-panel';
 
-      // 默认启用“树状”视图：
-      // - 需求背景：聊天记录默认以分支树展示，并且按“整棵树的最新更新时间”排序；
-      // - 兼容性：仅在面板首次创建时写入默认值；后续用户手动切换（data-branch-view-mode=""）不应被覆盖。
-      panel.dataset.branchViewMode = 'tree';
+      // 默认不启用“树状”视图：
+      // - 需求背景：打开聊天记录窗口时保持平铺列表，避免首次加载就进行树状排序与额外预热。
+      // - 一致性：关闭树状模式用 data-branch-view-mode="" 表示，便于与用户手动切换状态一致。
+      panel.dataset.branchViewMode = '';
 
       // 添加标题栏
       const header = document.createElement('div');
@@ -4312,10 +4312,11 @@ export function createChatHistoryUI(appContext) {
       
       document.body.appendChild(panel);
     } else {
-      // 兼容旧 DOM：如果历史面板是由旧版本创建出来的（没有 data-branch-view-mode），则补上默认值。
+      // 兼容旧 DOM：如果历史面板是由旧版本创建出来的（没有 data-branch-view-mode），
+      // 则补上默认值（关闭树状），以符合“打开时默认平铺”的行为。
       // 注意：不要用 `if (!panel.dataset.branchViewMode)` 判断，因为用户关闭树状模式时值为 ''（也属于 falsy）。
       if (!panel.hasAttribute('data-branch-view-mode')) {
-        panel.dataset.branchViewMode = 'tree';
+        panel.dataset.branchViewMode = '';
       }
 
       // 如果面板已存在，获取 filterInput 引用
