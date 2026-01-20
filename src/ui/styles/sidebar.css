@@ -408,6 +408,7 @@ body.standalone-mode #empty-state-repomix {
     overflow-x: hidden;
     overscroll-behavior: contain;
     padding: 15px 15px 15px 15px;
+    box-sizing: border-box;
     /* 滚动条样式统一至全局 */
     min-height: 0;
     -webkit-overflow-scrolling: touch;
@@ -5264,6 +5265,8 @@ html.fullscreen-mode::before {
 .fullscreen-mode body.thread-mode-active #thread-container {
   padding-top: 15px;
   padding-bottom: 15px;
+  padding-left: 0;
+  padding-right: 15px;
 }
 
 /* 全屏下：AI 消息不再强制充满整行，避免超宽 */
