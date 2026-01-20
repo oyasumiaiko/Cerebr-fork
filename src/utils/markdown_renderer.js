@@ -56,6 +56,17 @@ function fixBoldParsingIssue(text) {
 }
 
 /**
+ * 清理渲染后的 HTML 中的零宽字符。
+ * 这些字符仅用于修正 Markdown 粗体解析，渲染完成后移除可避免后续选区匹配偏移。
+ * @param {string} html - 渲染后的 HTML 字符串
+ * @returns {string} - 去除零宽字符后的 HTML
+ */
+function removeZeroWidthFromHtml(html) {
+  if (typeof html !== 'string') return '';
+  return html.replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
+}
+
+/**
  * 处理未闭合的代码块（确保 ``` 成对）。
  * @param {string} text - 原始文本
  * @returns {string}
@@ -383,5 +394,6 @@ export function renderMarkdownSafe(markdownText, options = {}) {
   const safe = DOMPurify.sanitize(html, purifyConfig);
 
   // 5) 恢复数学（KaTeX 渲染）；KaTeX 输出不再经过二次清洗，确保保留其必需样式
-  return restoreMath(safe, collectedMathTokens);
+  const restored = restoreMath(safe, collectedMathTokens);
+  return removeZeroWidthFromHtml(restored);
 }

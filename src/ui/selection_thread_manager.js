@@ -105,12 +105,6 @@ export function createSelectionThreadManager(appContext) {
     if (event && bubbleEl) {
       const actionButton = event.target?.closest?.('.selection-thread-bubble__icon-button');
       const actionId = actionButton?.dataset?.actionId || '';
-      // 调试：确认气泡动作按钮是否收到点击事件
-      if (actionId) {
-        console.log('[划词气泡] 点击动作按钮:', actionId);
-      } else {
-        console.log('[划词气泡] 点击气泡主体');
-      }
       if (actionId && state.bubbleActionHandlers?.has(actionId)) {
         event.preventDefault();
         event.stopPropagation();
@@ -745,6 +739,43 @@ export function createSelectionThreadManager(appContext) {
     return `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // 过滤 Markdown 预处理插入的零宽字符，避免划词索引与渲染文本错位。
+  const ZERO_WIDTH_REGEX = /[\u200B\u200C\u200D\uFEFF]/g;
+  const ZERO_WIDTH_CHARS = new Set(['\u200B', '\u200C', '\u200D', '\uFEFF']);
+
+  // 仅移除零宽字符，不做 trim，保证长度与索引可预测。
+  function stripZeroWidth(text) {
+    if (typeof text !== 'string') return '';
+    return text.replace(ZERO_WIDTH_REGEX, '');
+  }
+
+  // 划词文本统一规范化：移除零宽字符并去除首尾空白，便于匹配。
+  function normalizeSelectionText(text) {
+    return stripZeroWidth(text).trim();
+  }
+
+  // 构建“可见文本”到原始文本的索引映射，便于恢复 DOM Range。
+  function buildNormalizedTextMap(text) {
+    if (!text) return { normalizedText: '', indexMap: [] };
+    const normalizedChars = [];
+    const indexMap = [];
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ZERO_WIDTH_CHARS.has(ch)) continue;
+      indexMap.push(i);
+      normalizedChars.push(ch);
+    }
+    return { normalizedText: normalizedChars.join(''), indexMap };
+  }
+
+  // 将规范化后的索引映射回原始文本索引，失败时返回 null。
+  function mapNormalizedIndexToOriginal(indexMap, normalizedIndex) {
+    if (!Array.isArray(indexMap)) return null;
+    if (!Number.isFinite(normalizedIndex)) return null;
+    if (normalizedIndex < 0 || normalizedIndex >= indexMap.length) return null;
+    return indexMap[normalizedIndex];
+  }
+
   function findThreadById(threadId) {
     if (!threadId) return null;
     const messages = chatHistoryManager?.chatHistory?.messages || [];
@@ -761,23 +792,28 @@ export function createSelectionThreadManager(appContext) {
   function findThreadBySelection(anchorNode, selectionText, matchIndex = null) {
     if (!anchorNode || !selectionText) return null;
     const annotations = Array.isArray(anchorNode.threadAnnotations) ? anchorNode.threadAnnotations : [];
-    const normalizedText = selectionText.trim();
+    const normalizedText = normalizeSelectionText(selectionText);
     if (!normalizedText) return null;
 
     if (matchIndex == null) {
-      return annotations.find(item => item?.selectionText === normalizedText) || null;
+      return annotations.find(item => normalizeSelectionText(item?.selectionText || '') === normalizedText) || null;
     }
-    return annotations.find(item => item?.selectionText === normalizedText && item?.matchIndex === matchIndex) || null;
+    return annotations.find(item => (
+      normalizeSelectionText(item?.selectionText || '') === normalizedText
+      && item?.matchIndex === matchIndex
+    )) || null;
   }
 
   function createThreadAnnotation(anchorNode, info) {
     if (!anchorNode || !info || !info.selectionText) return null;
+    const normalizedSelectionText = normalizeSelectionText(info.selectionText);
+    if (!normalizedSelectionText) return null;
     const annotations = ensureThreadAnnotations(anchorNode);
     const threadId = buildThreadId();
     const payload = {
       id: threadId,
       anchorMessageId: anchorNode.id,
-      selectionText: info.selectionText,
+      selectionText: normalizedSelectionText,
       matchIndex: Number.isFinite(info.matchIndex) ? info.matchIndex : 0,
       createdAt: Date.now(),
       rootMessageId: null,
@@ -795,7 +831,7 @@ export function createSelectionThreadManager(appContext) {
     }
 
     const rawText = range.toString();
-    const selectionText = rawText ? rawText.trim() : '';
+    const selectionText = normalizeSelectionText(rawText || '');
     if (!selectionText) return null;
 
     let startOffset = 0;
@@ -803,18 +839,19 @@ export function createSelectionThreadManager(appContext) {
       const preRange = document.createRange();
       preRange.selectNodeContents(textContainer);
       preRange.setEnd(range.startContainer, range.startOffset);
-      startOffset = preRange.toString().length;
+      startOffset = stripZeroWidth(preRange.toString()).length;
     } catch (_) {
       startOffset = 0;
     }
 
     const fullText = textContainer.textContent || '';
-    const matchIndex = findClosestOccurrenceIndex(fullText, selectionText, startOffset);
+    const normalizedFullText = stripZeroWidth(fullText);
+    const matchIndex = findClosestOccurrenceIndex(normalizedFullText, selectionText, startOffset);
 
     return {
       selectionText,
       matchIndex,
-      fullTextLength: fullText.length
+      fullTextLength: normalizedFullText.length
     };
   }
 
@@ -932,16 +969,23 @@ export function createSelectionThreadManager(appContext) {
   function buildAnnotationHighlightRanges(textContainer, annotations) {
     if (!textContainer || !annotations.length) return [];
     const fullText = textContainer.textContent || '';
+    const { normalizedText, indexMap } = buildNormalizedTextMap(fullText);
+    if (!normalizedText) return [];
     return annotations.map((annotation) => {
-      const selectionText = annotation?.selectionText || '';
+      const selectionText = normalizeSelectionText(annotation?.selectionText || '');
       if (!selectionText) return null;
       const matchIndex = Number.isFinite(annotation.matchIndex) ? annotation.matchIndex : 0;
-      const startPos = findNthOccurrence(fullText, selectionText, matchIndex);
+      const startPos = findNthOccurrence(normalizedText, selectionText, matchIndex);
       if (startPos < 0) return null;
+      const endPos = startPos + selectionText.length;
+      const mappedStart = mapNormalizedIndexToOriginal(indexMap, startPos);
+      const mappedEnd = mapNormalizedIndexToOriginal(indexMap, endPos - 1);
+      if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd)) return null;
+      if (mappedEnd + 1 <= mappedStart) return null;
       return {
         annotation,
-        startPos,
-        endPos: startPos + selectionText.length
+        startPos: mappedStart,
+        endPos: mappedEnd + 1
       };
     }).filter(Boolean);
   }
@@ -990,13 +1034,11 @@ export function createSelectionThreadManager(appContext) {
     const selectionText = (selectionInfo?.selectionText || '').trim();
     if (!selectionText) {
       showNotification?.({ message: '选中内容为空，无法发送划词方式1', type: 'warning' });
-      console.warn('[划词气泡] 选中内容为空，跳过方式1发送');
       return false;
     }
 
     if (!promptSettingsManager?.getPrompts) {
       showNotification?.({ message: '未找到划词方式1配置', type: 'warning' });
-      console.warn('[划词气泡] promptSettingsManager 未就绪（方式1）');
       return false;
     }
 
@@ -1004,23 +1046,19 @@ export function createSelectionThreadManager(appContext) {
     const selectionPromptText = (prompts?.query?.prompt || '').trim();
     if (!selectionPromptText) {
       showNotification?.({ message: '尚未配置划词方式1，请在设置中补充', type: 'warning' });
-      console.warn('[划词气泡] 划词方式1为空');
       return false;
     }
 
     if (!messageSender?.sendMessage) {
       showNotification?.({ message: '发送器未就绪，暂时无法发送', type: 'warning' });
-      console.warn('[划词气泡] messageSender 未就绪');
       return false;
     }
 
-    console.log('[划词气泡] 准备发送划词方式1', { selectionText });
     let targetThread = existingThread;
     if (!targetThread) {
       const created = createThreadAnnotation(anchorNode, selectionInfo);
       if (!created) {
         showNotification?.({ message: '创建划词对话失败', type: 'warning' });
-        console.warn('[划词气泡] 创建线程失败');
         return false;
       }
       decorateMessageElement(messageElement, anchorNode);
@@ -1032,7 +1070,6 @@ export function createSelectionThreadManager(appContext) {
     const userMessageText = selectionPromptText.replace('<SELECTION>', selectionText);
     const apiPref = (prompts.query?.model || '').trim();
     const apiParam = apiPref || 'follow_current';
-    console.log('[划词气泡] 方式1发送参数', { api: apiParam, message: userMessageText });
     messageSender.sendMessage({
       originalMessageText: userMessageText,
       specificPromptType: 'query',
@@ -1052,10 +1089,6 @@ export function createSelectionThreadManager(appContext) {
     if (!anchorNode) return;
 
     const existingThread = findThreadBySelection(anchorNode, selectionInfo.selectionText, selectionInfo.matchIndex);
-    console.log('[划词气泡] 展示气泡', {
-      selectionText: selectionInfo.selectionText,
-      hasExistingThread: !!existingThread
-    });
     state.pendingSelection = {
       messageId,
       selectionText: selectionInfo.selectionText,
