@@ -1792,10 +1792,14 @@ export function createChatHistoryUI(appContext) {
    * 加载聊天历史记录列表
    * @param {HTMLElement} panel - 聊天历史面板元素
    * @param {string} filterText - 过滤文本
+   * @param {{keepExistingList?: boolean}|null} [options=null] - 可选：是否在刷新时保留旧列表，等待新数据准备好后再替换
    */
-  async function loadConversationHistories(panel, filterText) {
+  async function loadConversationHistories(panel, filterText, options = null) {
     // 生成本次加载的 runId 并标记到面板，用于取消过期任务
     ensurePanelStylesInjected();
+    const effectiveOptions = (options && typeof options === 'object') ? options : {};
+    const keepExistingList = !!effectiveOptions.keepExistingList;
+    const previousFilter = panel.dataset.currentFilter || '';
     const runId = createRunId();
     panel.dataset.currentFilter = filterText;
     panel.dataset.runId = runId;
@@ -1805,10 +1809,19 @@ export function createChatHistoryUI(appContext) {
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
 
-    // 重置并显示骨架屏，立刻给到视觉反馈
-    listContainer.innerHTML = '';
-    listContainer.scrollTop = 0;
-    renderSkeleton(listContainer, 8);
+    const canReuseExistingList = keepExistingList
+      && previousFilter === filterText
+      && !!listContainer.querySelector('.chat-history-item');
+    // 说明：允许在“重新打开面板”时先复用旧列表，减少空白等待；等新数据就绪后再整体替换。
+    let deferListReset = false;
+    if (!canReuseExistingList) {
+      // 重置并显示骨架屏，立刻给到视觉反馈
+      listContainer.innerHTML = '';
+      listContainer.scrollTop = 0;
+      renderSkeleton(listContainer, 8);
+    } else {
+      deferListReset = true;
+    }
 
     // 清理上一轮搜索残留的进度条（避免在新一轮加载时出现“旧进度”闪烁）
     try {
@@ -1860,21 +1873,34 @@ export function createChatHistoryUI(appContext) {
       countThreshold = parseInt(countFilterMatch[2], 10);
     }
 
-    const pinnedIds = await getPinnedIds();
-    // 任务可能已被新一轮加载替换
-    if (panel.dataset.runId !== runId) return;
+    const urlFilterMode = panel.dataset.urlFilterMode === 'currentUrl';
 
     // 树状视图：只在“无筛选”场景下改变排序（否则会干扰全文搜索/筛选的直觉）
     const isBranchTreeView = panel.dataset.branchViewMode === 'tree';
     const shouldTreeOrder = isBranchTreeView && !isCountFilter && !filterText.trim();
+    // 树状视图首次打开时可能需要全量元数据；若缓存未就绪，则先走“最近记录分页”快速渲染，
+    // 同时后台预热元数据，待就绪后再刷新为树状排序，降低打开时的等待感。
+    // 说明：metaCache 有 TTL，过期时也视为“未就绪”，避免打开面板再次卡顿。
+    const isMetaCacheReady = !!metaCache.data && (Date.now() - metaCache.time <= META_CACHE_TTL);
+    const shouldWarmupTree = shouldTreeOrder && !urlFilterMode && !isMetaCacheReady;
+    const shouldTreeOrderForThisRun = shouldTreeOrder && !shouldWarmupTree;
+    let treeWarmupPromise = null;
+
+    if (shouldWarmupTree) {
+      treeWarmupPromise = getAllConversationMetadataWithCache(false).catch(() => null);
+      const warmupIndicator = upsertSearchProgressIndicator();
+      setSearchProgressStage(warmupIndicator, '正在构建树状列表…（先显示最近记录）');
+    }
+
+    const pinnedIds = await getPinnedIds();
+    // 任务可能已被新一轮加载替换
+    if (panel.dataset.runId !== runId) return;
 
     // 记录本轮“列表数据源模式”，供 renderMoreItems 继续分页追加
     // - paged：默认视图（置顶 + 最近 N 条），后续按需加载更多
     // - full：全文搜索/消息数筛选等，需要全量元数据
     // - url：按当前页面 URL 前缀快速筛选
     panel._historyDataSource = { mode: 'full' };
-
-    const urlFilterMode = panel.dataset.urlFilterMode === 'currentUrl';
 
     let baseHistories = null;
 
@@ -1894,7 +1920,7 @@ export function createChatHistoryUI(appContext) {
     // 默认视图（无输入筛选）走“快速分页”：
     // - 首次：置顶 + 最近 50（非置顶）
     // - 后续：滚动到底部再继续加载更多（renderMoreItems 内部触发）
-    if (!baseHistories && !isCountFilter && !filterText.trim() && !shouldTreeOrder) {
+    if (!baseHistories && !isCountFilter && !filterText.trim() && !shouldTreeOrderForThisRun) {
       panel._historyDataSource = { mode: 'paged', cursor: null, hasMore: false, pageSize: PAGED_UNPINNED_LOAD_SIZE };
       removeSearchSummary(panel);
 
@@ -2281,7 +2307,7 @@ export function createChatHistoryUI(appContext) {
     let unpinnedItems = [];
     let isTreeOrderingActive = false;
 
-    if (shouldTreeOrder) {
+    if (shouldTreeOrderForThisRun) {
       // 树状排序：
       // - 保持父子关系连续展示；
       // - “置顶”提升为树级（树内任一会话被置顶，则整棵树进入置顶分段），避免同一棵树被拆开/重复渲染；
@@ -2321,6 +2347,13 @@ export function createChatHistoryUI(appContext) {
     if (panel?._historyDataSource?.mode === 'paged') {
       // 用于后续分页追加时去重（极端情况下避免重复插入同一会话）
       panel._historyDataSource.loadedIdSet = new Set(currentDisplayItems.map((item) => item?.id).filter(Boolean));
+    }
+
+    if (deferListReset) {
+      // 说明：保留旧列表直到新结果准备就绪，再一次性替换，减少打开时的空白感。
+      listContainer.innerHTML = '';
+      listContainer.scrollTop = 0;
+      deferListReset = false;
     }
 
     currentlyRenderedCount = 0;
@@ -2383,6 +2416,19 @@ export function createChatHistoryUI(appContext) {
         await new Promise(r => setTimeout(r, 0));
       }
     });
+
+    if (shouldWarmupTree && treeWarmupPromise) {
+      treeWarmupPromise.then(() => {
+        if (panel.dataset.runId !== runId) return;
+        if (!panel.classList.contains('visible')) return;
+        if (panel.dataset.branchViewMode !== 'tree') return;
+        if ((panel.dataset.currentFilter || '').trim()) return;
+        if (panel.dataset.urlFilterMode === 'currentUrl') return;
+        if (!metaCache.data) return;
+        // 说明：树状元数据准备就绪后，保持旧列表可见，快速刷新为树状排序。
+        loadConversationHistories(panel, panel.dataset.currentFilter || '', { keepExistingList: true });
+      });
+    }
   }
   
   /**
@@ -4300,7 +4346,8 @@ export function createChatHistoryUI(appContext) {
     
     // 使用已有的筛选值加载历史记录
     const currentFilter = filterInput ? filterInput.value : '';
-    loadConversationHistories(panel, currentFilter);
+    // 说明：若面板已有列表则先复用，待新数据就绪后再替换，降低打开等待感。
+    loadConversationHistories(panel, currentFilter, { keepExistingList: true });
 
     // 刷新一次“会话-标签页存在性”快照，确保右侧“已打开/跳转”标记尽快准确
     try { conversationPresence?.refreshOpenConversations?.(); } catch (_) {}
