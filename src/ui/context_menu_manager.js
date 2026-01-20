@@ -40,6 +40,7 @@ export function createContextMenuManager(appContext) {
   const deleteMessageButton = dom.deleteMessageButton;
   const clearChatContextButton = dom.clearChatContextButton;
   const chatContainer = dom.chatContainer;
+  const threadContainer = dom.threadContainer;
   const forkConversationButton = dom.forkConversationButton;
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
   const editMessageButton = document.getElementById('edit-message');
@@ -56,8 +57,16 @@ export function createContextMenuManager(appContext) {
 
   // Private state
   let currentMessageElement = null;
+  let currentMessageContainer = null;
   let currentCodeBlock = null;
   let isEditing = false;
+
+  function resolveMessageContainer(messageElement) {
+    if (!messageElement) return chatContainer;
+    if (threadContainer && threadContainer.contains(messageElement)) return threadContainer;
+    if (chatContainer && chatContainer.contains(messageElement)) return chatContainer;
+    return chatContainer;
+  }
 
   /**
    * 解析“重新生成”的目标：
@@ -136,6 +145,8 @@ export function createContextMenuManager(appContext) {
   function showContextMenu(e, messageElement) {
     e.preventDefault();
     currentMessageElement = messageElement;
+    currentMessageContainer = resolveMessageContainer(messageElement);
+    const activeContainer = currentMessageContainer || chatContainer;
 
     // 设置菜单位置
     contextMenu.style.display = 'block';
@@ -145,7 +156,8 @@ export function createContextMenuManager(appContext) {
 
     // 根据消息状态显示或隐藏停止更新按钮
     // 除了当前消息为 updating 外，只要有任意 AI 消息处于 updating（包括“正在等待回复”的占位消息），也显示“停止更新”
-    const anyUpdating = !!chatContainer.querySelector('.ai-message.updating, .loading-message.updating');
+    const hasUpdating = (container) => !!container?.querySelector?.('.ai-message.updating, .loading-message.updating');
+    const anyUpdating = hasUpdating(chatContainer) || hasUpdating(threadContainer);
     if (messageElement.classList.contains('updating') || anyUpdating) {
       stopUpdateButton.style.display = 'flex';
     } else {
@@ -195,7 +207,7 @@ export function createContextMenuManager(appContext) {
     if (insertUserMessageButton) insertUserMessageButton.style.display = canShowInsertOptions ? 'flex' : 'none';
     // 始终显示创建分支对话按钮，但只有在有足够消息时才可用
     if (forkConversationButton) {
-      const messageCount = chatContainer.querySelectorAll('.message').length;
+      const messageCount = activeContainer ? activeContainer.querySelectorAll('.message').length : 0;
       if (messageCount > 1) {
         forkConversationButton.style.display = 'flex';
         forkConversationButton.classList.remove('disabled');
@@ -212,6 +224,7 @@ export function createContextMenuManager(appContext) {
   function hideContextMenu() {
     contextMenu.style.display = 'none';
     currentMessageElement = null;
+    currentMessageContainer = null;
   }
 
   /**
@@ -304,6 +317,7 @@ export function createContextMenuManager(appContext) {
     let newMessageDiv = null;
     try {
       if (!currentMessageElement) return;
+      const targetContainer = currentMessageContainer || resolveMessageContainer(currentMessageElement) || chatContainer;
       const afterMessageId = currentMessageElement.getAttribute('data-message-id') || '';
       if (!afterMessageId) return;
       if (!chatHistoryManager || typeof chatHistoryManager.insertMessageAfter !== 'function') {
@@ -340,7 +354,9 @@ export function createContextMenuManager(appContext) {
       if (!newNode || !newNode.id) return;
 
       // 2) 构建消息 DOM（跳过历史写入），再移动到目标位置
-      newMessageDiv = messageProcessor.appendMessage('', sender, true);
+      newMessageDiv = messageProcessor.appendMessage('', sender, true, null, null, null, null, null, {
+        container: targetContainer
+      });
       if (!newMessageDiv) return;
       newMessageDiv.setAttribute('data-message-id', newNode.id);
 
@@ -355,12 +371,12 @@ export function createContextMenuManager(appContext) {
       }
 
       // 将新消息插到“当前消息的下方”
-      if (nextMessageElement && nextMessageElement.parentNode === chatContainer) {
-        chatContainer.insertBefore(newMessageDiv, nextMessageElement);
+      if (nextMessageElement && nextMessageElement.parentNode === targetContainer) {
+        targetContainer.insertBefore(newMessageDiv, nextMessageElement);
       } else {
         // 没有下一条消息：插到末尾（appendMessage 已经 append 到末尾，这里确保位置正确即可）
-        if (newMessageDiv.parentNode !== chatContainer) {
-          chatContainer.appendChild(newMessageDiv);
+        if (newMessageDiv.parentNode !== targetContainer) {
+          targetContainer.appendChild(newMessageDiv);
         }
       }
 
@@ -517,26 +533,35 @@ export function createContextMenuManager(appContext) {
    * 设置事件监听器
    */
   function setupEventListeners() {
-    // 监听消息（用户或 AI）右键点击
-    chatContainer.addEventListener('contextmenu', (e) => {
-      // 检查是否有文本被选中
-      const selectedText = window.getSelection().toString();
-      
-      // 说明：
-      // - 有选中文本时，优先保留浏览器默认菜单（复制/查找等）；
-      // - Ctrl/Alt 作为“强制默认菜单”的快捷方式；
-      // - Shift 则被用作“高级右键菜单”（显示隐藏选项）。
-      if (selectedText || e.ctrlKey || e.altKey) {
-        return;
-      }
-      
-      // 允许用户和 AI 消息都触发右键菜单
-      const messageElement = e.target.closest('.message');
-      if (messageElement) {
-        e.preventDefault();
-        showContextMenu(e, messageElement);
-      }
-    });
+    const attachContextMenuListeners = (container) => {
+      if (!container) return;
+      // 监听消息（用户或 AI）右键点击
+      container.addEventListener('contextmenu', (e) => {
+        // 检查是否有文本被选中
+        const selectedText = window.getSelection().toString();
+        
+        // 说明：
+        // - 有选中文本时，优先保留浏览器默认菜单（复制/查找等）；
+        // - Ctrl/Alt 作为“强制默认菜单”的快捷方式；
+        // - Shift 则被用作“高级右键菜单”（显示隐藏选项）。
+        if (selectedText || e.ctrlKey || e.altKey) {
+          return;
+        }
+        
+        // 允许用户和 AI 消息都触发右键菜单
+        const messageElement = e.target.closest('.message');
+        if (messageElement && container.contains(messageElement)) {
+          e.preventDefault();
+          showContextMenu(e, messageElement);
+        }
+      });
+
+      // 滚动时隐藏菜单
+      container.addEventListener('scroll', hideContextMenu);
+    };
+
+    attachContextMenuListeners(chatContainer);
+    attachContextMenuListeners(threadContainer);
 
     // 按钮点击处理
     copyMessageButton.addEventListener('click', copyMessageContent);
@@ -592,8 +617,6 @@ export function createContextMenuManager(appContext) {
       }
     });
 
-    // 滚动时隐藏菜单
-    chatContainer.addEventListener('scroll', hideContextMenu);
   }
 
   /**
@@ -609,7 +632,7 @@ export function createContextMenuManager(appContext) {
     // 定义延迟定位函数：在DOM更新后再滚动，避免初算不准
     const scheduleScrollAfterSetup = () => {
       try {
-        const container = chatContainer;
+        const container = resolveMessageContainer(messageElement);
         if (!container || typeof messageElement.offsetTop !== 'number') return;
         requestAnimationFrame(() => {
           const topPadding = 12;

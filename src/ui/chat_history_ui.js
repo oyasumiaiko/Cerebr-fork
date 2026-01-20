@@ -4430,11 +4430,7 @@ export function createChatHistoryUI(appContext) {
   async function backupConversations(opts = {}) {
     try {
       // 步进进度（等分）
-      const stepTitles = ['读取偏好', '分析会话', '读取会话内容'];
-      // 是否包含“处理图片”步骤
-    // 先假设包含，稍后根据 excludeImages 决定是否移除
-    let includeStripImages = true;
-    const tailSteps = ['打包数据', '保存文件', '更新备份时间', '完成'];
+      const steps = ['读取偏好', '分析会话', '流式导出', '保存文件', '更新备份时间', '完成'];
 
       // 读取备份偏好（仅下载方案）
       const prefs = await loadBackupPreferencesDownloadsOnly();
@@ -4446,8 +4442,6 @@ export function createChatHistoryUI(appContext) {
       // 现在 IndexedDB 不再存储图片 base64，默认备份包含图片引用；仅当显式传入 excludeImages 时才剥离图片片段
       const excludeImages = (opts.excludeImages !== undefined) ? !!opts.excludeImages : false;
       const doCompress = (opts.compress !== undefined) ? !!opts.compress : (prefs.compressDefault !== false);
-      includeStripImages = !!excludeImages;
-      const steps = includeStripImages ? [...stepTitles, '处理图片', ...tailSteps] : [...stepTitles, ...tailSteps];
       const sp = utils.createStepProgress({ steps, type: 'info' });
       sp.setStep(0); // 读取偏好
 
@@ -4460,49 +4454,58 @@ export function createChatHistoryUI(appContext) {
       } catch (_) {}
       sp.next('分析会话');
 
-      // 准备需要导出的会话列表
-      let conversationsToExport = [];
+      // 准备需要导出的会话元数据（轻量），避免一次性加载完整内容
+      const metas = await getAllConversationMetadata();
+      let exportMetas = metas;
       if (doIncremental && lastBackupAt > 0) {
-        // 增量：先获取元数据筛选 endTime 更大的会话，再逐个加载完整内容
-        const metas = await getAllConversations(false);
-        const updated = metas.filter(m => (Number(m.endTime) || 0) > lastBackupAt);
-        const total = updated.length;
-        let idx = 0;
-        sp.next('读取会话内容');
-        for (const meta of updated) {
-          const full = await getConversationById(meta.id, true);
-          if (full) conversationsToExport.push(full);
-          idx++;
-          sp.updateSub(idx, total, `读取会话内容 (${idx}/${total})`);
+        exportMetas = metas.filter(m => (Number(m?.endTime) || 0) > lastBackupAt);
+      }
+      const total = exportMetas.length;
+      sp.updateSub(0, Math.max(1, total), `待导出 ${total} 条`);
+
+      sp.next('流式导出');
+      let usedStripFallback = false;
+      let maxEndTime = lastBackupAt;
+
+      const buildStreamBackup = async (forceExcludeImages, hintMessage) => {
+        let processed = 0;
+        maxEndTime = lastBackupAt;
+        if (hintMessage) {
+          sp.updateSub(0, Math.max(1, total), hintMessage);
         }
-      } else {
-        // 全量：直接获取完整数据
-        sp.next('读取会话内容');
-        conversationsToExport = await getAllConversations();
-        sp.updateSub(1, 1, `读取完成（${conversationsToExport.length} 条）`);
+
+        const iterator = (async function* () {
+          for (const meta of exportMetas) {
+            const full = await getConversationById(meta.id, true);
+            processed += 1;
+            sp.updateSub(processed, Math.max(1, total), `导出会话 (${processed}/${total})`);
+            if (!full) continue;
+            const cleaned = forceExcludeImages
+              ? stripImagesFromConversation(full, { keepImageRefs: false })
+              : sanitizeConversationImages(full);
+            const endTime = Number(cleaned?.endTime) || Number(meta?.endTime) || 0;
+            if (endTime > maxEndTime) maxEndTime = endTime;
+            yield cleaned;
+          }
+        })();
+
+        return await buildBackupBlob(iterator, doCompress, { allowStripFallback: false });
+      };
+
+      let blobResult;
+      try {
+        blobResult = await buildStreamBackup(excludeImages);
+      } catch (error) {
+        if (!excludeImages) {
+          console.warn('备份流式构建失败，尝试移除图片后重试:', error);
+          usedStripFallback = true;
+          blobResult = await buildStreamBackup(true, '备份过大，移除图片后重试');
+        } else {
+          throw error;
+        }
       }
 
-      // 可选：移除图片与截图内容
-      if (includeStripImages) {
-        sp.next('处理图片');
-        const total = conversationsToExport.length;
-        for (let i = 0; i < total; i++) {
-          conversationsToExport[i] = stripImagesFromConversation(conversationsToExport[i], { keepImageRefs: false });
-          sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
-        }
-      } else {
-        // 默认保留图片引用，但清理掉可能残留的 dataURL，避免再次膨胀
-        sp.next('处理图片');
-        const total = conversationsToExport.length;
-        for (let i = 0; i < total; i++) {
-          conversationsToExport[i] = sanitizeConversationImages(conversationsToExport[i]);
-          sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
-        }
-      }
-
-      // 生成文件名与 Blob
-      sp.next('打包数据');
-      const { blob, usedStripFallback } = await buildBackupBlob(conversationsToExport, doCompress, { allowStripFallback: true, stripImagesOnFallback: true });
+      const { blob } = blobResult;
       const seqForName = doIncremental ? (seqBase + 1) : undefined;
       const effectiveExcludeImages = excludeImages || usedStripFallback;
       const filename = buildBackupFilename({
@@ -4527,10 +4530,9 @@ export function createChatHistoryUI(appContext) {
 
       // 记录本次备份时间（使用数据中最大 endTime 避免时间漂移）
       sp.next('更新备份时间');
-      let backupReferenceTime = Date.now();
+      let backupReferenceTime = Math.max(Number(maxEndTime) || 0, Number(lastBackupAt) || 0);
+      if (!backupReferenceTime) backupReferenceTime = Date.now();
       try {
-        const maxEnd = conversationsToExport.reduce((acc, c) => Math.max(acc, Number(c.endTime) || 0), lastBackupAt);
-        backupReferenceTime = maxEnd || Date.now();
         const toSave = { [LAST_BACKUP_TIME_KEY]: backupReferenceTime };
         await chrome.storage.local.set(toSave);
       } catch (_) {}
@@ -4904,48 +4906,82 @@ export function createChatHistoryUI(appContext) {
     };
   }
 
+  function getAsyncIterator(source) {
+    if (!source) return null;
+    if (typeof source[Symbol.asyncIterator] === 'function') return source[Symbol.asyncIterator]();
+    if (typeof source.next === 'function') return source;
+    return null;
+  }
+
+  // 说明：流式拼接 JSON 数组，避免一次性 JSON.stringify 撑爆内存。
+  function createJsonArrayStreamFromIterator(iterator) {
+    const encoder = new TextEncoder();
+    let started = false;
+    let isFirst = true;
+    let finished = false;
+
+    return new ReadableStream({
+      async pull(controller) {
+        try {
+          if (!started) {
+            controller.enqueue(encoder.encode('['));
+            started = true;
+          }
+          if (finished) return;
+          const { value, done } = await iterator.next();
+          if (done) {
+            controller.enqueue(encoder.encode(']'));
+            controller.close();
+            finished = true;
+            return;
+          }
+          if (!isFirst) controller.enqueue(encoder.encode(','));
+          isFirst = false;
+          controller.enqueue(encoder.encode(JSON.stringify(value)));
+        } catch (err) {
+          controller.error(err);
+        }
+      },
+      async cancel() {
+        if (typeof iterator.return === 'function') {
+          try { await iterator.return(); } catch (_) {}
+        }
+      }
+    });
+  }
+
+  async function buildBackupBlobFromIterator(iterator, compress) {
+    if (typeof ReadableStream === 'undefined' || typeof TextEncoder === 'undefined') {
+      throw new Error('当前环境不支持流式备份');
+    }
+    const jsonStream = createJsonArrayStreamFromIterator(iterator);
+    if (compress && typeof CompressionStream !== 'undefined') {
+      const gzipStream = jsonStream.pipeThrough(new CompressionStream('gzip'));
+      const gzipBlob = await new Response(gzipStream).blob();
+      return new Blob([gzipBlob], { type: 'application/gzip' });
+    }
+    const plainBlob = await new Response(jsonStream).blob();
+    return new Blob([plainBlob], { type: 'application/json' });
+  }
+
   /**
    * 工具：构建备份 Blob（可选 gzip），在超大数据时自动剥离图片兜底
    * 使用浏览器原生 CompressionStream('gzip')，无需额外依赖
-   * @param {any} data
+   * @param {any|AsyncIterable<any>} data
    * @param {boolean} compress
    * @param {{allowStripFallback?: boolean}} options
    * @returns {Promise<{blob: Blob, usedStripFallback: boolean}>}
    */
   async function buildBackupBlob(data, compress = true, options = {}) {
     const { allowStripFallback = false, stripImagesOnFallback = false } = options || {};
+    const asyncIterator = getAsyncIterator(data);
+    if (asyncIterator) {
+      const blob = await buildBackupBlobFromIterator(asyncIterator, compress);
+      return { blob, usedStripFallback: false };
+    }
     let jsonStr = '';
     let usedStripFallback = false;
     let dataForStringify = data;
-    let useStreaming = false;
-
-    const buildStreamBlob = async (arr) => {
-      const encoder = new TextEncoder();
-      const jsonStream = new ReadableStream({
-        start(controller) {
-          try {
-            controller.enqueue(encoder.encode('['));
-            arr.forEach((item, idx) => {
-              const chunk = JSON.stringify(item);
-              controller.enqueue(encoder.encode(chunk));
-              if (idx !== arr.length - 1) controller.enqueue(encoder.encode(','));
-            });
-            controller.enqueue(encoder.encode(']'));
-            controller.close();
-          } catch (err) {
-            controller.error(err);
-          }
-        }
-      });
-      if (compress && typeof CompressionStream !== 'undefined') {
-        const gzipStream = jsonStream.pipeThrough(new CompressionStream('gzip'));
-        const gzipBlob = await new Response(gzipStream).blob();
-        return new Blob([gzipBlob], { type: 'application/gzip' });
-      }
-      const plainStream = jsonStream;
-      const plainBlob = await new Response(plainStream).blob();
-      return new Blob([plainBlob], { type: compress ? 'application/json' : 'application/json' });
-    };
 
     try {
       jsonStr = JSON.stringify(dataForStringify);
@@ -4964,13 +5000,12 @@ export function createChatHistoryUI(appContext) {
       } catch (e) {
         // 二次仍失败时，改用流式构造 JSON 以规避超大字符串限制
         console.warn('备份数据仍然过大，改用流式构造 JSON:', e);
-        useStreaming = true;
-        usedStripFallback = true;
+        const iterator = (async function* () {
+          const list = Array.isArray(dataForStringify) ? dataForStringify : [dataForStringify];
+          for (const item of list) yield item;
+        })();
+        return { blob: await buildBackupBlobFromIterator(iterator, compress), usedStripFallback: true };
       }
-    }
-
-    if (useStreaming) {
-      return { blob: await buildStreamBlob(Array.isArray(dataForStringify) ? dataForStringify : [dataForStringify]), usedStripFallback };
     }
 
     if (compress && typeof CompressionStream !== 'undefined') {
@@ -5414,57 +5449,82 @@ export function createChatHistoryUI(appContext) {
     let converted = 0;
     let failed = 0;
 
-      if (Array.isArray(msg?.content)) {
-        for (const part of msg.content) {
-          if (part?.type === 'image_url' && part.image_url?.url) {
-          const url = part.image_url.url;
-          if (typeof url === 'string' && url.startsWith('data:image/')) {
+    if (Array.isArray(msg?.content)) {
+      for (const part of msg.content) {
+        if (part?.type === 'image_url' && part.image_url) {
+          const img = part.image_url;
+          const rawUrl = typeof img.url === 'string' ? img.url : '';
+          const rawPath = typeof img.path === 'string' ? img.path : '';
+
+          // 统一处理 dataURL：既可能存在于 url，也可能误存于 path
+          const dataUrl = rawUrl.startsWith('data:image/')
+            ? rawUrl
+            : (rawPath.startsWith('data:image/') ? rawPath : '');
+          if (dataUrl) {
             found += 1;
-          const saved = await getOrSaveDataUrlToLocalFile(url, roleFolder, { timestamp: ts });
+            const saved = await getOrSaveDataUrlToLocalFile(dataUrl, roleFolder, { timestamp: ts });
             if (saved?.relPath || saved?.fileUrl) {
-              if (saved.hash) part.image_url.hash = saved.hash;
+              if (saved.hash) img.hash = saved.hash;
               if (saved.relPath) {
-                part.image_url.path = saved.relPath;
-                delete part.image_url.url;
+                img.path = saved.relPath;
+                delete img.url;
               } else if (saved.fileUrl) {
-                part.image_url.url = saved.fileUrl;
+                img.url = saved.fileUrl;
+                if (rawPath.startsWith('data:image/')) delete img.path;
               }
               converted += 1;
               changed = true;
             } else {
               failed += 1;
             }
-          } else if (typeof url === 'string' && url.startsWith('http')) {
-            // 将 http/https 远程图片也落盘，避免后续备份重复拉取
-            const saved = await getOrSaveRemoteImage(url, roleFolder, { timestamp: ts });
+            part.image_url = img;
+            continue;
+          }
+
+          // 将 http/https 远程图片也落盘，避免后续备份重复拉取
+          const remoteUrl = rawUrl.startsWith('http')
+            ? rawUrl
+            : (!rawUrl && rawPath.startsWith('http') ? rawPath : '');
+          if (remoteUrl) {
+            const saved = await getOrSaveRemoteImage(remoteUrl, roleFolder, { timestamp: ts });
             if (saved?.relPath || saved?.fileUrl) {
-              if (saved.hash) part.image_url.hash = saved.hash;
+              if (saved.hash) img.hash = saved.hash;
               if (saved.relPath) {
-                part.image_url.path = saved.relPath;
-                delete part.image_url.url;
+                img.path = saved.relPath;
+                delete img.url;
               } else if (saved.fileUrl) {
-                part.image_url.url = saved.fileUrl;
+                img.url = saved.fileUrl;
+                if (!rawUrl && rawPath.startsWith('http')) delete img.path;
               }
               converted += 1;
               changed = true;
             }
-          } else if (typeof url === 'string' && url.startsWith('file://')) {
-            // 已有本地文件但缺少哈希时尝试补写
-            if (!part.image_url.hash) {
-              const h = extractHashFromFileUrl(url);
+            part.image_url = img;
+            continue;
+          }
+
+          // 已有本地文件但缺少哈希/相对路径时尝试补写
+          const fileUrl = rawUrl.startsWith('file://')
+            ? rawUrl
+            : (!rawUrl && rawPath.startsWith('file://') ? rawPath : '');
+          if (fileUrl) {
+            if (!img.hash) {
+              const h = extractHashFromFileUrl(fileUrl);
               if (h) {
-                part.image_url.hash = h;
+                img.hash = h;
                 changed = true;
               }
             }
-            if (!part.image_url.path) {
-              const rel = fileUrlToRelative(url);
+            if (!img.path || img.path.startsWith('file://')) {
+              const rel = fileUrlToRelative(fileUrl);
               if (rel) {
-                part.image_url.path = rel;
-                delete part.image_url.url;
+                img.path = rel;
+                delete img.url;
                 changed = true;
               }
             }
+            part.image_url = img;
+            continue;
           }
         } else if (part?.type === 'text' && typeof part.text === 'string') {
           const res = await replaceDataUrlsInText(part.text, roleFolder, { timestamp: ts });
@@ -5494,32 +5554,35 @@ export function createChatHistoryUI(appContext) {
     return { changed, found, converted, failed };
   }
 
-  async function repairRecentImages(options = {}) {
-    const days = Math.max(1, Number(options.days || 7));
+  /**
+   * 批量清理会话中的图片引用：
+   * - 扫描所有消息，将 dataURL/base64 落盘并替换为本地路径；
+   * - 可选清理 image_url.url 与 image_url.path 的冗余字段；
+   * - 逐条写回会话，避免一次性加载全部会话导致内存暴涨。
+   *
+   * @param {Array<{id:string}>} metas
+   * @param {ReturnType<typeof utils.createStepProgress>} sp
+   * @param {{ progressLabel?: string, cleanImageUrls?: boolean }} options
+   * @returns {Promise<{updatedConversations:number, base64Found:number, convertedImages:number, failedConversions:number, removedUrl:number, addedPath:number}>}
+   */
+  async function cleanImagesByMetas(metas, sp, options = {}) {
+    const list = Array.isArray(metas) ? metas : [];
+    const total = list.length || 1;
+    const progressLabel = options.progressLabel || '处理图片';
+    const cleanImageUrls = options.cleanImageUrls !== false;
     const now = Date.now();
-    const cutoff = now - days * 24 * 60 * 60 * 1000;
-    const sp = utils.createStepProgress({ steps: ['加载会话', '处理图片', '完成'], type: 'info' });
-    sp.setStep(0);
-
-    const metas = await getAllConversationMetadata();
-    const recentMetas = (metas || []).filter((m) => Number(m?.endTime) >= cutoff);
-    const total = recentMetas.length || 1;
 
     let updated = 0;
     let totalFound = 0;
     let totalConverted = 0;
     let totalFailed = 0;
+    let removedUrl = 0;
+    let addedPath = 0;
 
-    sp.next('处理图片');
-    for (let i = 0; i < recentMetas.length; i++) {
-      // 按需加载完整内容，避免一次性拉取全部会话导致内存暴涨
-      const conv = await getConversationById(recentMetas[i].id, true);
-      if (!conv) {
-        sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
-        continue;
-      }
+    for (let i = 0; i < list.length; i++) {
+      const conv = await getConversationById(list[i].id, true);
       let convChanged = false;
-      if (Array.isArray(conv.messages)) {
+      if (conv && Array.isArray(conv.messages)) {
         for (const msg of conv.messages) {
           const res = await repairImagesInMessage(msg);
           totalFound += res.found;
@@ -5527,8 +5590,17 @@ export function createChatHistoryUI(appContext) {
           totalFailed += res.failed;
           if (res.changed) convChanged = true;
         }
+        if (cleanImageUrls) {
+          const cleaned = cleanImageUrlFieldsInConversation(conv);
+          if (cleaned.changed) {
+            convChanged = true;
+            removedUrl += cleaned.removedUrl;
+            addedPath += cleaned.addedPath;
+          }
+        }
       }
-      if (convChanged) {
+
+      if (convChanged && conv) {
         conv.messageCount = Array.isArray(conv.messages) ? conv.messages.length : 0;
         conv.endTime = Number(conv.endTime) || conv.endTime || now;
         await putConversation(conv);
@@ -5538,17 +5610,81 @@ export function createChatHistoryUI(appContext) {
         }
         updated += 1;
       }
-      sp.updateSub(i + 1, total, `处理图片 (${i + 1}/${total})`);
+      try {
+        sp?.updateSub?.(i + 1, total, `${progressLabel} (${i + 1}/${total})`);
+      } catch (_) {}
     }
+
+    return {
+      updatedConversations: updated,
+      base64Found: totalFound,
+      convertedImages: totalConverted,
+      failedConversions: totalFailed,
+      removedUrl,
+      addedPath
+    };
+  }
+
+  async function repairRecentImages(options = {}) {
+    const days = Math.max(1, Number(options.days || 7));
+    const now = Date.now();
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const sp = utils.createStepProgress({ steps: ['加载会话', '处理图片', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    const recentMetas = (metas || []).filter((m) => Number(m?.endTime) >= cutoff);
+    sp.next('处理图片');
+    const result = await cleanImagesByMetas(recentMetas, sp, { progressLabel: '处理图片', cleanImageUrls: false });
 
     sp.complete('处理完成', true);
     invalidateMetadataCache();
     return {
       scannedConversations: recentMetas.length,
-      updatedConversations: updated,
-      base64Found: totalFound,
-      convertedImages: totalConverted,
-      failedConversions: totalFailed
+      updatedConversations: result.updatedConversations,
+      base64Found: result.base64Found,
+      convertedImages: result.convertedImages,
+      failedConversions: result.failedConversions
+    };
+  }
+
+  /**
+   * 全量清理历史会话中的图片 base64/dataURL：
+   * - 逐条会话迁移图片到本地文件（下载目录）并替换引用；
+   * - 清理 image_url.url 冗余字段；
+   * - 最后清除孤儿 messageContents，避免遗留 base64 继续占用空间。
+   *
+   * 注意：此操作会触发大量本地文件写入，耗时取决于图片数量与磁盘性能。
+   */
+  async function cleanAllImageDataUrlsInDb() {
+    await loadDownloadRoot();
+    const sp = utils.createStepProgress({ steps: ['加载会话', '处理图片', '清理残留', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    sp.next('处理图片');
+    const result = await cleanImagesByMetas(metas, sp, { progressLabel: '处理图片', cleanImageUrls: true });
+
+    sp.next('清理残留');
+    let orphan = { removed: 0, total: 0 };
+    try {
+      orphan = await purgeOrphanImageContents();
+    } catch (e) {
+      console.warn('清理孤儿内容失败:', e);
+    }
+
+    sp.complete('完成', true);
+    invalidateMetadataCache();
+    return {
+      scannedConversations: metas.length,
+      updatedConversations: result.updatedConversations,
+      base64Found: result.base64Found,
+      convertedImages: result.convertedImages,
+      failedConversions: result.failedConversions,
+      removedUrl: result.removedUrl,
+      addedPath: result.addedPath,
+      orphanRemoved: orphan.removed,
+      orphanTotal: orphan.total
     };
   }
 
@@ -5757,6 +5893,77 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 清理单条会话中的 image_url 字段冗余：
+   * - 尝试将 file:// 或相对 url 补写为 path，确保持久化字段统一；
+   * - 若 path 已存在且 url 等价，则移除 url，避免重复占用存储空间。
+   *
+   * 注意：
+   * - 这里直接在传入对象上原地修改，避免在超大数据集上额外拷贝导致内存暴涨；
+   * - 调用方负责在必要时执行 putConversation 持久化。
+   *
+   * @param {Object} conversation
+   * @returns {{ changed: boolean, removedUrl: number, addedPath: number }}
+   */
+  function cleanImageUrlFieldsInConversation(conversation) {
+    let changed = false;
+    let removedUrl = 0;
+    let addedPath = 0;
+    const normalizeRel = (p) => normalizePath(p || '').replace(/^\/+/, '');
+    if (!conversation || !Array.isArray(conversation.messages)) {
+      return { changed, removedUrl, addedPath };
+    }
+
+    for (const msg of conversation.messages) {
+      if (!Array.isArray(msg.content)) continue;
+      for (const part of msg.content) {
+        if (part?.type !== 'image_url') continue;
+        const img = part.image_url || {};
+        const rawUrl = typeof img.url === 'string' ? img.url : '';
+        const rawPath = typeof img.path === 'string' ? img.path : '';
+        const isDataUrl = rawUrl.startsWith('data:') || rawPath.startsWith('data:');
+        let relPath = normalizeRel(rawPath);
+
+        if (rawPath.startsWith('file://')) {
+          const relFromFile = fileUrlToRelative(rawPath);
+          if (relFromFile) {
+            img.path = relFromFile;
+            relPath = normalizeRel(relFromFile);
+            addedPath += 1;
+            changed = true;
+          }
+        }
+
+        if (!relPath && rawUrl && !isDataUrl) {
+          const derived = rawUrl.startsWith('file://')
+            ? fileUrlToRelative(rawUrl)
+            : normalizeRel(rawUrl);
+          if (derived) {
+            img.path = derived;
+            relPath = derived;
+            addedPath += 1;
+            changed = true;
+          }
+        }
+
+        if (relPath && rawUrl && !isDataUrl) {
+          const normUrl = rawUrl.startsWith('file://')
+            ? normalizeRel(fileUrlToRelative(rawUrl) || '')
+            : normalizeRel(rawUrl);
+          if (!normUrl || normUrl.endsWith(relPath)) {
+            delete img.url;
+            removedUrl += 1;
+            changed = true;
+          }
+        }
+
+        part.image_url = img;
+      }
+    }
+
+    return { changed, removedUrl, addedPath };
+  }
+
+  /**
    * 清理 image_url 中重复的 url 字段：
    * - 尝试从 file:// 或相对 url 补全 path
    * - 若 path 存在且 url 相同则移除 url
@@ -5767,46 +5974,17 @@ export function createChatHistoryUI(appContext) {
     let updated = 0;
     let removedUrl = 0;
     let addedPath = 0;
-    const normalizeRel = (p) => normalizePath(p || '').replace(/^\/+/, '');
 
     for (const meta of metas) {
       const conv = await getConversationById(meta.id, true);
       let convChanged = false;
       if (!conv || !Array.isArray(conv.messages)) continue;
 
-      for (const msg of conv.messages) {
-        if (!Array.isArray(msg.content)) continue;
-        for (const part of msg.content) {
-          if (part?.type !== 'image_url') continue;
-          const img = part.image_url || {};
-          let relPath = normalizeRel(img.path);
-          const rawUrl = img.url || '';
-
-          if (!relPath && rawUrl) {
-            const derived = rawUrl.startsWith('file://')
-              ? fileUrlToRelative(rawUrl)
-              : normalizeRel(rawUrl);
-            if (derived) {
-              img.path = derived;
-              relPath = derived;
-              addedPath += 1;
-              convChanged = true;
-            }
-          }
-
-          if (relPath && rawUrl) {
-            const normUrl = rawUrl.startsWith('file://')
-              ? normalizeRel(fileUrlToRelative(rawUrl) || '')
-              : normalizeRel(rawUrl);
-            if (!normUrl || normUrl.endsWith(relPath)) {
-              delete img.url;
-              removedUrl += 1;
-              convChanged = true;
-            }
-          }
-
-          part.image_url = img;
-        }
+      const cleaned = cleanImageUrlFieldsInConversation(conv);
+      if (cleaned.changed) {
+        convChanged = true;
+        removedUrl += cleaned.removedUrl;
+        addedPath += cleaned.addedPath;
       }
 
       if (convChanged) {
@@ -5939,6 +6117,31 @@ export function createChatHistoryUI(appContext) {
     manualHint.className = 'backup-panel-hint';
     manualHint.textContent = '备份将保存到 “下载/Cerebr/” 子目录。';
     container.appendChild(manualHint);
+
+    const cleanupSection = document.createElement('div');
+    cleanupSection.className = 'backup-section';
+
+    const cleanupTitle = document.createElement('div');
+    cleanupTitle.className = 'backup-panel-subtitle';
+    cleanupTitle.textContent = '存储清理';
+    cleanupSection.appendChild(cleanupTitle);
+
+    const cleanupButtons = document.createElement('div');
+    cleanupButtons.className = 'backup-button-group';
+
+    const cleanupBtn = document.createElement('button');
+    cleanupBtn.className = 'backup-button';
+    cleanupBtn.textContent = '清理图片存储（迁移 base64）';
+    cleanupButtons.appendChild(cleanupBtn);
+
+    cleanupSection.appendChild(cleanupButtons);
+
+    const cleanupHint = document.createElement('div');
+    cleanupHint.className = 'backup-panel-hint';
+    cleanupHint.textContent = '将历史会话中的 dataURL/base64 图片迁移到本地文件并清理残留，耗时较长。';
+    cleanupSection.appendChild(cleanupHint);
+
+    container.appendChild(cleanupSection);
 
     const incrementalSection = document.createElement('div');
     incrementalSection.className = 'backup-section';
@@ -6131,6 +6334,55 @@ export function createChatHistoryUI(appContext) {
 
     fullResetBtn.addEventListener('click', async () => {
       await runManualBackup({ excludeImages: false, resetIncremental: true });
+    });
+
+    cleanupBtn.addEventListener('click', async () => {
+      const confirmFn = appContext?.utils?.showConfirm;
+      let confirmed = true;
+      if (typeof confirmFn === 'function') {
+        confirmed = await confirmFn({
+          message: '确认清理图片存储？',
+          description: '该操作会扫描全部会话，将 dataURL/base64 图片迁移到本地文件，并清理冗余字段；耗时较长。',
+          confirmText: '开始清理',
+          cancelText: '取消',
+          type: 'warning'
+        });
+      } else {
+        confirmed = window.confirm('将扫描全部会话并清理 dataURL/base64 图片，耗时较长，是否继续？');
+      }
+      if (!confirmed) return;
+
+      const originalText = cleanupBtn.textContent;
+      cleanupBtn.disabled = true;
+      cleanupBtn.textContent = '清理中...';
+      try {
+        const result = await cleanAllImageDataUrlsInDb();
+        const summary = [
+          `扫描 ${result.scannedConversations} 会话`,
+          `更新 ${result.updatedConversations} 会话`,
+          `发现 base64 ${result.base64Found}`,
+          `迁移 ${result.convertedImages}`,
+          `失败 ${result.failedConversions}`,
+          `孤儿清理 ${result.orphanRemoved}/${result.orphanTotal}`
+        ].join('；');
+        showNotification?.({
+          message: '图片清理完成',
+          description: summary,
+          type: result.failedConversions > 0 ? 'warning' : 'success',
+          duration: 4200
+        });
+      } catch (error) {
+        console.error('图片清理失败:', error);
+        showNotification?.({
+          message: '图片清理失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        cleanupBtn.disabled = false;
+        cleanupBtn.textContent = originalText;
+      }
     });
 
     refreshPreferences();

@@ -1142,6 +1142,10 @@ export function createSelectionThreadManager(appContext) {
     const threadId = target.dataset.threadId || '';
     if (!threadId) return;
     hideBubble(true);
+    if (state.activeThreadId && state.activeThreadId === threadId) {
+      exitThread();
+      return;
+    }
     enterThread(threadId);
   }
 

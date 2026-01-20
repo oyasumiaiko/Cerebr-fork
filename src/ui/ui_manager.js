@@ -34,6 +34,7 @@ export function createUIManager(appContext) {
   // const settingsButton = dom.settingsToggle; // Use settingsToggle for consistency
   // const settingsMenu = dom.settingsPanel;    // Use settingsPanel
   const chatContainer = dom.chatContainer;
+  const threadContainer = dom.threadContainer;
   const sendButton = dom.sendButton;
   const inputContainer = dom.inputContainer;
   const collapseButton = dom.collapseButton;
@@ -240,10 +241,10 @@ export function createUIManager(appContext) {
   }
 
   /**
-   * 添加聊天容器事件监听器
+   * 添加消息容器事件监听器（主消息与线程消息共用）
+   * @param {HTMLElement} container - 消息滚动容器
    */
-  function setupChatContainerEventListeners() {
-    // 移除外层条件检查，如果 chatContainer 或 messageSender 无效，将直接报错
+  function setupScrollableContainerEventListeners(container) {
     const AUTO_SCROLL_THRESHOLD = 100;
     const ALT_SCROLL_MULTIPLIER = 3; // 按住 Alt 时的滚动加速度
 
@@ -256,7 +257,7 @@ export function createUIManager(appContext) {
     const normalizeWheelDelta = (value, mode) => {
       if (!value) return 0;
       if (mode === 1) { // DOM_DELTA_LINE
-        const computedStyle = window.getComputedStyle(chatContainer);
+        const computedStyle = window.getComputedStyle(container);
         const lineHeight = parseFloat(computedStyle.lineHeight);
         if (Number.isFinite(lineHeight)) {
           return value * lineHeight;
@@ -265,13 +266,13 @@ export function createUIManager(appContext) {
         return value * fontSize * 1.2;
       }
       if (mode === 2) { // DOM_DELTA_PAGE
-        return value * chatContainer.clientHeight;
+        return value * container.clientHeight;
       }
       return value;
     };
 
     // 按住 Alt 时使用加速滚动，提高浏览长对话的效率
-    chatContainer.addEventListener('wheel', (e) => {
+    container.addEventListener('wheel', (e) => {
       let effectiveDeltaY = e.deltaY;
 
       if (e.altKey) {
@@ -280,14 +281,14 @@ export function createUIManager(appContext) {
         const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
 
         if (acceleratedDeltaY) {
-          chatContainer.scrollTop += acceleratedDeltaY;
+          container.scrollTop += acceleratedDeltaY;
           effectiveDeltaY = acceleratedDeltaY;
         } else {
           effectiveDeltaY = 0;
         }
 
         if (acceleratedDeltaX) {
-          chatContainer.scrollLeft += acceleratedDeltaX;
+          container.scrollLeft += acceleratedDeltaX;
         }
       }
 
@@ -297,7 +298,7 @@ export function createUIManager(appContext) {
       }
 
       if (effectiveDeltaY > 0) {
-        const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
         if (distanceFromBottom < AUTO_SCROLL_THRESHOLD) {
           messageSender.setShouldAutoScroll(true);
         } else if (e.altKey) {
@@ -306,14 +307,14 @@ export function createUIManager(appContext) {
       }
     }, { passive: false });
 
-    chatContainer.addEventListener('mousedown', (e) => {
-      if (e.offsetX < chatContainer.clientWidth) { 
+    container.addEventListener('mousedown', (e) => {
+      if (e.offsetX < container.clientWidth) { 
          messageSender.setShouldAutoScroll(false);
       }
     });
 
     // Prevent default image click behavior in chat
-    chatContainer.addEventListener('click', (e) => {
+    container.addEventListener('click', (e) => {
       if (e.target.tagName === 'IMG' && e.target.closest('.message-content__ai_message_content_img')) {
         e.preventDefault(); // 阻止图片链接跳转等默认行为
         // e.stopPropagation(); // 暂时移除，观察是否解决了自动滚动问题。如果需要阻止其他冒泡行为，可以再加回来。
@@ -321,6 +322,17 @@ export function createUIManager(appContext) {
         // window.open(e.target.src, '_blank');
       }
     });
+  }
+
+  /**
+   * 添加聊天容器事件监听器
+   */
+  function setupChatContainerEventListeners() {
+    // 移除外层条件检查，如果 chatContainer 或 messageSender 无效，将直接报错
+    setupScrollableContainerEventListeners(chatContainer);
+    if (threadContainer) {
+      setupScrollableContainerEventListeners(threadContainer);
+    }
   }
 
   /**
