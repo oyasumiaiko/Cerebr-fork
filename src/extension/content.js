@@ -537,6 +537,9 @@ class CerebrSidebar {
             // console.log('已发送当前页面信息到侧边栏');
           }
           break;
+        case 'REQUEST_FULLSCREEN_STATE':
+          this.notifyIframeFullscreenState(this.isFullscreen);
+          break;
       }
     });
 

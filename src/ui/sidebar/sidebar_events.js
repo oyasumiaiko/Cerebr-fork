@@ -3,6 +3,25 @@ import { findMostRecentConversationMetadataByUrlCandidates } from '../../storage
 import { packRemoteRepoViaApiExtension } from '../../utils/repomix.js';
 import { generateCandidateUrls } from '../../utils/url_candidates.js';
 
+const FULLSCREEN_SESSION_KEY = 'cerebr.sidebar.fullscreen';
+
+// 使用 sessionStorage 在“当前标签页会话”内记住全屏/侧栏布局，避免 iframe 重新加载后提示文案与布局脱节
+function readFullscreenSessionState() {
+  try {
+    const raw = window.sessionStorage?.getItem(FULLSCREEN_SESSION_KEY);
+    if (raw === null) return null;
+    return raw === '1';
+  } catch (_) {
+    return null;
+  }
+}
+
+function persistFullscreenSessionState(isFullscreen) {
+  try {
+    window.sessionStorage?.setItem(FULLSCREEN_SESSION_KEY, isFullscreen ? '1' : '0');
+  } catch (_) {}
+}
+
 /**
  * 注册侧边栏所需的事件绑定与交互逻辑。
  * 以 setup* 函数形式拆分，便于后续在个别功能上做替换或测试。
@@ -571,6 +590,9 @@ function applyFullscreenMode(appContext, isFullscreen) {
   appContext.state.isFullscreen = !!isFullscreen;
   document.documentElement.classList.toggle('fullscreen-mode', appContext.state.isFullscreen);
   updateFullscreenToggleHints(appContext);
+  if (!appContext.state.isStandalone) {
+    persistFullscreenSessionState(appContext.state.isFullscreen);
+  }
 }
 
 /**
@@ -619,9 +641,17 @@ function requestToggleFullscreen(appContext) {
 function setupFullscreenToggle(appContext) {
   // 初始化时用 DOM class 做一次兜底同步，避免 iframe 刷新导致提示文案与实际布局不一致
   if (!appContext.state.isStandalone) {
-    appContext.state.isFullscreen = document.documentElement.classList.contains('fullscreen-mode');
+    const storedFullscreen = readFullscreenSessionState();
+    if (typeof storedFullscreen === 'boolean') {
+      applyFullscreenMode(appContext, storedFullscreen);
+    } else {
+      appContext.state.isFullscreen = document.documentElement.classList.contains('fullscreen-mode');
+      updateFullscreenToggleHints(appContext);
+    }
   }
-  updateFullscreenToggleHints(appContext);
+  if (appContext.state.isStandalone) {
+    updateFullscreenToggleHints(appContext);
+  }
 
   if (appContext.dom.fullscreenToggle) {
     appContext.dom.fullscreenToggle.addEventListener('click', () => requestToggleFullscreen(appContext));
@@ -1050,6 +1080,7 @@ function scheduleInitialRequests(appContext) {
   setTimeout(() => {
     if (!appContext.state.isStandalone) {
       window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
+      window.parent.postMessage({ type: 'REQUEST_FULLSCREEN_STATE' }, '*');
     }
 
     if (appContext.state.isFullscreen) {

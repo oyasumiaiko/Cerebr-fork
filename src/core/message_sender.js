@@ -187,6 +187,7 @@ export function createMessageSender(appContext) {
    */
   const activeAttempts = new Map();
   let isTemporaryMode = false;
+  const TEMP_MODE_SESSION_KEY = 'cerebr.sidebar.temp_mode';
   let pageContent = null;
   let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
@@ -197,6 +198,23 @@ export function createMessageSender(appContext) {
   const AUTO_RETRY_BASE_DELAY_MS = 500;
   const AUTO_RETRY_MAX_DELAY_MS = 8000;
   const REGENERATE_AUTO_SCROLL_THRESHOLD_PX = 100;
+
+  // 使用 sessionStorage 在“当前标签页会话”内记住纯对话模式，专门解决 iframe 手动重载导致的开关丢失
+  function readTempModeSessionState() {
+    try {
+      const raw = window.sessionStorage?.getItem(TEMP_MODE_SESSION_KEY);
+      if (raw === null) return null;
+      return raw === '1';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function persistTempModeSessionState(isOn) {
+    try {
+      window.sessionStorage?.setItem(TEMP_MODE_SESSION_KEY, isOn ? '1' : '0');
+    } catch (_) {}
+  }
 
   function getAutoRetryDelayMs(attemptIndex = 0) {
     const normalizedAttempt = Math.max(0, attemptIndex);
@@ -1003,6 +1021,7 @@ export function createMessageSender(appContext) {
     GetInputContainer().classList.add('temporary-mode');
     document.body.classList.add('temporary-mode');
     messageInput.setAttribute('placeholder', '纯对话模式，输入消息...');
+    persistTempModeSessionState(true);
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: true } }));
     } catch (_) {}
@@ -1017,9 +1036,17 @@ export function createMessageSender(appContext) {
     GetInputContainer().classList.remove('temporary-mode');
     document.body.classList.remove('temporary-mode');
     messageInput.setAttribute('placeholder', '输入消息...');
+    persistTempModeSessionState(false);
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: false } }));
     } catch (_) {}
+  }
+
+  if (!state.isStandalone) {
+    const storedTempMode = readTempModeSessionState();
+    if (storedTempMode === true) {
+      enterTemporaryMode();
+    }
   }
 
   /**
