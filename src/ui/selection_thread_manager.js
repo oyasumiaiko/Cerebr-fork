@@ -15,9 +15,6 @@ export function createSelectionThreadManager(appContext) {
   const chatLayout = dom.chatLayout;
   const threadPanel = dom.threadPanel;
   const threadContainer = dom.threadContainer;
-  const threadPanelTitle = dom.threadPanelTitle;
-  const threadExitButton = dom.threadExitButton;
-  const threadDeleteButton = dom.threadDeleteButton;
   const chatHistoryManager = services.chatHistoryManager;
   const chatHistoryUI = services.chatHistoryUI;
   const messageProcessor = services.messageProcessor;
@@ -51,6 +48,9 @@ export function createSelectionThreadManager(appContext) {
   let bubbleContentEl = null;
   let bubbleContentTextEl = null;
   let bubbleContentIconEl = null;
+
+  let threadBannerEl = null;
+  let threadBannerTextEl = null;
 
   function ensureBubble() {
     if (bubbleEl) return;
@@ -243,11 +243,13 @@ export function createSelectionThreadManager(appContext) {
   }
 
   function updateThreadPanelTitle(selectionText) {
-    if (!threadPanelTitle) return;
     const safeText = typeof selectionText === 'string' ? selectionText.trim() : '';
-    const label = safeText ? `划词对话 · ${safeText}` : '划词对话';
-    threadPanelTitle.textContent = label;
-    threadPanelTitle.title = safeText || '';
+    if (threadBannerTextEl) {
+      threadBannerTextEl.textContent = safeText;
+    }
+    if (threadBannerEl) {
+      threadBannerEl.title = safeText || '';
+    }
   }
 
   function resetHiddenMessages() {
@@ -483,18 +485,54 @@ export function createSelectionThreadManager(appContext) {
     if (!threadContainer) return;
     const banner = document.createElement('div');
     banner.className = 'thread-selection-banner';
+    banner.title = (selectionText || '').trim();
+
+    const header = document.createElement('div');
+    header.className = 'thread-selection-banner__header';
 
     const label = document.createElement('div');
     label.className = 'thread-selection-banner__label';
     label.textContent = '划词内容';
 
+    const actions = document.createElement('div');
+    actions.className = 'thread-selection-banner__actions';
+
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'thread-selection-banner__button thread-selection-banner__button--delete';
+    deleteButton.setAttribute('type', 'button');
+    deleteButton.textContent = '删除';
+    deleteButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteActiveThread();
+    });
+
+    const exitButton = document.createElement('button');
+    exitButton.className = 'thread-selection-banner__button thread-selection-banner__button--exit';
+    exitButton.setAttribute('type', 'button');
+    exitButton.textContent = '退出';
+    exitButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      exitThread();
+    });
+
+    actions.appendChild(deleteButton);
+    actions.appendChild(exitButton);
+
+    header.appendChild(label);
+    header.appendChild(actions);
+
     const text = document.createElement('div');
     text.className = 'thread-selection-banner__text';
     text.textContent = (selectionText || '').trim();
 
-    banner.appendChild(label);
+    banner.appendChild(header);
     banner.appendChild(text);
     threadContainer.appendChild(banner);
+
+    threadBannerEl = banner;
+    threadBannerTextEl = text;
   }
 
   async function renderThreadMessages(threadId) {
@@ -1029,6 +1067,8 @@ export function createSelectionThreadManager(appContext) {
     document.body.classList.remove('thread-mode-active');
     if (threadPanel) threadPanel.setAttribute('aria-hidden', 'true');
     if (threadContainer) threadContainer.innerHTML = '';
+    threadBannerEl = null;
+    threadBannerTextEl = null;
     updateThreadPanelTitle('');
     resetHiddenMessages();
     moveThreadPanelHome();
@@ -1128,14 +1168,6 @@ export function createSelectionThreadManager(appContext) {
     document.addEventListener('mouseup', handleSelectionMouseUp);
     document.addEventListener('click', handleDocumentClick);
     bindHighlightEvents(chatContainer);
-    if (threadExitButton) {
-      threadExitButton.addEventListener('click', () => exitThread());
-    }
-    if (threadDeleteButton) {
-      threadDeleteButton.addEventListener('click', () => {
-        deleteActiveThread();
-      });
-    }
     if (threadPanel) {
       threadPanel.setAttribute('aria-hidden', 'true');
     }

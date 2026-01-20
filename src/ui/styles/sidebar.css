@@ -450,33 +450,38 @@ body.thread-mode-active #thread-panel {
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
-    background: color-mix(in srgb, var(--cerebr-bg-color) 90%, transparent);
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
+    background: transparent;
+    --thread-header-glass-top: color-mix(in srgb, var(--cerebr-bg-color) 94%, transparent);
+    --thread-header-glass-mid: color-mix(in srgb, var(--cerebr-bg-color) 82%, transparent);
+    --thread-header-glass-bottom: color-mix(in srgb, var(--cerebr-bg-color) 0%, transparent);
+    --thread-header-glass-blur: 12px;
 }
 
-.thread-panel-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--cerebr-text-color);
+.thread-panel-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+        180deg,
+        var(--thread-header-glass-top) 0%,
+        var(--thread-header-glass-mid) 62%,
+        var(--thread-header-glass-bottom) 100%
+    );
+    backdrop-filter: blur(var(--thread-header-glass-blur));
+    -webkit-backdrop-filter: blur(var(--thread-header-glass-blur));
+    mask-image: linear-gradient(180deg, #000 0%, #000 62%, transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 62%, transparent 100%);
 }
 
-.thread-panel-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.thread-panel-header > * {
+    position: relative;
+    z-index: 1;
 }
 
-.thread-panel-delete,
-.thread-panel-exit {
-    padding: 4px 10px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
-    background: color-mix(in srgb, var(--cerebr-input-bg) 85%, transparent);
-    color: var(--cerebr-text-color);
-    cursor: pointer;
-    font-size: 12px;
-    min-height: 28px;
-}
 
 #thread-container {
     display: flex;
@@ -500,11 +505,35 @@ body.thread-mode-active #thread-panel {
     color: var(--cerebr-text-color);
 }
 
+.thread-selection-banner__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 .thread-selection-banner__label {
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.2px;
     opacity: 0.8;
+}
+
+.thread-selection-banner__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.thread-selection-banner__button {
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+    background: color-mix(in srgb, var(--cerebr-input-bg) 85%, transparent);
+    color: var(--cerebr-text-color);
+    cursor: pointer;
+    font-size: 14px;
+    min-height: 28px;
 }
 
 .thread-selection-banner__text {
@@ -5225,8 +5254,11 @@ html.fullscreen-mode::before {
 }
 
 .fullscreen-mode body.thread-mode-active .thread-panel-header {
-  background: transparent;
-  border-bottom: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
+  --thread-header-glass-top: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+  --thread-header-glass-mid: color-mix(in srgb, var(--cerebr-bg-color) 72%, transparent);
+  --thread-header-glass-bottom: color-mix(in srgb, var(--cerebr-bg-color) 0%, transparent);
+  --thread-header-glass-blur: 12px;
 }
 
 .fullscreen-mode body.thread-mode-active #thread-container {
