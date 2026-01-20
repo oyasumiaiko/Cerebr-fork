@@ -1001,6 +1001,39 @@ export async function getDatabaseStats() {
   try {
     const db = await openChatHistoryDB();
     const encoder = new TextEncoder();
+    const calcJsonBytes = (value) => {
+      if (value === null || value === undefined) return 0;
+      if (typeof value === 'string') return encoder.encode(value).length;
+      try {
+        return encoder.encode(JSON.stringify(value)).length;
+      } catch (_) {
+        return 0;
+      }
+    };
+    const calcMessageMetaBytes = (msg) => {
+      if (!msg || typeof msg !== 'object') return 0;
+      let size = 0;
+      if (typeof msg.thoughtsRaw === 'string' && msg.thoughtsRaw) {
+        size += encoder.encode(msg.thoughtsRaw).length;
+      }
+      if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+        size += encoder.encode(msg.reasoning_content).length;
+      }
+      if (typeof msg.preprocessOriginalText === 'string' && msg.preprocessOriginalText) {
+        size += encoder.encode(msg.preprocessOriginalText).length;
+      }
+      if (typeof msg.preprocessRenderedText === 'string' && msg.preprocessRenderedText) {
+        size += encoder.encode(msg.preprocessRenderedText).length;
+      }
+      if (typeof msg.threadSelectionText === 'string' && msg.threadSelectionText) {
+        size += encoder.encode(msg.threadSelectionText).length;
+      }
+      if (msg.tool_calls) size += calcJsonBytes(msg.tool_calls);
+      if (msg.groundingMetadata) size += calcJsonBytes(msg.groundingMetadata);
+      if (msg.promptMeta) size += calcJsonBytes(msg.promptMeta);
+      if (msg.pageMeta) size += calcJsonBytes(msg.pageMeta);
+      return size;
+    };
     
     // 获取所有会话
     const conversations = await getAllConversations(false);
@@ -1019,6 +1052,7 @@ export async function getDatabaseStats() {
     let totalImageMessages = 0;
     let totalTextSize = 0;
     let totalImageSize = 0;
+    let totalMetaSize = 0;
     let largestMessage = 0;
     let oldestMessageDate = Date.now();
     let newestMessageDate = 0;
@@ -1047,14 +1081,14 @@ export async function getDatabaseStats() {
           }
           
           // 检查内容类型和大小
+          let msgSize = 0;
           if (msg.content) {
             if (typeof msg.content === 'string') {
               const size = encoder.encode(msg.content).length;
               totalTextSize += size;
-              largestMessage = Math.max(largestMessage, size);
+              msgSize = size;
             } else if (Array.isArray(msg.content)) {
               // 处理图片和文本混合内容
-              let msgSize = 0;
               msg.content.forEach(part => {
                 if (part.type === 'text' && part.text) {
                   const textSize = encoder.encode(part.text).length;
@@ -1068,9 +1102,11 @@ export async function getDatabaseStats() {
                   totalImageMessages++;
                 }
               });
-              largestMessage = Math.max(largestMessage, msgSize);
             }
           }
+          const metaSize = calcMessageMetaBytes(msg);
+          totalMetaSize += metaSize;
+          largestMessage = Math.max(largestMessage, msgSize + metaSize);
         });
       }
     });
@@ -1123,8 +1159,10 @@ export async function getDatabaseStats() {
       totalTextSizeFormatted: formatSize(totalTextSize),
       totalImageSize: totalImageSize,
       totalImageSizeFormatted: formatSize(totalImageSize),
-      totalSize: totalTextSize + totalImageSize,
-      totalSizeFormatted: formatSize(totalTextSize + totalImageSize),
+      totalMetaSize,
+      totalMetaSizeFormatted: formatSize(totalMetaSize),
+      totalSize: totalTextSize + totalImageSize + totalMetaSize,
+      totalSizeFormatted: formatSize(totalTextSize + totalImageSize + totalMetaSize),
       largestMessageSize: largestMessage,
       largestMessageSizeFormatted: formatSize(largestMessage),
       oldestMessageDate: oldestMessageDate !== Date.now() ? new Date(oldestMessageDate) : null,

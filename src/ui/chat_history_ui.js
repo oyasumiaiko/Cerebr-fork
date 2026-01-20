@@ -3763,6 +3763,10 @@ export function createChatHistoryUI(appContext) {
           <div class="db-stats-metric-value">${stats.totalImageSizeFormatted}</div>
           <div class="db-stats-metric-label">图片数据</div>
         </div>
+        <div class="db-stats-metric">
+          <div class="db-stats-metric-value">${stats.totalMetaSizeFormatted || '0 B'}</div>
+          <div class="db-stats-metric-label">元数据</div>
+        </div>
       </div>
     `;
     
@@ -3883,12 +3887,13 @@ export function createChatHistoryUI(appContext) {
     statsContent.appendChild(techCard);
     
     // 添加饼图显示数据比例
-    if (stats.totalTextSize > 0 || stats.totalImageSize > 0) {
+    if ((stats.totalTextSize + (stats.totalMetaSize || 0) > 0) || stats.totalImageSize > 0) {
       const chartContainer = document.createElement('div');
       chartContainer.className = 'db-stats-chart-container';
       
-      const totalSize = stats.totalTextSize + stats.totalImageSize;
-      const textPercentage = Math.round((stats.totalTextSize / totalSize) * 100);
+      const textAndMetaSize = (stats.totalTextSize || 0) + (stats.totalMetaSize || 0);
+      const totalSize = textAndMetaSize + (stats.totalImageSize || 0);
+      const textPercentage = totalSize > 0 ? Math.round((textAndMetaSize / totalSize) * 100) : 0;
       const imagePercentage = 100 - textPercentage;
       
       chartContainer.innerHTML = `
@@ -4442,6 +4447,7 @@ export function createChatHistoryUI(appContext) {
       // 现在 IndexedDB 不再存储图片 base64，默认备份包含图片引用；仅当显式传入 excludeImages 时才剥离图片片段
       const excludeImages = (opts.excludeImages !== undefined) ? !!opts.excludeImages : false;
       const doCompress = (opts.compress !== undefined) ? !!opts.compress : (prefs.compressDefault !== false);
+      const stripMeta = !!opts.stripMeta;
       const sp = utils.createStepProgress({ steps, type: 'info' });
       sp.setStep(0); // 读取偏好
 
@@ -4467,7 +4473,7 @@ export function createChatHistoryUI(appContext) {
       let usedStripFallback = false;
       let maxEndTime = lastBackupAt;
 
-      const buildStreamBackup = async (forceExcludeImages, hintMessage) => {
+      const buildStreamBackup = async (forceExcludeImages, forceStripMeta, hintMessage) => {
         let processed = 0;
         maxEndTime = lastBackupAt;
         if (hintMessage) {
@@ -4480,9 +4486,11 @@ export function createChatHistoryUI(appContext) {
             processed += 1;
             sp.updateSub(processed, Math.max(1, total), `导出会话 (${processed}/${total})`);
             if (!full) continue;
-            const cleaned = forceExcludeImages
-              ? stripImagesFromConversation(full, { keepImageRefs: false })
-              : sanitizeConversationImages(full);
+            const cleaned = prepareConversationForBackup(full, {
+              excludeImages: forceExcludeImages,
+              stripMeta: forceStripMeta,
+              keepImageRefs: false
+            });
             const endTime = Number(cleaned?.endTime) || Number(meta?.endTime) || 0;
             if (endTime > maxEndTime) maxEndTime = endTime;
             yield cleaned;
@@ -4494,12 +4502,12 @@ export function createChatHistoryUI(appContext) {
 
       let blobResult;
       try {
-        blobResult = await buildStreamBackup(excludeImages);
+        blobResult = await buildStreamBackup(excludeImages, stripMeta);
       } catch (error) {
         if (!excludeImages) {
           console.warn('备份流式构建失败，尝试移除图片后重试:', error);
           usedStripFallback = true;
-          blobResult = await buildStreamBackup(true, '备份过大，移除图片后重试');
+          blobResult = await buildStreamBackup(true, stripMeta, '备份过大，移除图片后重试');
         } else {
           throw error;
         }
@@ -4512,7 +4520,8 @@ export function createChatHistoryUI(appContext) {
         mode: doIncremental ? 'incremental' : 'full',
         excludeImages: effectiveExcludeImages,
         doCompress,
-        seq: seqForName
+        seq: seqForName,
+        stripMeta
       });
       sp.next('保存文件');
 
@@ -4564,16 +4573,16 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  function buildBackupFilename({ mode, excludeImages, doCompress, seq }) {
+  function buildBackupFilename({ mode, excludeImages, doCompress, seq, stripMeta }) {
     const ts = new Date();
     const pad = (n, w) => String(n).padStart(w, '0');
     const nameTs = `${ts.getFullYear()}${pad(ts.getMonth() + 1, 2)}${pad(ts.getDate(), 2)}_${pad(ts.getHours(), 2)}${pad(ts.getMinutes(), 2)}${pad(ts.getSeconds(), 2)}`;
     const suffix = doCompress ? '.json.gz' : '.json';
     if (mode === 'incremental') {
       const s = pad(Math.max(1, Number(seq || 1)), 3);
-      return `chat_backup_inc_${nameTs}+${s}${suffix}`;
+      return `chat_backup_inc_${nameTs}+${s}${excludeImages ? '_noimg' : ''}${stripMeta ? '_nometa' : ''}${suffix}`;
     }
-    return `chat_backup_full_${nameTs}${excludeImages ? '_noimg' : ''}${suffix}`;
+    return `chat_backup_full_${nameTs}${excludeImages ? '_noimg' : ''}${stripMeta ? '_nometa' : ''}${suffix}`;
   }
 
   /**
@@ -4747,12 +4756,13 @@ export function createChatHistoryUI(appContext) {
           const next = { ...msg };
           // 默认只保留文本片段；keepImageRefs=true 时保留轻量级图片引用（path/hash）
           if (Array.isArray(msg.content)) {
-            const parts = [];
+            const textChunks = [];
+            const imageParts = [];
             for (const part of msg.content) {
               if (!part) continue;
               if (part.type === 'text' && typeof part.text === 'string') {
                 const cleaned = stripDataUrlsFromString(part.text);
-                parts.push({ type: 'text', text: cleaned.text });
+                if (cleaned.text) textChunks.push(cleaned.text);
               } else if (part.type === 'image_url' && keepImageRefs) {
                 // 保留轻量级图片引用，避免还原后丢失路径；始终丢弃 data: 链接
                 const img = part.image_url || {};
@@ -4769,14 +4779,27 @@ export function createChatHistoryUI(appContext) {
                 if (img.mimeType || img.mime_type) {
                   minimal.image_url.mime_type = img.mimeType || img.mime_type;
                 }
-                parts.push(minimal);
+                imageParts.push(minimal);
               }
             }
-            next.content = parts.length > 0 ? parts : '';
+            if (keepImageRefs && imageParts.length > 0) {
+              const mergedText = textChunks.join('');
+              if (mergedText.trim()) {
+                imageParts.push({ type: 'text', text: mergedText });
+              }
+              next.content = imageParts;
+            } else {
+              next.content = textChunks.join('');
+            }
             if (next.contentRef) delete next.contentRef; // 去掉对已被剥离图片内容的引用
           } else if (typeof msg.content === 'string') {
             const cleaned = stripDataUrlsFromString(msg.content);
             next.content = cleaned.text;
+            if (!keepImageRefs && next.contentRef) delete next.contentRef;
+          } else if (!keepImageRefs && next.contentRef) {
+            // 仅有 contentRef 的场景直接去掉引用，避免恢复后指向不存在的图片数据
+            next.content = '';
+            delete next.contentRef;
           }
           return next;
         });
@@ -4904,6 +4927,55 @@ export function createChatHistoryUI(appContext) {
       dataUrlCount,
       samples
     };
+  }
+
+  const BACKUP_META_FIELDS = [
+    'thoughtsRaw',
+    'thoughtSignature',
+    'thoughtSignatureSource',
+    'reasoning_content',
+    'tool_calls',
+    'groundingMetadata',
+    'preprocessOriginalText',
+    'preprocessRenderedText'
+  ];
+
+  /**
+   * 备份时可选移除体积较大的元数据字段，避免“非图片数据”撑爆备份体积
+   * @param {Object} conversation
+   * @returns {Object}
+   */
+  function stripBackupMetaFromConversation(conversation) {
+    if (!conversation || typeof conversation !== 'object') return conversation;
+    try {
+      const cloned = { ...conversation };
+      if (Array.isArray(conversation.messages)) {
+        cloned.messages = conversation.messages.map((msg) => {
+          if (!msg || typeof msg !== 'object') return msg;
+          const next = { ...msg };
+          for (const key of BACKUP_META_FIELDS) {
+            if (key in next) delete next[key];
+          }
+          return next;
+        });
+      }
+      return cloned;
+    } catch (_) {
+      return conversation;
+    }
+  }
+
+  function prepareConversationForBackup(conversation, options = {}) {
+    const excludeImages = !!options.excludeImages;
+    const stripMeta = !!options.stripMeta;
+    const keepImageRefs = !!options.keepImageRefs;
+    let cleaned = excludeImages
+      ? stripImagesFromConversation(conversation, { keepImageRefs })
+      : sanitizeConversationImages(conversation);
+    if (stripMeta) {
+      cleaned = stripBackupMetaFromConversation(cleaned);
+    }
+    return cleaned;
   }
 
   function getAsyncIterator(source) {
@@ -6085,7 +6157,7 @@ export function createChatHistoryUI(appContext) {
 
     const slimBtn = document.createElement('button');
     slimBtn.className = 'backup-button';
-    slimBtn.textContent = '精简备份（不含图片）';
+    slimBtn.textContent = '精简备份（不含图片/元数据）';
     manualButtons.appendChild(slimBtn);
 
     const fullResetBtn = document.createElement('button');
@@ -6117,6 +6189,11 @@ export function createChatHistoryUI(appContext) {
     manualHint.className = 'backup-panel-hint';
     manualHint.textContent = '备份将保存到 “下载/Cerebr/” 子目录。';
     container.appendChild(manualHint);
+
+    const manualHintMeta = document.createElement('div');
+    manualHintMeta.className = 'backup-panel-hint';
+    manualHintMeta.textContent = '精简备份会移除图片与思考/引用等元数据，恢复后不影响正文显示。';
+    container.appendChild(manualHintMeta);
 
     const cleanupSection = document.createElement('div');
     cleanupSection.className = 'backup-section';
@@ -6329,7 +6406,7 @@ export function createChatHistoryUI(appContext) {
     });
 
     slimBtn.addEventListener('click', async () => {
-      await runManualBackup({ excludeImages: true });
+      await runManualBackup({ excludeImages: true, stripMeta: true });
     });
 
     fullResetBtn.addEventListener('click', async () => {
