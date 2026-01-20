@@ -381,8 +381,8 @@ class PromptSettings {
         const nameMap = {
             'system': '系统提示词',
             'summary': '快速总结提示词',
-            'query': '非联网模型划词提示词',
-            'selection': '联网模型划词提示词',
+            'query': '划词方式1',
+            'selection': '划词方式2',
             'pdf': 'PDF快速总结提示词',
             'image': '图片默认提示词',
             'urlRules': 'URL规则'

@@ -989,22 +989,22 @@ export function createSelectionThreadManager(appContext) {
   function runSelectionPromptInThread(anchorNode, selectionInfo, messageElement, existingThread) {
     const selectionText = (selectionInfo?.selectionText || '').trim();
     if (!selectionText) {
-      showNotification?.({ message: '选中内容为空，无法发送划词提示', type: 'warning' });
-      console.warn('[划词气泡] 选中内容为空，跳过发送');
+      showNotification?.({ message: '选中内容为空，无法发送划词方式1', type: 'warning' });
+      console.warn('[划词气泡] 选中内容为空，跳过方式1发送');
       return false;
     }
 
     if (!promptSettingsManager?.getPrompts) {
-      showNotification?.({ message: '未找到划词提示词配置', type: 'warning' });
-      console.warn('[划词气泡] promptSettingsManager 未就绪');
+      showNotification?.({ message: '未找到划词方式1配置', type: 'warning' });
+      console.warn('[划词气泡] promptSettingsManager 未就绪（方式1）');
       return false;
     }
 
     const prompts = promptSettingsManager.getPrompts();
-    const selectionPromptText = (prompts?.selection?.prompt || '').trim();
+    const selectionPromptText = (prompts?.query?.prompt || '').trim();
     if (!selectionPromptText) {
-      showNotification?.({ message: '尚未配置划词提示词，请在设置中补充', type: 'warning' });
-      console.warn('[划词气泡] 划词提示词为空');
+      showNotification?.({ message: '尚未配置划词方式1，请在设置中补充', type: 'warning' });
+      console.warn('[划词气泡] 划词方式1为空');
       return false;
     }
 
@@ -1014,7 +1014,7 @@ export function createSelectionThreadManager(appContext) {
       return false;
     }
 
-    console.log('[划词气泡] 准备发送划词提示', { selectionText });
+    console.log('[划词气泡] 准备发送划词方式1', { selectionText });
     let targetThread = existingThread;
     if (!targetThread) {
       const created = createThreadAnnotation(anchorNode, selectionInfo);
@@ -1027,15 +1027,15 @@ export function createSelectionThreadManager(appContext) {
       targetThread = created;
     }
 
-    // 进入线程后，用划词提示词自动发送一条消息（效果等同于手动使用划词提示词）。
+    // 进入线程后，用划词方式1自动发送一条消息（效果等同于手动使用划词方式1）。
     enterThread(targetThread.id);
     const userMessageText = selectionPromptText.replace('<SELECTION>', selectionText);
-    const apiPref = (prompts.selection?.model || '').trim();
+    const apiPref = (prompts.query?.model || '').trim();
     const apiParam = apiPref || 'follow_current';
-    console.log('[划词气泡] 发送参数', { api: apiParam, message: userMessageText });
+    console.log('[划词气泡] 方式1发送参数', { api: apiParam, message: userMessageText });
     messageSender.sendMessage({
       originalMessageText: userMessageText,
-      specificPromptType: 'selection',
+      specificPromptType: 'query',
       promptMeta: { selectionText },
       api: apiParam
     });
@@ -1075,7 +1075,7 @@ export function createSelectionThreadManager(appContext) {
       iconButtons: [
         {
           iconClass: 'fa-solid fa-paper-plane',
-          title: '使用划词提示词发送',
+          title: '使用划词方式1发送',
           onClick: () => {
             const didSend = runSelectionPromptInThread(
               anchorNode,

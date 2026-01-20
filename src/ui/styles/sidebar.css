@@ -4276,6 +4276,31 @@ body.hide-references .reference-number.superscript {
     opacity: 0.5;
 }
 
+.db-stats-meta-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+}
+
+.db-stats-meta-list li {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--cerebr-message-user-bg) 50%, transparent);
+    border-radius: 6px;
+}
+
+.db-stats-meta-list .meta-key {
+    color: var(--cerebr-text-color);
+}
+
+.db-stats-meta-list .meta-value {
+    opacity: 0.8;
+}
+
 /* 图表样式 */
 .db-stats-chart-container {
     display: flex;
