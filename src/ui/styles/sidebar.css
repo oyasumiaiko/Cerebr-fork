@@ -1731,6 +1731,146 @@ input:checked + .slider::before {
     color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
 }
 
+.backup-matrix {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.backup-matrix-wrapper {
+    overflow-x: auto;
+    border-radius: var(--cerebr-control-radius);
+    border: 1px solid color-mix(in srgb, var(--cerebr-control-border) 80%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 70%, transparent);
+    box-shadow: var(--cerebr-control-inset-shadow);
+}
+
+.backup-matrix-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.backup-matrix-table th,
+.backup-matrix-table td {
+    padding: 10px 12px;
+    vertical-align: top;
+    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-control-border) 70%, transparent);
+}
+
+.backup-matrix-table th {
+    text-align: left;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 86%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 80%, transparent);
+}
+
+.backup-matrix-threshold-label {
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+}
+
+.backup-matrix-threshold-sub {
+    margin-top: 4px;
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
+.backup-matrix-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 210px;
+}
+
+.backup-matrix-cell-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.backup-matrix-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.backup-matrix-key {
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.backup-matrix-value {
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+}
+
+.backup-matrix-total .backup-matrix-key,
+.backup-matrix-total .backup-matrix-value {
+    color: color-mix(in srgb, var(--cerebr-text-color) 96%, transparent);
+}
+
+.backup-matrix-meta {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed color-mix(in srgb, var(--cerebr-control-border) 70%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.backup-matrix-meta-title {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+}
+
+.backup-matrix-meta-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.backup-matrix-meta-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.backup-matrix-meta-key {
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.backup-matrix-meta-value {
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+}
+
+.backup-matrix-meta-empty {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+}
+
+.backup-matrix-empty {
+    padding: 12px;
+    border-radius: var(--cerebr-control-radius);
+    border: 1px dashed color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 70%, transparent);
+    text-align: center;
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+}
+
+.backup-matrix-footnote {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+    padding: 0 4px;
+}
+
 .gallery-loading,
 .gallery-empty,
 .gallery-error {

@@ -80,6 +80,9 @@ export function createChatHistoryUI(appContext) {
   // 说明：默认列表使用 paged 模式，不会预先拉取全量元数据；一旦用户输入“全文搜索”，就必须拿到全量元数据。
   // 为避免“输入停下后卡一秒才开始显示搜索进度”，这里把 TTL 设长一些，并对并发请求做去重。
   const META_CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存元数据（有显式 invalidateMetadataCache 兜底）
+  // --- 推理签名统计缓存（清理矩阵） ---
+  const SIGNATURE_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存签名统计（会在清理/更新后失效）
+  let signatureStatsCache = { data: null, time: 0, promise: null };
 
   const galleryCache = {
     items: [],
@@ -126,12 +129,19 @@ export function createChatHistoryUI(appContext) {
     } catch (_) {}
   }
 
+  function invalidateSignatureStatsCache() {
+    signatureStatsCache.data = null;
+    signatureStatsCache.time = 0;
+    signatureStatsCache.promise = null;
+  }
+
   function invalidateMetadataCache() {
     metaCache.data = null;
     metaCache.time = 0;
     metaCache.promise = null;
     invalidateGalleryCache();
     invalidateSearchCache();
+    invalidateSignatureStatsCache();
   }
 
   /**
@@ -149,6 +159,31 @@ export function createChatHistoryUI(appContext) {
       }
     }
     return msg;
+  }
+
+  /**
+   * 批量移除推理签名（thoughtSignature / thoughtSignatureSource），避免落库或备份体积膨胀
+   * @param {Array<any>} messages
+   * @returns {{ changed: boolean, removedMessages: number }}
+   */
+  function removeThoughtSignatureFromMessages(messages) {
+    const list = Array.isArray(messages) ? messages : [];
+    let changed = false;
+    let removedMessages = 0;
+    for (const msg of list) {
+      if (!msg || typeof msg !== 'object') continue;
+      const hasSignature = msg.thoughtSignature !== undefined || msg.thoughtSignatureSource !== undefined;
+      if (msg.thoughtSignature !== undefined) {
+        delete msg.thoughtSignature;
+        changed = true;
+      }
+      if (msg.thoughtSignatureSource !== undefined) {
+        delete msg.thoughtSignatureSource;
+        changed = true;
+      }
+      if (hasSignature) removedMessages += 1;
+    }
+    return { changed, removedMessages };
   }
 
   async function getAllConversationMetadataWithCache(forceUpdate = false) {
@@ -739,6 +774,18 @@ export function createChatHistoryUI(appContext) {
       }
     } catch (e) {
       console.warn('保存会话时落盘图片失败，已跳过部分图片:', e);
+    }
+    // 保存前压缩引用元数据（groundingMetadata），避免把检索结果全文写进 IndexedDB
+    try {
+      for (const msg of messagesCopy) {
+        const compacted = compactGroundingMetadata(msg?.groundingMetadata);
+        if (compacted.changed) {
+          if (compacted.value == null) delete msg.groundingMetadata;
+          else msg.groundingMetadata = compacted.value;
+        }
+      }
+    } catch (e) {
+      console.warn('保存会话时压缩引用元数据失败，已跳过:', e);
     }
     const timestamps = messagesCopy.map(msg => msg.timestamp);
     const startTime = Math.min(...timestamps);
@@ -3769,6 +3816,19 @@ export function createChatHistoryUI(appContext) {
         </div>
       </div>
     `;
+
+    const metaCard = document.createElement('div');
+    metaCard.className = 'db-stats-card meta-card';
+    const metaItems = Array.isArray(stats.metaTopItems) ? stats.metaTopItems : [];
+    const metaListHtml = metaItems.length
+      ? `<ul class="db-stats-meta-list">${metaItems.map(item => (
+          `<li><span class="meta-key">${item.key}</span><span class="meta-value">${item.sizeFormatted}</span></li>`
+        )).join('')}</ul>`
+      : '<div class="db-stats-empty"><div class="db-stats-empty-text">暂无元数据统计</div></div>';
+    metaCard.innerHTML = `
+      <div class="db-stats-card-header">元数据构成 Top 5</div>
+      ${metaListHtml}
+    `;
     
     // 第二行卡片：聊天统计
     const chatStatsCard = document.createElement('div');
@@ -3880,6 +3940,7 @@ export function createChatHistoryUI(appContext) {
     
     // 添加所有卡片到内容区域
     statsContent.appendChild(overviewCard);
+    statsContent.appendChild(metaCard);
     statsContent.appendChild(chatStatsCard);
     statsContent.appendChild(avgStatsCard);
     statsContent.appendChild(domainsCard);
@@ -4645,6 +4706,8 @@ export function createChatHistoryUI(appContext) {
         // 逐条写入：存在且不覆盖则跳过，存在且覆盖则替换
         for (const conv of mergedConversations) {
           try {
+            // 还原时移除推理签名，避免无意义占用空间
+            try { removeThoughtSignatureFromMessages(conv?.messages); } catch (_) {}
             const existing = await getConversationById(conv.id, false);
             if (!existing) {
               await putConversation(conv);
@@ -4972,6 +5035,10 @@ export function createChatHistoryUI(appContext) {
     let cleaned = excludeImages
       ? stripImagesFromConversation(conversation, { keepImageRefs })
       : sanitizeConversationImages(conversation);
+    // 备份始终移除推理签名，避免不必要的体积膨胀
+    try {
+      removeThoughtSignatureFromMessages(cleaned?.messages);
+    } catch (_) {}
     if (stripMeta) {
       cleaned = stripBackupMetaFromConversation(cleaned);
     }
@@ -5626,6 +5693,118 @@ export function createChatHistoryUI(appContext) {
     return { changed, found, converted, failed };
   }
 
+  // ==== 引用元数据压缩（groundingMetadata）====
+  const GROUNDING_META_KEYS = ['groundingSupports', 'groundingChunks', 'webSearchQueries'];
+  const GROUNDING_SUPPORT_KEYS = ['segment', 'groundingChunkIndices', 'confidenceScores'];
+  const GROUNDING_SEGMENT_KEYS = ['text'];
+  const GROUNDING_CHUNK_KEYS = ['web'];
+  const GROUNDING_WEB_KEYS = ['uri', 'title', 'url'];
+
+  /**
+   * 纯函数：压缩 groundingMetadata，只保留引用展示所需字段，避免存储全文检索结果
+   * - 保留：groundingSupports.segment.text、groundingSupports.groundingChunkIndices、confidenceScores
+   * - 保留：groundingChunks[*].web.uri/title（保持索引位置，缺失项置 null）
+   * - 保留：webSearchQueries（字符串数组）
+   *
+   * @param {any} meta
+   * @returns {{ value: any, changed: boolean }}
+   */
+  function compactGroundingMetadata(meta) {
+    if (!meta || typeof meta !== 'object') return { value: meta, changed: false };
+
+    let changed = false;
+    const topKeys = Object.keys(meta || {});
+    for (const key of topKeys) {
+      if (!GROUNDING_META_KEYS.includes(key)) {
+        changed = true;
+        break;
+      }
+    }
+
+    const supportsIn = Array.isArray(meta.groundingSupports) ? meta.groundingSupports : [];
+    const chunksIn = Array.isArray(meta.groundingChunks) ? meta.groundingChunks : [];
+    const queriesIn = Array.isArray(meta.webSearchQueries) ? meta.webSearchQueries : [];
+
+    const supports = supportsIn.map((support) => {
+      if (!support || typeof support !== 'object') {
+        if (support != null) changed = true;
+        return null;
+      }
+      const out = {};
+      if (support.segment && typeof support.segment === 'object') {
+        const text = (typeof support.segment.text === 'string') ? support.segment.text : '';
+        if (text) out.segment = { text };
+        if (Object.keys(support.segment).some(k => !GROUNDING_SEGMENT_KEYS.includes(k))) {
+          changed = true;
+        }
+      } else if (support.segment != null) {
+        changed = true;
+      }
+
+      if (Array.isArray(support.groundingChunkIndices)) {
+        out.groundingChunkIndices = support.groundingChunkIndices.slice();
+      } else if (support.groundingChunkIndices != null) {
+        changed = true;
+      }
+
+      if (Array.isArray(support.confidenceScores)) {
+        out.confidenceScores = support.confidenceScores.slice();
+      } else if (support.confidenceScores != null) {
+        changed = true;
+      }
+
+      if (Object.keys(support).some(k => !GROUNDING_SUPPORT_KEYS.includes(k))) {
+        changed = true;
+      }
+
+      return Object.keys(out).length > 0 ? out : null;
+    });
+
+    const compactSupports = supports.filter(Boolean);
+    if (compactSupports.length !== supportsIn.length) {
+      changed = true;
+    }
+
+    const compactChunks = chunksIn.map((chunk) => {
+      if (!chunk || typeof chunk !== 'object') {
+        if (chunk != null) changed = true;
+        return null;
+      }
+      if (Object.keys(chunk).some(k => !GROUNDING_CHUNK_KEYS.includes(k))) {
+        changed = true;
+      }
+      const web = chunk.web && typeof chunk.web === 'object' ? chunk.web : null;
+      if (!web) return null;
+
+      const uri = (typeof web.uri === 'string') ? web.uri : (typeof web.url === 'string' ? web.url : '');
+      const title = (typeof web.title === 'string') ? web.title : '';
+      if (Object.keys(web).some(k => !GROUNDING_WEB_KEYS.includes(k))) {
+        changed = true;
+      }
+      if (!uri && !title) return null;
+      return { web: { uri, title } };
+    });
+
+    const compactQueries = queriesIn.filter(q => typeof q === 'string' && q.trim());
+    if (compactQueries.length !== queriesIn.length) {
+      changed = true;
+    }
+
+    const hasAny = compactSupports.length > 0 || compactChunks.some(Boolean) || compactQueries.length > 0;
+    if (!hasAny) {
+      return { value: null, changed: true };
+    }
+
+    return {
+      value: {
+        groundingSupports: compactSupports,
+        groundingChunks: compactChunks,
+        webSearchQueries: compactQueries
+      },
+      changed
+    };
+  }
+
   /**
    * 批量清理会话中的图片引用：
    * - 扫描所有消息，将 dataURL/base64 落盘并替换为本地路径；
@@ -5757,6 +5936,551 @@ export function createChatHistoryUI(appContext) {
       addedPath: result.addedPath,
       orphanRemoved: orphan.removed,
       orphanTotal: orphan.total
+    };
+  }
+
+  /**
+   * 压缩引用元数据（groundingMetadata）：
+   * - 仅保留引用展示所需字段，剔除检索结果全文与冗余字段；
+   * - 不影响正文与引用编号渲染；
+   * - 适用于 Gemini/OpenAI 兼容的引用元信息清理。
+   */
+  async function compactGroundingMetadataInDb() {
+    const sp = utils.createStepProgress({ steps: ['加载会话', '压缩元数据', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    const total = metas.length || 1;
+    sp.next('压缩元数据');
+
+    let updatedConversations = 0;
+    let updatedMessages = 0;
+
+    for (let i = 0; i < metas.length; i++) {
+      const conv = await getConversationById(metas[i].id, true);
+      let convChanged = false;
+
+      if (conv && Array.isArray(conv.messages)) {
+        for (const msg of conv.messages) {
+          if (!msg || msg.groundingMetadata == null) continue;
+          const compacted = compactGroundingMetadata(msg.groundingMetadata);
+          if (compacted.changed) {
+            if (compacted.value == null) delete msg.groundingMetadata;
+            else msg.groundingMetadata = compacted.value;
+            convChanged = true;
+            updatedMessages += 1;
+          }
+        }
+      }
+
+      if (convChanged && conv) {
+        conv.messageCount = Array.isArray(conv.messages) ? conv.messages.length : 0;
+        await putConversation(conv);
+        updateConversationInCache(conv);
+        if (activeConversation?.id === conv.id) activeConversation = conv;
+        updatedConversations += 1;
+      }
+      try {
+        sp?.updateSub?.(i + 1, total, `压缩元数据 (${i + 1}/${total})`);
+      } catch (_) {}
+    }
+
+    sp.complete('完成', true);
+    invalidateMetadataCache();
+    return {
+      scannedConversations: metas.length,
+      updatedConversations,
+      updatedMessages
+    };
+  }
+
+  const SIGNATURE_STATS_THRESHOLDS = [90, 60, 30, 14, 7];
+  const SIGNATURE_META_FIELDS = [
+    'thoughtsRaw',
+    'thoughtSignature',
+    'thoughtSignatureSource',
+    'reasoning_content',
+    'preprocessOriginalText',
+    'preprocessRenderedText',
+    'threadSelectionText',
+    'tool_calls',
+    'groundingMetadata',
+    'promptMeta',
+    'pageMeta'
+  ];
+  // 说明：按“>=90 / 60-89 / 30-59 / 14-29 / 7-13”分桶，用于展示区间与累计体积。
+  const SIGNATURE_BUCKETS = SIGNATURE_STATS_THRESHOLDS.map((days, index) => {
+    const upper = index === 0 ? null : SIGNATURE_STATS_THRESHOLDS[index - 1];
+    const maxDays = upper ? upper : Infinity;
+    const label = upper ? `${days}-${upper - 1}天` : `>=${days}天`;
+    return {
+      threshold: days,
+      minDays: days,
+      maxDays,
+      label,
+      cumulativeLabel: `>=${days}天`
+    };
+  });
+  const SIGNATURE_DAY_MS = 24 * 60 * 60 * 1000;
+
+  function createEmptySignatureMetaSizes() {
+    const result = {};
+    for (const key of SIGNATURE_META_FIELDS) result[key] = 0;
+    return result;
+  }
+
+  function createEmptySignatureStats() {
+    return {
+      conversations: 0,
+      messages: 0,
+      textBytes: 0,
+      imageBytes: 0,
+      metaBytes: 0,
+      metaFieldSizes: createEmptySignatureMetaSizes()
+    };
+  }
+
+  function mergeSignatureStats(target, source) {
+    if (!target || !source) return;
+    target.conversations += Number(source.conversations) || 0;
+    target.messages += Number(source.messages) || 0;
+    target.textBytes += Number(source.textBytes) || 0;
+    target.imageBytes += Number(source.imageBytes) || 0;
+    target.metaBytes += Number(source.metaBytes) || 0;
+    for (const key of SIGNATURE_META_FIELDS) {
+      target.metaFieldSizes[key] = (target.metaFieldSizes[key] || 0) + (source.metaFieldSizes?.[key] || 0);
+    }
+  }
+
+  function calcJsonBytes(value, encoder) {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'string') return encoder.encode(value).length;
+    try {
+      return encoder.encode(JSON.stringify(value)).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function addSignatureMetaSize(metaFieldSizes, key, bytes) {
+    const size = Number(bytes) || 0;
+    if (!size) return;
+    if (metaFieldSizes[key] === undefined) metaFieldSizes[key] = 0;
+    metaFieldSizes[key] += size;
+  }
+
+  function calcMessageMetaBytes(msg, encoder, metaFieldSizes) {
+    if (!msg || typeof msg !== 'object') return 0;
+    let size = 0;
+    if (typeof msg.thoughtsRaw === 'string' && msg.thoughtsRaw) {
+      const bytes = encoder.encode(msg.thoughtsRaw).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'thoughtsRaw', bytes);
+    }
+    if (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) {
+      const bytes = encoder.encode(msg.thoughtSignature).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'thoughtSignature', bytes);
+    }
+    if (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) {
+      const bytes = encoder.encode(msg.thoughtSignatureSource).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'thoughtSignatureSource', bytes);
+    }
+    if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+      const bytes = encoder.encode(msg.reasoning_content).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'reasoning_content', bytes);
+    }
+    if (typeof msg.preprocessOriginalText === 'string' && msg.preprocessOriginalText) {
+      const bytes = encoder.encode(msg.preprocessOriginalText).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'preprocessOriginalText', bytes);
+    }
+    if (typeof msg.preprocessRenderedText === 'string' && msg.preprocessRenderedText) {
+      const bytes = encoder.encode(msg.preprocessRenderedText).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'preprocessRenderedText', bytes);
+    }
+    if (typeof msg.threadSelectionText === 'string' && msg.threadSelectionText) {
+      const bytes = encoder.encode(msg.threadSelectionText).length;
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'threadSelectionText', bytes);
+    }
+    if (msg.tool_calls) {
+      const bytes = calcJsonBytes(msg.tool_calls, encoder);
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'tool_calls', bytes);
+    }
+    if (msg.groundingMetadata) {
+      const bytes = calcJsonBytes(msg.groundingMetadata, encoder);
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'groundingMetadata', bytes);
+    }
+    if (msg.promptMeta) {
+      const bytes = calcJsonBytes(msg.promptMeta, encoder);
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'promptMeta', bytes);
+    }
+    if (msg.pageMeta) {
+      const bytes = calcJsonBytes(msg.pageMeta, encoder);
+      size += bytes;
+      addSignatureMetaSize(metaFieldSizes, 'pageMeta', bytes);
+    }
+    return size;
+  }
+
+  function isImageDataUrl(value) {
+    if (typeof value !== 'string') return false;
+    return value.trim().toLowerCase().startsWith('data:image/');
+  }
+
+  function estimateBase64SizeFromDataUrl(dataUrl) {
+    if (typeof dataUrl !== 'string' || !dataUrl) return 0;
+    const commaIndex = dataUrl.indexOf(',');
+    const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+    return Math.round((base64.length * 3) / 4);
+  }
+
+  function measureImageUrlBytes(imageUrl, encoder) {
+    if (!imageUrl || typeof imageUrl !== 'object') {
+      return { textSize: 0, imageSize: 0 };
+    }
+    let textSize = 0;
+    let imageSize = 0;
+    const url = (typeof imageUrl.url === 'string') ? imageUrl.url : '';
+    const path = (typeof imageUrl.path === 'string') ? imageUrl.path : '';
+    if (url) {
+      if (isImageDataUrl(url)) {
+        imageSize += estimateBase64SizeFromDataUrl(url);
+      } else {
+        textSize += encoder.encode(url).length;
+      }
+    }
+    if (path && path !== url) {
+      if (isImageDataUrl(path)) {
+        imageSize += estimateBase64SizeFromDataUrl(path);
+      } else {
+        textSize += encoder.encode(path).length;
+      }
+    }
+    return { textSize, imageSize };
+  }
+
+  function measureMessageContentBytes(content, encoder) {
+    let textBytes = 0;
+    let imageBytes = 0;
+    if (typeof content === 'string') {
+      textBytes += encoder.encode(content).length;
+    } else if (Array.isArray(content)) {
+      for (const part of content) {
+        if (!part) continue;
+        if (part.type === 'text' && typeof part.text === 'string') {
+          textBytes += encoder.encode(part.text).length;
+        } else if (part.type === 'image_url' && part.image_url) {
+          const sizes = measureImageUrlBytes(part.image_url, encoder);
+          textBytes += sizes.textSize;
+          imageBytes += sizes.imageSize;
+        }
+      }
+    }
+    return { textBytes, imageBytes };
+  }
+
+  // 统计单条会话中“文本/图片/元数据”体积，用于签名矩阵展示
+  function measureConversationStats(conversation, encoder) {
+    const stats = createEmptySignatureStats();
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    stats.conversations = conversation ? 1 : 0;
+    stats.messages = messages.length;
+    for (const msg of messages) {
+      const contentSizes = measureMessageContentBytes(msg?.content, encoder);
+      stats.textBytes += contentSizes.textBytes;
+      stats.imageBytes += contentSizes.imageBytes;
+      stats.metaBytes += calcMessageMetaBytes(msg, encoder, stats.metaFieldSizes);
+    }
+    return stats;
+  }
+
+  function getSignatureBucketIndex(ageDays) {
+    for (let i = 0; i < SIGNATURE_BUCKETS.length; i++) {
+      const bucket = SIGNATURE_BUCKETS[i];
+      if (ageDays >= bucket.minDays && ageDays < bucket.maxDays) return i;
+    }
+    return -1;
+  }
+
+  function buildCumulativeSignatureStats(buckets) {
+    const result = buckets.map(() => createEmptySignatureStats());
+    for (let i = 0; i < buckets.length; i++) {
+      const merged = createEmptySignatureStats();
+      for (let j = 0; j <= i; j++) {
+        mergeSignatureStats(merged, buckets[j]);
+      }
+      result[i] = merged;
+    }
+    return result;
+  }
+
+  // 扫描全量会话：按“最后更新时间”分桶统计体积，排除置顶与近 7 天会话
+  async function computeSignatureStatsMatrix() {
+    const sp = utils.createStepProgress({ steps: ['加载元数据', '扫描会话', '汇总统计', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadataWithCache(false);
+    const pinnedIds = new Set(await getPinnedIds());
+    const buckets = SIGNATURE_BUCKETS.map(() => createEmptySignatureStats());
+    const encoder = new TextEncoder();
+    const total = metas.length || 1;
+    const now = Date.now();
+    let scanned = 0;
+    let pinnedSkipped = 0;
+    let recentSkipped = 0;
+    let missingEndTime = 0;
+
+    sp.next('扫描会话');
+    for (const meta of metas) {
+      scanned += 1;
+      if (scanned % 20 === 0 || scanned === total) {
+        sp.updateSub(scanned, total, `扫描会话 (${scanned}/${total})`);
+      }
+      const id = meta?.id;
+      if (!id) continue;
+      if (pinnedIds.has(id)) {
+        pinnedSkipped += 1;
+        continue;
+      }
+      const endTime = Number(meta?.endTime) || Number(meta?.startTime) || 0;
+      if (!endTime) {
+        missingEndTime += 1;
+        continue;
+      }
+      const ageDays = (now - endTime) / SIGNATURE_DAY_MS;
+      if (ageDays < SIGNATURE_BUCKETS[SIGNATURE_BUCKETS.length - 1].minDays) {
+        recentSkipped += 1;
+        continue;
+      }
+      const bucketIndex = getSignatureBucketIndex(ageDays);
+      if (bucketIndex < 0) continue;
+      const conv = await getConversationById(id, true);
+      if (!conv) continue;
+      const stats = measureConversationStats(conv, encoder);
+      mergeSignatureStats(buckets[bucketIndex], stats);
+    }
+
+    sp.next('汇总统计');
+    const cumulative = buildCumulativeSignatureStats(buckets);
+    sp.next('完成');
+    sp.complete('完成', true);
+
+    return {
+      buckets,
+      cumulative,
+      scannedConversations: metas.length,
+      matchedConversations: buckets.reduce((sum, item) => sum + (Number(item.conversations) || 0), 0),
+      pinnedSkipped,
+      recentSkipped,
+      missingEndTime,
+      updatedAt: Date.now()
+    };
+  }
+
+  async function getSignatureStatsMatrixCached(forceUpdate = false) {
+    const stale = forceUpdate || !signatureStatsCache.data || (Date.now() - signatureStatsCache.time > SIGNATURE_STATS_TTL);
+    if (!stale) return signatureStatsCache.data;
+    if (signatureStatsCache.promise) {
+      try {
+        return await signatureStatsCache.promise;
+      } catch (_) {
+        // 若上一次失败，继续走新的计算逻辑
+      }
+    }
+    signatureStatsCache.promise = (async () => {
+      const data = await computeSignatureStatsMatrix();
+      signatureStatsCache.data = data;
+      signatureStatsCache.time = Date.now();
+      return data;
+    })();
+    try {
+      return await signatureStatsCache.promise;
+    } finally {
+      signatureStatsCache.promise = null;
+    }
+  }
+
+  function formatByteSize(bytes) {
+    const value = Number(bytes) || 0;
+    if (value === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+    const size = value / Math.pow(1024, index);
+    return `${size.toFixed(2)} ${units[index]}`;
+  }
+
+  function renderSignatureMetaList(metaFieldSizes = {}) {
+    const entries = SIGNATURE_META_FIELDS
+      .map((key) => ({ key, size: Number(metaFieldSizes[key]) || 0 }))
+      .filter((item) => item.size > 0);
+    if (entries.length === 0) {
+      return '<div class="backup-matrix-meta-empty">无</div>';
+    }
+    return `
+      <div class="backup-matrix-meta-title">元数据明细</div>
+      <div class="backup-matrix-meta-list">
+        ${entries.map(item => (
+          `<div class="backup-matrix-meta-item"><span class="backup-matrix-meta-key">${item.key}</span><span class="backup-matrix-meta-value">${formatByteSize(item.size)}</span></div>`
+        )).join('')}
+      </div>
+    `;
+  }
+
+  function renderSignatureStatsCell(stats, label) {
+    const conversations = Number(stats?.conversations) || 0;
+    const textBytes = Number(stats?.textBytes) || 0;
+    const imageBytes = Number(stats?.imageBytes) || 0;
+    const metaBytes = Number(stats?.metaBytes) || 0;
+    const metaFieldSizes = stats?.metaFieldSizes || {};
+    const signatureBytes = (Number(metaFieldSizes.thoughtSignature) || 0) + (Number(metaFieldSizes.thoughtSignatureSource) || 0);
+    const totalBytes = textBytes + imageBytes + metaBytes;
+    return `
+      <div class="backup-matrix-cell">
+        ${label ? `<div class="backup-matrix-cell-title">${label}</div>` : ''}
+        <div class="backup-matrix-line"><span class="backup-matrix-key">会话</span><span class="backup-matrix-value">${conversations}</span></div>
+        <div class="backup-matrix-line"><span class="backup-matrix-key">文本</span><span class="backup-matrix-value">${formatByteSize(textBytes)}</span></div>
+        <div class="backup-matrix-line"><span class="backup-matrix-key">图片</span><span class="backup-matrix-value">${formatByteSize(imageBytes)}</span></div>
+        <div class="backup-matrix-line"><span class="backup-matrix-key">元数据</span><span class="backup-matrix-value">${formatByteSize(metaBytes)}</span></div>
+        <div class="backup-matrix-line"><span class="backup-matrix-key">签名</span><span class="backup-matrix-value">${formatByteSize(signatureBytes)}</span></div>
+        <div class="backup-matrix-line backup-matrix-total"><span class="backup-matrix-key">总计</span><span class="backup-matrix-value">${formatByteSize(totalBytes)}</span></div>
+        <div class="backup-matrix-meta">${renderSignatureMetaList(metaFieldSizes)}</div>
+      </div>
+    `;
+  }
+
+  function renderSignatureStatsMatrix(targetEl, data) {
+    if (!targetEl) return;
+    if (!data || !Array.isArray(data.buckets)) {
+      targetEl.innerHTML = '<div class="backup-matrix-empty">点击“统计旧对话”生成矩阵</div>';
+      return;
+    }
+
+    const rowsHtml = SIGNATURE_BUCKETS.map((bucket, index) => {
+      const rangeStats = data.buckets[index] || createEmptySignatureStats();
+      const cumulativeStats = data.cumulative?.[index] || createEmptySignatureStats();
+      return `
+        <tr>
+          <td class="backup-matrix-threshold">
+            <div class="backup-matrix-threshold-label">${bucket.cumulativeLabel}</div>
+            <div class="backup-matrix-threshold-sub">区间 ${bucket.label}</div>
+          </td>
+          <td>${renderSignatureStatsCell(rangeStats, bucket.label)}</td>
+          <td>${renderSignatureStatsCell(cumulativeStats, bucket.cumulativeLabel)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const summaryParts = [];
+    if (data.scannedConversations !== undefined) summaryParts.push(`扫描 ${data.scannedConversations} 条会话`);
+    if (data.matchedConversations !== undefined) summaryParts.push(`纳入 ${data.matchedConversations} 条`);
+    if (data.pinnedSkipped) summaryParts.push(`排除置顶 ${data.pinnedSkipped} 条`);
+    if (data.recentSkipped) summaryParts.push(`排除近7天 ${data.recentSkipped} 条`);
+    if (data.missingEndTime) summaryParts.push(`缺少时间 ${data.missingEndTime} 条`);
+    const timeText = data.updatedAt ? `更新时间 ${new Date(data.updatedAt).toLocaleString()}` : '';
+    if (timeText) summaryParts.push(timeText);
+
+    targetEl.innerHTML = `
+      <div class="backup-matrix-wrapper">
+        <table class="backup-matrix-table">
+          <thead>
+            <tr>
+              <th class="backup-matrix-col-threshold">阈值</th>
+              <th class="backup-matrix-col-range">区间统计</th>
+              <th class="backup-matrix-col-cumulative">累计统计</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      ${summaryParts.length ? `<div class="backup-matrix-footnote">${summaryParts.join(' · ')}</div>` : ''}
+    `;
+  }
+
+  /**
+   * 清理历史中的推理签名（thoughtSignature / thoughtSignatureSource），可按时间与置顶过滤
+   * @param {{minAgeDays?:number, excludePinned?:boolean}} options
+   */
+  async function removeThoughtSignatureInDb(options = {}) {
+    const minAgeDays = Math.max(0, Number(options.minAgeDays || 0));
+    const excludePinned = options.excludePinned !== false;
+    const sp = utils.createStepProgress({ steps: ['加载会话', '清理签名', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadata();
+    const pinnedIds = excludePinned ? new Set(await getPinnedIds()) : new Set();
+    const now = Date.now();
+    const cutoff = minAgeDays > 0 ? (now - minAgeDays * SIGNATURE_DAY_MS) : null;
+    const targetMetas = [];
+    let skippedPinned = 0;
+    let skippedRecent = 0;
+    let missingEndTime = 0;
+
+    for (const meta of metas) {
+      const id = meta?.id;
+      if (!id) continue;
+      if (excludePinned && pinnedIds.has(id)) {
+        skippedPinned += 1;
+        continue;
+      }
+      const endTime = Number(meta?.endTime) || Number(meta?.startTime) || 0;
+      if (!endTime) {
+        missingEndTime += 1;
+        continue;
+      }
+      if (cutoff && endTime >= cutoff) {
+        skippedRecent += 1;
+        continue;
+      }
+      targetMetas.push(meta);
+    }
+    const total = targetMetas.length || 1;
+    sp.next('清理签名');
+
+    let updatedConversations = 0;
+    let updatedMessages = 0;
+
+    for (let i = 0; i < targetMetas.length; i++) {
+      const conv = await getConversationById(targetMetas[i].id, true);
+      let convChanged = false;
+
+      if (conv && Array.isArray(conv.messages)) {
+        const result = removeThoughtSignatureFromMessages(conv.messages);
+        if (result.changed) {
+          updatedMessages += Number(result.removedMessages) || 0;
+          convChanged = true;
+        }
+      }
+
+      if (convChanged && conv) {
+        conv.messageCount = Array.isArray(conv.messages) ? conv.messages.length : 0;
+        await putConversation(conv);
+        updateConversationInCache(conv);
+        if (activeConversation?.id === conv.id) activeConversation = conv;
+        updatedConversations += 1;
+      }
+      try {
+        sp?.updateSub?.(i + 1, total, `清理签名 (${i + 1}/${total})`);
+      } catch (_) {}
+    }
+
+    sp.complete('完成', true);
+    invalidateMetadataCache();
+    return {
+      scannedConversations: metas.length,
+      targetConversations: targetMetas.length,
+      skippedPinned,
+      skippedRecent,
+      missingEndTime,
+      updatedConversations,
+      updatedMessages
     };
   }
 
@@ -6157,7 +6881,7 @@ export function createChatHistoryUI(appContext) {
 
     const slimBtn = document.createElement('button');
     slimBtn.className = 'backup-button';
-    slimBtn.textContent = '精简备份（不含图片/元数据）';
+    slimBtn.textContent = '精简备份（不含图片）';
     manualButtons.appendChild(slimBtn);
 
     const fullResetBtn = document.createElement('button');
@@ -6192,7 +6916,7 @@ export function createChatHistoryUI(appContext) {
 
     const manualHintMeta = document.createElement('div');
     manualHintMeta.className = 'backup-panel-hint';
-    manualHintMeta.textContent = '精简备份会移除图片与思考/引用等元数据，恢复后不影响正文显示。';
+    manualHintMeta.textContent = '精简备份仅移除图片，思考/引用等元数据会保留。';
     container.appendChild(manualHintMeta);
 
     const cleanupSection = document.createElement('div');
@@ -6211,6 +6935,11 @@ export function createChatHistoryUI(appContext) {
     cleanupBtn.textContent = '清理图片存储（迁移 base64）';
     cleanupButtons.appendChild(cleanupBtn);
 
+    const compactMetaBtn = document.createElement('button');
+    compactMetaBtn.className = 'backup-button';
+    compactMetaBtn.textContent = '压缩引用元数据';
+    cleanupButtons.appendChild(compactMetaBtn);
+
     cleanupSection.appendChild(cleanupButtons);
 
     const cleanupHint = document.createElement('div');
@@ -6218,7 +6947,63 @@ export function createChatHistoryUI(appContext) {
     cleanupHint.textContent = '将历史会话中的 dataURL/base64 图片迁移到本地文件并清理残留，耗时较长。';
     cleanupSection.appendChild(cleanupHint);
 
+    const compactMetaHint = document.createElement('div');
+    compactMetaHint.className = 'backup-panel-hint';
+    compactMetaHint.textContent = '仅保留引用展示所需字段，剔除检索结果全文，适合元数据膨胀时使用。';
+    cleanupSection.appendChild(compactMetaHint);
+
     container.appendChild(cleanupSection);
+
+    const signatureSection = document.createElement('div');
+    signatureSection.className = 'backup-section';
+
+    const signatureTitle = document.createElement('div');
+    signatureTitle.className = 'backup-panel-subtitle';
+    signatureTitle.textContent = '推理签名清理';
+    signatureSection.appendChild(signatureTitle);
+
+    const signatureRow = makeRow('backup-form-row--select');
+    const signatureLabel = document.createElement('label');
+    signatureLabel.className = 'backup-form-label';
+    signatureLabel.textContent = '清理阈值';
+    const signatureSelect = document.createElement('select');
+    SIGNATURE_STATS_THRESHOLDS.forEach((days) => {
+      const opt = document.createElement('option');
+      opt.value = String(days);
+      opt.textContent = `${days}天前未更新`;
+      signatureSelect.appendChild(opt);
+    });
+    signatureSelect.value = '30';
+    signatureRow.appendChild(signatureLabel);
+    signatureRow.appendChild(signatureSelect);
+    signatureSection.appendChild(signatureRow);
+
+    const signatureButtons = document.createElement('div');
+    signatureButtons.className = 'backup-button-group';
+
+    const signatureStatsBtn = document.createElement('button');
+    signatureStatsBtn.className = 'backup-button';
+    signatureStatsBtn.textContent = '统计旧对话';
+    signatureButtons.appendChild(signatureStatsBtn);
+
+    const signatureCleanupBtn = document.createElement('button');
+    signatureCleanupBtn.className = 'backup-button';
+    signatureCleanupBtn.textContent = '清理旧对话签名';
+    signatureButtons.appendChild(signatureCleanupBtn);
+
+    signatureSection.appendChild(signatureButtons);
+
+    const signatureMatrix = document.createElement('div');
+    signatureMatrix.className = 'backup-matrix';
+    signatureMatrix.innerHTML = '<div class="backup-matrix-empty">点击“统计旧对话”生成矩阵</div>';
+    signatureSection.appendChild(signatureMatrix);
+
+    const signatureHint = document.createElement('div');
+    signatureHint.className = 'backup-panel-hint';
+    signatureHint.textContent = '仅移除 thoughtSignature/thoughtSignatureSource；排除置顶会话。统计会读取完整会话，耗时取决于数据量。';
+    signatureSection.appendChild(signatureHint);
+
+    container.appendChild(signatureSection);
 
     const incrementalSection = document.createElement('div');
     incrementalSection.className = 'backup-section';
@@ -6406,7 +7191,7 @@ export function createChatHistoryUI(appContext) {
     });
 
     slimBtn.addEventListener('click', async () => {
-      await runManualBackup({ excludeImages: true, stripMeta: true });
+      await runManualBackup({ excludeImages: true });
     });
 
     fullResetBtn.addEventListener('click', async () => {
@@ -6461,6 +7246,171 @@ export function createChatHistoryUI(appContext) {
         cleanupBtn.textContent = originalText;
       }
     });
+
+    compactMetaBtn.addEventListener('click', async () => {
+      const confirmFn = appContext?.utils?.showConfirm;
+      let confirmed = true;
+      if (typeof confirmFn === 'function') {
+        confirmed = await confirmFn({
+          message: '确认压缩引用元数据？',
+          description: '该操作会剔除检索结果全文，仅保留引用展示必要字段，可显著降低元数据体积。',
+          confirmText: '开始压缩',
+          cancelText: '取消',
+          type: 'warning'
+        });
+      } else {
+        confirmed = window.confirm('将压缩引用元数据，仅保留必要字段，是否继续？');
+      }
+      if (!confirmed) return;
+
+      const originalText = compactMetaBtn.textContent;
+      compactMetaBtn.disabled = true;
+      compactMetaBtn.textContent = '压缩中...';
+      try {
+        const result = await compactGroundingMetadataInDb();
+        const summary = [
+          `扫描 ${result.scannedConversations} 会话`,
+          `更新 ${result.updatedConversations} 会话`,
+          `更新 ${result.updatedMessages} 消息`
+        ].join('；');
+        showNotification?.({
+          message: '引用元数据压缩完成',
+          description: summary,
+          type: 'success',
+          duration: 4200
+        });
+      } catch (error) {
+        console.error('压缩引用元数据失败:', error);
+        showNotification?.({
+          message: '压缩引用元数据失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        compactMetaBtn.disabled = false;
+        compactMetaBtn.textContent = originalText;
+      }
+    });
+
+    const getSignatureStatsForDays = (data, days) => {
+      const index = SIGNATURE_BUCKETS.findIndex((bucket) => bucket.threshold === days);
+      if (index < 0) return null;
+      return data?.cumulative?.[index] || null;
+    };
+
+    const buildSignatureSummaryText = (stats) => {
+      if (!stats) return '';
+      const metaFieldSizes = stats.metaFieldSizes || {};
+      const signatureBytes = (Number(metaFieldSizes.thoughtSignature) || 0) + (Number(metaFieldSizes.thoughtSignatureSource) || 0);
+      const parts = [
+        `会话 ${Number(stats.conversations) || 0}`,
+        `签名 ${formatByteSize(signatureBytes)}`,
+        `元数据 ${formatByteSize(Number(stats.metaBytes) || 0)}`,
+        `文本 ${formatByteSize(Number(stats.textBytes) || 0)}`
+      ];
+      const imageBytes = Number(stats.imageBytes) || 0;
+      if (imageBytes > 0) parts.push(`图片 ${formatByteSize(imageBytes)}`);
+      return parts.join('；');
+    };
+
+    signatureStatsBtn.addEventListener('click', async () => {
+      const originalText = signatureStatsBtn.textContent;
+      signatureStatsBtn.disabled = true;
+      signatureCleanupBtn.disabled = true;
+      signatureStatsBtn.textContent = '统计中...';
+      try {
+        const data = await getSignatureStatsMatrixCached(true);
+        renderSignatureStatsMatrix(signatureMatrix, data);
+        const summary = data ? `纳入 ${data.matchedConversations || 0} 条会话` : '';
+        showNotification?.({
+          message: '推理签名统计完成',
+          description: summary || '统计已更新',
+          type: 'success',
+          duration: 2600
+        });
+      } catch (error) {
+        console.error('推理签名统计失败:', error);
+        showNotification?.({
+          message: '推理签名统计失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        signatureStatsBtn.disabled = false;
+        signatureCleanupBtn.disabled = false;
+        signatureStatsBtn.textContent = originalText;
+      }
+    });
+
+    signatureCleanupBtn.addEventListener('click', async () => {
+      const days = Math.max(1, Number(signatureSelect.value) || 30);
+      const cacheFresh = signatureStatsCache.data && (Date.now() - signatureStatsCache.time <= SIGNATURE_STATS_TTL);
+      const statsData = cacheFresh ? signatureStatsCache.data : null;
+      const targetStats = getSignatureStatsForDays(statsData, days);
+      const summaryText = buildSignatureSummaryText(targetStats);
+      const confirmFn = appContext?.utils?.showConfirm;
+      let confirmed = true;
+      if (typeof confirmFn === 'function') {
+        confirmed = await confirmFn({
+          message: `确认清理 ${days} 天前的推理签名？`,
+          description: summaryText
+            ? `将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource；${summaryText}`
+            : `将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource。`,
+          confirmText: '开始清理',
+          cancelText: '取消',
+          type: 'warning'
+        });
+      } else {
+        confirmed = window.confirm(`将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource，是否继续？`);
+      }
+      if (!confirmed) return;
+
+      const originalText = signatureCleanupBtn.textContent;
+      signatureCleanupBtn.disabled = true;
+      signatureStatsBtn.disabled = true;
+      signatureCleanupBtn.textContent = '清理中...';
+      try {
+        const result = await removeThoughtSignatureInDb({ minAgeDays: days, excludePinned: true });
+        const summary = [
+          `扫描 ${result.scannedConversations} 会话`,
+          `目标 ${result.targetConversations} 会话`,
+          `更新 ${result.updatedConversations} 会话`,
+          `更新 ${result.updatedMessages} 消息`,
+          result.skippedPinned ? `排除置顶 ${result.skippedPinned}` : null,
+          result.skippedRecent ? `排除近${days}天 ${result.skippedRecent}` : null,
+          result.missingEndTime ? `缺少时间 ${result.missingEndTime}` : null
+        ].filter(Boolean).join('；');
+        showNotification?.({
+          message: '推理签名清理完成',
+          description: summary,
+          type: 'success',
+          duration: 4200
+        });
+        try {
+          const refreshed = await getSignatureStatsMatrixCached(true);
+          renderSignatureStatsMatrix(signatureMatrix, refreshed);
+        } catch (_) {}
+      } catch (error) {
+        console.error('清理推理签名失败:', error);
+        showNotification?.({
+          message: '清理推理签名失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        signatureCleanupBtn.disabled = false;
+        signatureStatsBtn.disabled = false;
+        signatureCleanupBtn.textContent = originalText;
+      }
+    });
+
+    const statsCacheFresh = signatureStatsCache.data && (Date.now() - signatureStatsCache.time <= SIGNATURE_STATS_TTL);
+    if (statsCacheFresh) {
+      renderSignatureStatsMatrix(signatureMatrix, signatureStatsCache.data);
+    }
 
     refreshPreferences();
 

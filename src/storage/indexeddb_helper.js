@@ -1010,29 +1010,122 @@ export async function getDatabaseStats() {
         return 0;
       }
     };
+    const metaFieldSizes = {
+      thoughtsRaw: 0,
+      thoughtSignature: 0,
+      thoughtSignatureSource: 0,
+      reasoning_content: 0,
+      preprocessOriginalText: 0,
+      preprocessRenderedText: 0,
+      threadSelectionText: 0,
+      tool_calls: 0,
+      groundingMetadata: 0,
+      promptMeta: 0,
+      pageMeta: 0
+    };
+    const addMetaSize = (key, bytes) => {
+      const size = Number(bytes) || 0;
+      if (!size) return;
+      if (metaFieldSizes[key] === undefined) metaFieldSizes[key] = 0;
+      metaFieldSizes[key] += size;
+    };
     const calcMessageMetaBytes = (msg) => {
       if (!msg || typeof msg !== 'object') return 0;
       let size = 0;
       if (typeof msg.thoughtsRaw === 'string' && msg.thoughtsRaw) {
-        size += encoder.encode(msg.thoughtsRaw).length;
+        const bytes = encoder.encode(msg.thoughtsRaw).length;
+        size += bytes;
+        addMetaSize('thoughtsRaw', bytes);
+      }
+      if (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) {
+        const bytes = encoder.encode(msg.thoughtSignature).length;
+        size += bytes;
+        addMetaSize('thoughtSignature', bytes);
+      }
+      if (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) {
+        const bytes = encoder.encode(msg.thoughtSignatureSource).length;
+        size += bytes;
+        addMetaSize('thoughtSignatureSource', bytes);
       }
       if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
-        size += encoder.encode(msg.reasoning_content).length;
+        const bytes = encoder.encode(msg.reasoning_content).length;
+        size += bytes;
+        addMetaSize('reasoning_content', bytes);
       }
       if (typeof msg.preprocessOriginalText === 'string' && msg.preprocessOriginalText) {
-        size += encoder.encode(msg.preprocessOriginalText).length;
+        const bytes = encoder.encode(msg.preprocessOriginalText).length;
+        size += bytes;
+        addMetaSize('preprocessOriginalText', bytes);
       }
       if (typeof msg.preprocessRenderedText === 'string' && msg.preprocessRenderedText) {
-        size += encoder.encode(msg.preprocessRenderedText).length;
+        const bytes = encoder.encode(msg.preprocessRenderedText).length;
+        size += bytes;
+        addMetaSize('preprocessRenderedText', bytes);
       }
       if (typeof msg.threadSelectionText === 'string' && msg.threadSelectionText) {
-        size += encoder.encode(msg.threadSelectionText).length;
+        const bytes = encoder.encode(msg.threadSelectionText).length;
+        size += bytes;
+        addMetaSize('threadSelectionText', bytes);
       }
-      if (msg.tool_calls) size += calcJsonBytes(msg.tool_calls);
-      if (msg.groundingMetadata) size += calcJsonBytes(msg.groundingMetadata);
-      if (msg.promptMeta) size += calcJsonBytes(msg.promptMeta);
-      if (msg.pageMeta) size += calcJsonBytes(msg.pageMeta);
+      if (msg.tool_calls) {
+        const bytes = calcJsonBytes(msg.tool_calls);
+        size += bytes;
+        addMetaSize('tool_calls', bytes);
+      }
+      if (msg.groundingMetadata) {
+        const bytes = calcJsonBytes(msg.groundingMetadata);
+        size += bytes;
+        addMetaSize('groundingMetadata', bytes);
+      }
+      if (msg.promptMeta) {
+        const bytes = calcJsonBytes(msg.promptMeta);
+        size += bytes;
+        addMetaSize('promptMeta', bytes);
+      }
+      if (msg.pageMeta) {
+        const bytes = calcJsonBytes(msg.pageMeta);
+        size += bytes;
+        addMetaSize('pageMeta', bytes);
+      }
       return size;
+    };
+    // 仅将 data:image base64 计入“图片数据”，其余 URL/路径按文本大小统计
+    const isImageDataUrl = (value) => {
+      if (typeof value !== 'string') return false;
+      return value.trim().toLowerCase().startsWith('data:image/');
+    };
+    const estimateBase64SizeFromDataUrl = (dataUrl) => {
+      if (typeof dataUrl !== 'string' || !dataUrl) return 0;
+      const commaIndex = dataUrl.indexOf(',');
+      const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+      return Math.round((base64.length * 3) / 4);
+    };
+    const measureImageUrlBytes = (imageUrl) => {
+      if (!imageUrl || typeof imageUrl !== 'object') {
+        return { textSize: 0, imageSize: 0, hasImage: false };
+      }
+      let textSize = 0;
+      let imageSize = 0;
+      let hasImage = false;
+      const url = (typeof imageUrl.url === 'string') ? imageUrl.url : '';
+      const path = (typeof imageUrl.path === 'string') ? imageUrl.path : '';
+      if (url) {
+        hasImage = true;
+        if (isImageDataUrl(url)) {
+          imageSize += estimateBase64SizeFromDataUrl(url);
+        } else {
+          textSize += encoder.encode(url).length;
+        }
+      }
+      if (path && path !== url) {
+        hasImage = true;
+        if (isImageDataUrl(path)) {
+          imageSize += estimateBase64SizeFromDataUrl(path);
+        } else {
+          textSize += encoder.encode(path).length;
+        }
+      }
+      return { textSize, imageSize, hasImage };
     };
     
     // 获取所有会话
@@ -1086,7 +1179,7 @@ export async function getDatabaseStats() {
             if (typeof msg.content === 'string') {
               const size = encoder.encode(msg.content).length;
               totalTextSize += size;
-              msgSize = size;
+              msgSize += size;
             } else if (Array.isArray(msg.content)) {
               // 处理图片和文本混合内容
               msg.content.forEach(part => {
@@ -1094,12 +1187,17 @@ export async function getDatabaseStats() {
                   const textSize = encoder.encode(part.text).length;
                   msgSize += textSize;
                   totalTextSize += textSize;
-                } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
-                  // 估算base64图片大小（大约是base64字符串长度的3/4）
-                  const imageSize = Math.round((part.image_url.url.length * 3) / 4);
-                  msgSize += imageSize;
-                  totalImageSize += imageSize;
-                  totalImageMessages++;
+                } else if (part.type === 'image_url' && part.image_url) {
+                  const sizes = measureImageUrlBytes(part.image_url);
+                  if (sizes.hasImage) totalImageMessages++;
+                  if (sizes.textSize) {
+                    msgSize += sizes.textSize;
+                    totalTextSize += sizes.textSize;
+                  }
+                  if (sizes.imageSize) {
+                    msgSize += sizes.imageSize;
+                    totalImageSize += sizes.imageSize;
+                  }
                 }
               });
             }
@@ -1114,17 +1212,33 @@ export async function getDatabaseStats() {
     // 分析分离存储的内容
     contentRefs.forEach(ref => {
       if (ref.content) {
+        let refSize = 0;
         if (typeof ref.content === 'string') {
-          totalTextSize += encoder.encode(ref.content).length;
+          const size = encoder.encode(ref.content).length;
+          totalTextSize += size;
+          refSize += size;
         } else if (Array.isArray(ref.content)) {
           ref.content.forEach(part => {
             if (part.type === 'text' && part.text) {
-              totalTextSize += encoder.encode(part.text).length;
-            } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
-              // 估算base64图片大小
-              totalImageSize += Math.round((part.image_url.url.length * 3) / 4);
+              const textSize = encoder.encode(part.text).length;
+              totalTextSize += textSize;
+              refSize += textSize;
+            } else if (part.type === 'image_url' && part.image_url) {
+              const sizes = measureImageUrlBytes(part.image_url);
+              if (sizes.hasImage) totalImageMessages++;
+              if (sizes.textSize) {
+                totalTextSize += sizes.textSize;
+                refSize += sizes.textSize;
+              }
+              if (sizes.imageSize) {
+                totalImageSize += sizes.imageSize;
+                refSize += sizes.imageSize;
+              }
             }
           });
+        }
+        if (refSize) {
+          largestMessage = Math.max(largestMessage, refSize);
         }
       }
     });
@@ -1142,6 +1256,16 @@ export async function getDatabaseStats() {
       const i = Math.floor(Math.log(bytes) / Math.log(1024));
       return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
     };
+
+    const metaTopItems = Object.entries(metaFieldSizes)
+      .filter(([, size]) => (Number(size) || 0) > 0)
+      .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
+      .slice(0, 5)
+      .map(([key, size]) => ({
+        key,
+        size,
+        sizeFormatted: formatSize(Number(size) || 0)
+      }));
     
     // 计算时间跨度
     const timeSpanDays = (newestMessageDate - oldestMessageDate) / (1000 * 60 * 60 * 24);
@@ -1171,7 +1295,9 @@ export async function getDatabaseStats() {
       avgMessagesPerConversation,
       avgTextBytesPerMessage,
       avgTextBytesPerMessageFormatted: formatSize(Math.round(avgTextBytesPerMessage)),
-      topDomains
+      topDomains,
+      metaFieldSizes,
+      metaTopItems
     };
   } catch (error) {
     console.error('获取数据库统计信息失败:', error);
