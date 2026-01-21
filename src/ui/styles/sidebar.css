@@ -5759,9 +5759,9 @@ html.fullscreen-mode::before {
   padding-right: max(15px, calc((100vw - var(--cerebr-fullscreen-width)) / 2));
 }
 
-/* 全屏模式下的聊天记录面板：跟随主消息列宽度，避免与消息区宽度不一致 */
+/* 全屏模式下的聊天记录面板：宽度为主消息列的 70%，避免与消息区完全同步 */
 .fullscreen-mode #chat-history-panel {
-  width: min(var(--cerebr-fullscreen-width), calc(100vw - 30px));
+  width: calc(min(var(--cerebr-fullscreen-width), calc(100vw - 30px)) * 0.7);
   max-width: none;
 }
 
