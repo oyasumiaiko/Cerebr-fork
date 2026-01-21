@@ -80,9 +80,9 @@ export function createChatHistoryUI(appContext) {
   // 说明：默认列表使用 paged 模式，不会预先拉取全量元数据；一旦用户输入“全文搜索”，就必须拿到全量元数据。
   // 为避免“输入停下后卡一秒才开始显示搜索进度”，这里把 TTL 设长一些，并对并发请求做去重。
   const META_CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存元数据（有显式 invalidateMetadataCache 兜底）
-  // --- 推理签名统计缓存（清理矩阵） ---
-  const SIGNATURE_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存签名统计（会在清理/更新后失效）
-  let signatureStatsCache = { data: null, time: 0, promise: null };
+  // --- 数据趋势缓存（图表） ---
+  const TREND_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存趋势统计（会在清理/更新后失效）
+  let trendStatsCache = { data: null, time: 0, promise: null };
 
   const galleryCache = {
     items: [],
@@ -129,10 +129,10 @@ export function createChatHistoryUI(appContext) {
     } catch (_) {}
   }
 
-  function invalidateSignatureStatsCache() {
-    signatureStatsCache.data = null;
-    signatureStatsCache.time = 0;
-    signatureStatsCache.promise = null;
+  function invalidateTrendStatsCache() {
+    trendStatsCache.data = null;
+    trendStatsCache.time = 0;
+    trendStatsCache.promise = null;
   }
 
   function invalidateMetadataCache() {
@@ -141,7 +141,7 @@ export function createChatHistoryUI(appContext) {
     metaCache.promise = null;
     invalidateGalleryCache();
     invalidateSearchCache();
-    invalidateSignatureStatsCache();
+    invalidateTrendStatsCache();
   }
 
   /**
@@ -5994,62 +5994,50 @@ export function createChatHistoryUI(appContext) {
     };
   }
 
-  const SIGNATURE_STATS_THRESHOLDS = [90, 60, 30, 14, 7];
-  const SIGNATURE_META_FIELDS = [
+  const SIGNATURE_CLEANUP_THRESHOLDS = [90, 60, 30, 14, 7];
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const META_STRING_FIELDS = [
     'thoughtsRaw',
     'thoughtSignature',
     'thoughtSignatureSource',
     'reasoning_content',
     'preprocessOriginalText',
     'preprocessRenderedText',
-    'threadSelectionText',
+    'threadSelectionText'
+  ];
+  const META_JSON_FIELDS = [
     'tool_calls',
     'groundingMetadata',
     'promptMeta',
     'pageMeta'
   ];
-  // 说明：按“>=90 / 60-89 / 30-59 / 14-29 / 7-13”分桶，用于展示区间与累计体积。
-  const SIGNATURE_BUCKETS = SIGNATURE_STATS_THRESHOLDS.map((days, index) => {
-    const upper = index === 0 ? null : SIGNATURE_STATS_THRESHOLDS[index - 1];
-    const maxDays = upper ? upper : Infinity;
-    const label = upper ? `${days}-${upper - 1}天` : `>=${days}天`;
-    return {
-      threshold: days,
-      minDays: days,
-      maxDays,
-      label,
-      cumulativeLabel: `>=${days}天`
-    };
-  });
-  const SIGNATURE_DAY_MS = 24 * 60 * 60 * 1000;
+  const TREND_METRIC_OPTIONS = [
+    { value: 'totalBytes', label: '总数据量', type: 'bytes' },
+    { value: 'textBytes', label: '文本数据量', type: 'bytes' },
+    { value: 'messageCount', label: '消息数量', type: 'count' },
+    { value: 'conversationCount', label: '对话数量', type: 'count' }
+  ];
+  const TREND_GRANULARITY_OPTIONS = [
+    { value: 'month', label: '按月' },
+    { value: 'week', label: '按周' },
+    { value: 'day', label: '按天' }
+  ];
 
-  function createEmptySignatureMetaSizes() {
-    const result = {};
-    for (const key of SIGNATURE_META_FIELDS) result[key] = 0;
-    return result;
-  }
-
-  function createEmptySignatureStats() {
+  function createEmptyTrendTotals() {
     return {
-      conversations: 0,
-      messages: 0,
+      totalBytes: 0,
       textBytes: 0,
-      imageBytes: 0,
-      metaBytes: 0,
-      metaFieldSizes: createEmptySignatureMetaSizes()
+      messageCount: 0,
+      conversationCount: 0
     };
   }
 
-  function mergeSignatureStats(target, source) {
+  function mergeTrendTotals(target, source) {
     if (!target || !source) return;
-    target.conversations += Number(source.conversations) || 0;
-    target.messages += Number(source.messages) || 0;
+    target.totalBytes += Number(source.totalBytes) || 0;
     target.textBytes += Number(source.textBytes) || 0;
-    target.imageBytes += Number(source.imageBytes) || 0;
-    target.metaBytes += Number(source.metaBytes) || 0;
-    for (const key of SIGNATURE_META_FIELDS) {
-      target.metaFieldSizes[key] = (target.metaFieldSizes[key] || 0) + (source.metaFieldSizes?.[key] || 0);
-    }
+    target.messageCount += Number(source.messageCount) || 0;
+    target.conversationCount += Number(source.conversationCount) || 0;
   }
 
   function calcJsonBytes(value, encoder) {
@@ -6062,70 +6050,18 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  function addSignatureMetaSize(metaFieldSizes, key, bytes) {
-    const size = Number(bytes) || 0;
-    if (!size) return;
-    if (metaFieldSizes[key] === undefined) metaFieldSizes[key] = 0;
-    metaFieldSizes[key] += size;
-  }
-
-  function calcMessageMetaBytes(msg, encoder, metaFieldSizes) {
+  function calcMessageMetaBytes(msg, encoder) {
     if (!msg || typeof msg !== 'object') return 0;
     let size = 0;
-    if (typeof msg.thoughtsRaw === 'string' && msg.thoughtsRaw) {
-      const bytes = encoder.encode(msg.thoughtsRaw).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'thoughtsRaw', bytes);
+    for (const key of META_STRING_FIELDS) {
+      const value = msg[key];
+      if (typeof value === 'string' && value) {
+        size += encoder.encode(value).length;
+      }
     }
-    if (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) {
-      const bytes = encoder.encode(msg.thoughtSignature).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'thoughtSignature', bytes);
-    }
-    if (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) {
-      const bytes = encoder.encode(msg.thoughtSignatureSource).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'thoughtSignatureSource', bytes);
-    }
-    if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
-      const bytes = encoder.encode(msg.reasoning_content).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'reasoning_content', bytes);
-    }
-    if (typeof msg.preprocessOriginalText === 'string' && msg.preprocessOriginalText) {
-      const bytes = encoder.encode(msg.preprocessOriginalText).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'preprocessOriginalText', bytes);
-    }
-    if (typeof msg.preprocessRenderedText === 'string' && msg.preprocessRenderedText) {
-      const bytes = encoder.encode(msg.preprocessRenderedText).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'preprocessRenderedText', bytes);
-    }
-    if (typeof msg.threadSelectionText === 'string' && msg.threadSelectionText) {
-      const bytes = encoder.encode(msg.threadSelectionText).length;
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'threadSelectionText', bytes);
-    }
-    if (msg.tool_calls) {
-      const bytes = calcJsonBytes(msg.tool_calls, encoder);
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'tool_calls', bytes);
-    }
-    if (msg.groundingMetadata) {
-      const bytes = calcJsonBytes(msg.groundingMetadata, encoder);
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'groundingMetadata', bytes);
-    }
-    if (msg.promptMeta) {
-      const bytes = calcJsonBytes(msg.promptMeta, encoder);
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'promptMeta', bytes);
-    }
-    if (msg.pageMeta) {
-      const bytes = calcJsonBytes(msg.pageMeta, encoder);
-      size += bytes;
-      addSignatureMetaSize(metaFieldSizes, 'pageMeta', bytes);
+    for (const key of META_JSON_FIELDS) {
+      const value = msg[key];
+      if (value) size += calcJsonBytes(value, encoder);
     }
     return size;
   }
@@ -6187,125 +6123,24 @@ export function createChatHistoryUI(appContext) {
     return { textBytes, imageBytes };
   }
 
-  // 统计单条会话中“文本/图片/元数据”体积，用于签名矩阵展示
-  function measureConversationStats(conversation, encoder) {
-    const stats = createEmptySignatureStats();
+  // 统计单条会话中“文本/总量/消息数”体积，用于趋势图汇总
+  function measureConversationTotals(conversation, encoder) {
     const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
-    stats.conversations = conversation ? 1 : 0;
-    stats.messages = messages.length;
+    let textBytes = 0;
+    let imageBytes = 0;
+    let metaBytes = 0;
     for (const msg of messages) {
       const contentSizes = measureMessageContentBytes(msg?.content, encoder);
-      stats.textBytes += contentSizes.textBytes;
-      stats.imageBytes += contentSizes.imageBytes;
-      stats.metaBytes += calcMessageMetaBytes(msg, encoder, stats.metaFieldSizes);
+      textBytes += contentSizes.textBytes;
+      imageBytes += contentSizes.imageBytes;
+      metaBytes += calcMessageMetaBytes(msg, encoder);
     }
-    return stats;
-  }
-
-  function getSignatureBucketIndex(ageDays) {
-    for (let i = 0; i < SIGNATURE_BUCKETS.length; i++) {
-      const bucket = SIGNATURE_BUCKETS[i];
-      if (ageDays >= bucket.minDays && ageDays < bucket.maxDays) return i;
-    }
-    return -1;
-  }
-
-  function buildCumulativeSignatureStats(buckets) {
-    const result = buckets.map(() => createEmptySignatureStats());
-    for (let i = 0; i < buckets.length; i++) {
-      const merged = createEmptySignatureStats();
-      for (let j = 0; j <= i; j++) {
-        mergeSignatureStats(merged, buckets[j]);
-      }
-      result[i] = merged;
-    }
-    return result;
-  }
-
-  // 扫描全量会话：按“最后更新时间”分桶统计体积，排除置顶与近 7 天会话
-  async function computeSignatureStatsMatrix() {
-    const sp = utils.createStepProgress({ steps: ['加载元数据', '扫描会话', '汇总统计', '完成'], type: 'info' });
-    sp.setStep(0);
-
-    const metas = await getAllConversationMetadataWithCache(false);
-    const pinnedIds = new Set(await getPinnedIds());
-    const buckets = SIGNATURE_BUCKETS.map(() => createEmptySignatureStats());
-    const encoder = new TextEncoder();
-    const total = metas.length || 1;
-    const now = Date.now();
-    let scanned = 0;
-    let pinnedSkipped = 0;
-    let recentSkipped = 0;
-    let missingEndTime = 0;
-
-    sp.next('扫描会话');
-    for (const meta of metas) {
-      scanned += 1;
-      if (scanned % 20 === 0 || scanned === total) {
-        sp.updateSub(scanned, total, `扫描会话 (${scanned}/${total})`);
-      }
-      const id = meta?.id;
-      if (!id) continue;
-      if (pinnedIds.has(id)) {
-        pinnedSkipped += 1;
-        continue;
-      }
-      const endTime = Number(meta?.endTime) || Number(meta?.startTime) || 0;
-      if (!endTime) {
-        missingEndTime += 1;
-        continue;
-      }
-      const ageDays = (now - endTime) / SIGNATURE_DAY_MS;
-      if (ageDays < SIGNATURE_BUCKETS[SIGNATURE_BUCKETS.length - 1].minDays) {
-        recentSkipped += 1;
-        continue;
-      }
-      const bucketIndex = getSignatureBucketIndex(ageDays);
-      if (bucketIndex < 0) continue;
-      const conv = await getConversationById(id, true);
-      if (!conv) continue;
-      const stats = measureConversationStats(conv, encoder);
-      mergeSignatureStats(buckets[bucketIndex], stats);
-    }
-
-    sp.next('汇总统计');
-    const cumulative = buildCumulativeSignatureStats(buckets);
-    sp.next('完成');
-    sp.complete('完成', true);
-
     return {
-      buckets,
-      cumulative,
-      scannedConversations: metas.length,
-      matchedConversations: buckets.reduce((sum, item) => sum + (Number(item.conversations) || 0), 0),
-      pinnedSkipped,
-      recentSkipped,
-      missingEndTime,
-      updatedAt: Date.now()
+      totalBytes: textBytes + imageBytes + metaBytes,
+      textBytes,
+      messageCount: messages.length,
+      conversationCount: conversation ? 1 : 0
     };
-  }
-
-  async function getSignatureStatsMatrixCached(forceUpdate = false) {
-    const stale = forceUpdate || !signatureStatsCache.data || (Date.now() - signatureStatsCache.time > SIGNATURE_STATS_TTL);
-    if (!stale) return signatureStatsCache.data;
-    if (signatureStatsCache.promise) {
-      try {
-        return await signatureStatsCache.promise;
-      } catch (_) {
-        // 若上一次失败，继续走新的计算逻辑
-      }
-    }
-    signatureStatsCache.promise = (async () => {
-      const data = await computeSignatureStatsMatrix();
-      signatureStatsCache.data = data;
-      signatureStatsCache.time = Date.now();
-      return data;
-    })();
-    try {
-      return await signatureStatsCache.promise;
-    } finally {
-      signatureStatsCache.promise = null;
-    }
   }
 
   function formatByteSize(bytes) {
@@ -6317,91 +6152,387 @@ export function createChatHistoryUI(appContext) {
     return `${size.toFixed(2)} ${units[index]}`;
   }
 
-  function renderSignatureMetaList(metaFieldSizes = {}) {
-    const entries = SIGNATURE_META_FIELDS
-      .map((key) => ({ key, size: Number(metaFieldSizes[key]) || 0 }))
-      .filter((item) => item.size > 0);
-    if (entries.length === 0) {
-      return '<div class="backup-matrix-meta-empty">无</div>';
+  function getByteUnitInfo(bytes) {
+    const value = Number(bytes) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    if (value <= 0) {
+      return { index: 0, base: 1, unit: units[0] };
     }
-    return `
-      <div class="backup-matrix-meta-title">元数据明细</div>
-      <div class="backup-matrix-meta-list">
-        ${entries.map(item => (
-          `<div class="backup-matrix-meta-item"><span class="backup-matrix-meta-key">${item.key}</span><span class="backup-matrix-meta-value">${formatByteSize(item.size)}</span></div>`
-        )).join('')}
-      </div>
-    `;
+    const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+    return { index, base: Math.pow(1024, index), unit: units[index] };
   }
 
-  function renderSignatureStatsCell(stats, label) {
-    const conversations = Number(stats?.conversations) || 0;
-    const textBytes = Number(stats?.textBytes) || 0;
-    const imageBytes = Number(stats?.imageBytes) || 0;
-    const metaBytes = Number(stats?.metaBytes) || 0;
-    const metaFieldSizes = stats?.metaFieldSizes || {};
-    const signatureBytes = (Number(metaFieldSizes.thoughtSignature) || 0) + (Number(metaFieldSizes.thoughtSignatureSource) || 0);
-    const totalBytes = textBytes + imageBytes + metaBytes;
-    return `
-      <div class="backup-matrix-cell">
-        ${label ? `<div class="backup-matrix-cell-title">${label}</div>` : ''}
-        <div class="backup-matrix-line"><span class="backup-matrix-key">会话</span><span class="backup-matrix-value">${conversations}</span></div>
-        <div class="backup-matrix-line"><span class="backup-matrix-key">文本</span><span class="backup-matrix-value">${formatByteSize(textBytes)}</span></div>
-        <div class="backup-matrix-line"><span class="backup-matrix-key">图片</span><span class="backup-matrix-value">${formatByteSize(imageBytes)}</span></div>
-        <div class="backup-matrix-line"><span class="backup-matrix-key">元数据</span><span class="backup-matrix-value">${formatByteSize(metaBytes)}</span></div>
-        <div class="backup-matrix-line"><span class="backup-matrix-key">签名</span><span class="backup-matrix-value">${formatByteSize(signatureBytes)}</span></div>
-        <div class="backup-matrix-line backup-matrix-total"><span class="backup-matrix-key">总计</span><span class="backup-matrix-value">${formatByteSize(totalBytes)}</span></div>
-        <div class="backup-matrix-meta">${renderSignatureMetaList(metaFieldSizes)}</div>
-      </div>
-    `;
+  function formatByteSizeWithUnit(bytes, unitInfo, decimals = 2) {
+    const info = unitInfo || getByteUnitInfo(bytes);
+    const value = Number(bytes) || 0;
+    if (value === 0) return `0 ${info.unit}`;
+    const size = value / info.base;
+    return `${size.toFixed(decimals)} ${info.unit}`;
   }
 
-  function renderSignatureStatsMatrix(targetEl, data) {
+  function formatTrendValue(metric, value) {
+    if (metric?.type === 'bytes') return formatByteSize(value);
+    return Number(value || 0).toLocaleString();
+  }
+
+  function getTrendMetricOption(metricValue) {
+    return TREND_METRIC_OPTIONS.find(item => item.value === metricValue) || TREND_METRIC_OPTIONS[0];
+  }
+
+  function getTrendGranularityOption(granularityValue) {
+    return TREND_GRANULARITY_OPTIONS.find(item => item.value === granularityValue) || TREND_GRANULARITY_OPTIONS[0];
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, '0');
+  }
+
+  function formatDateKey(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  }
+
+  function formatMonthKey(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
+  }
+
+  function formatFullDateLabel(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  }
+
+  function formatShortDateLabel(date, includeYear) {
+    if (includeYear) return formatFullDateLabel(date);
+    return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  }
+
+  function formatMonthLabel(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
+  }
+
+  function getBucketStartDate(ts, granularity) {
+    const date = new Date(Number(ts) || 0);
+    date.setHours(0, 0, 0, 0);
+    if (granularity === 'month') {
+      date.setDate(1);
+    } else if (granularity === 'week') {
+      const offset = (date.getDay() + 6) % 7;
+      date.setDate(date.getDate() - offset);
+    }
+    return date;
+  }
+
+  function accumulateTrendBucket(map, ts, totals, granularity) {
+    const start = getBucketStartDate(ts, granularity);
+    const key = granularity === 'month' ? formatMonthKey(start) : formatDateKey(start);
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = { key, startTime: start.getTime(), totals: createEmptyTrendTotals() };
+      map.set(key, bucket);
+    }
+    mergeTrendTotals(bucket.totals, totals);
+  }
+
+  function buildTrendLabelInfo(date, granularity, includeYear) {
+    if (granularity === 'month') {
+      const label = formatMonthLabel(date);
+      return { label, fullLabel: label };
+    }
+    if (granularity === 'week') {
+      const end = new Date(date.getTime());
+      end.setDate(end.getDate() + 6);
+      return {
+        label: formatShortDateLabel(date, includeYear),
+        fullLabel: `周 ${formatFullDateLabel(date)} ~ ${formatFullDateLabel(end)}`
+      };
+    }
+    return {
+      label: formatShortDateLabel(date, includeYear),
+      fullLabel: formatFullDateLabel(date)
+    };
+  }
+
+  function buildTrendBuckets(map, granularity) {
+    const items = Array.from(map.values()).sort((a, b) => a.startTime - b.startTime);
+    if (items.length === 0) return [];
+    const minDate = new Date(items[0].startTime);
+    const maxDate = new Date(items[items.length - 1].startTime);
+    const includeYear = minDate.getFullYear() !== maxDate.getFullYear();
+    const mapByKey = new Map(items.map(item => [item.key, item]));
+    const buckets = [];
+    const cursor = new Date(minDate.getTime());
+
+    while (cursor.getTime() <= maxDate.getTime()) {
+      const key = granularity === 'month' ? formatMonthKey(cursor) : formatDateKey(cursor);
+      const existing = mapByKey.get(key);
+      const totals = existing ? existing.totals : createEmptyTrendTotals();
+      const labelInfo = buildTrendLabelInfo(cursor, granularity, includeYear);
+      buckets.push({
+        key,
+        startTime: cursor.getTime(),
+        totals,
+        label: labelInfo.label,
+        fullLabel: labelInfo.fullLabel
+      });
+
+      if (granularity === 'month') {
+        cursor.setMonth(cursor.getMonth() + 1);
+      } else if (granularity === 'week') {
+        cursor.setDate(cursor.getDate() + 7);
+      } else {
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    }
+    return buckets;
+  }
+
+  function computeTrendLabelStep(count) {
+    if (count <= 12) return 1;
+    if (count <= 24) return 2;
+    if (count <= 60) return 4;
+    if (count <= 120) return 7;
+    return 14;
+  }
+
+  // 让纵轴刻度对齐到常用“整/半/四分之一”等数值
+  function getNiceStep(rawStep) {
+    if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+    const exponent = Math.floor(Math.log10(rawStep));
+    const base = Math.pow(10, exponent);
+    const fraction = rawStep / base;
+    let niceFraction = 1;
+    if (fraction <= 1) {
+      niceFraction = 1;
+    } else if (fraction <= 2) {
+      niceFraction = 2;
+    } else if (fraction <= 2.5) {
+      niceFraction = 2.5;
+    } else if (fraction <= 5) {
+      niceFraction = 5;
+    } else {
+      niceFraction = 10;
+    }
+    return niceFraction * base;
+  }
+
+  function getStepDecimals(step) {
+    if (!Number.isFinite(step) || step <= 0) return 0;
+    const text = step.toString();
+    if (text.includes('e-')) {
+      const exp = Number(text.split('e-')[1]);
+      return Number.isFinite(exp) ? Math.min(exp, 6) : 0;
+    }
+    const dotIndex = text.indexOf('.');
+    if (dotIndex < 0) return 0;
+    return Math.min(text.length - dotIndex - 1, 6);
+  }
+
+  function buildTrendTicks(maxValue, targetTickCount = 4) {
+    if (!Number.isFinite(maxValue) || maxValue <= 0) {
+      return {
+        maxValue: 0,
+        step: 0,
+        ticks: [
+          { value: 0, ratio: 0 },
+          { value: 0, ratio: 1 }
+        ]
+      };
+    }
+    const rawStep = maxValue / Math.max(1, targetTickCount);
+    const step = getNiceStep(rawStep);
+    const tickCount = Math.max(1, Math.ceil(maxValue / step));
+    const niceMax = step * tickCount;
+    const ticks = [];
+    for (let i = 0; i <= tickCount; i++) {
+      const value = step * i;
+      ticks.push({ value, ratio: niceMax > 0 ? value / niceMax : 0 });
+    }
+    return { maxValue: niceMax, step, ticks };
+  }
+
+  function bindTrendWheelScroll(targetEl) {
     if (!targetEl) return;
-    if (!data || !Array.isArray(data.buckets)) {
-      targetEl.innerHTML = '<div class="backup-matrix-empty">点击“统计旧对话”生成矩阵</div>';
+    const chartEl = targetEl.querySelector('.backup-trend-chart');
+    const plotArea = targetEl.querySelector('.backup-trend-plot-area');
+    if (!chartEl || !plotArea) return;
+    chartEl.addEventListener('wheel', (event) => {
+      if (plotArea.scrollWidth <= plotArea.clientWidth) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      plotArea.scrollLeft += delta;
+      event.preventDefault();
+    }, { passive: false });
+  }
+
+  async function computeTrendStats() {
+    const sp = utils.createStepProgress({ steps: ['加载元数据', '扫描会话', '汇总数据', '完成'], type: 'info' });
+    sp.setStep(0);
+
+    const metas = await getAllConversationMetadataWithCache(false);
+    const encoder = new TextEncoder();
+    const total = metas.length || 1;
+    const bucketMaps = {
+      month: new Map(),
+      week: new Map(),
+      day: new Map()
+    };
+    let scanned = 0;
+    let missingEndTime = 0;
+
+    sp.next('扫描会话');
+    for (const meta of metas) {
+      scanned += 1;
+      if (scanned % 20 === 0 || scanned === total) {
+        sp.updateSub(scanned, total, `扫描会话 (${scanned}/${total})`);
+      }
+      const id = meta?.id;
+      if (!id) continue;
+      const endTime = Number(meta?.endTime) || Number(meta?.startTime) || 0;
+      if (!endTime) {
+        missingEndTime += 1;
+        continue;
+      }
+      const conv = await getConversationById(id, true);
+      if (!conv) continue;
+      const totals = measureConversationTotals(conv, encoder);
+      accumulateTrendBucket(bucketMaps.month, endTime, totals, 'month');
+      accumulateTrendBucket(bucketMaps.week, endTime, totals, 'week');
+      accumulateTrendBucket(bucketMaps.day, endTime, totals, 'day');
+    }
+
+    sp.next('汇总数据');
+    const buckets = {
+      month: buildTrendBuckets(bucketMaps.month, 'month'),
+      week: buildTrendBuckets(bucketMaps.week, 'week'),
+      day: buildTrendBuckets(bucketMaps.day, 'day')
+    };
+    sp.next('完成');
+    sp.complete('完成', true);
+
+    return {
+      buckets,
+      scannedConversations: metas.length,
+      missingEndTime,
+      updatedAt: Date.now()
+    };
+  }
+
+  async function getTrendStatsCached(forceUpdate = false) {
+    const stale = forceUpdate || !trendStatsCache.data || (Date.now() - trendStatsCache.time > TREND_STATS_TTL);
+    if (!stale) return trendStatsCache.data;
+    if (trendStatsCache.promise) {
+      try {
+        return await trendStatsCache.promise;
+      } catch (_) {
+        // 若上一次失败，继续走新的计算逻辑
+      }
+    }
+    trendStatsCache.promise = (async () => {
+      const data = await computeTrendStats();
+      trendStatsCache.data = data;
+      trendStatsCache.time = Date.now();
+      return data;
+    })();
+    try {
+      return await trendStatsCache.promise;
+    } finally {
+      trendStatsCache.promise = null;
+    }
+  }
+
+  function renderTrendChart(targetEl, data, options = {}) {
+    if (!targetEl) return;
+    if (!data?.buckets) {
+      targetEl.innerHTML = '<div class="backup-trend-empty">点击“生成图表”以查看趋势</div>';
       return;
     }
 
-    const rowsHtml = SIGNATURE_BUCKETS.map((bucket, index) => {
-      const rangeStats = data.buckets[index] || createEmptySignatureStats();
-      const cumulativeStats = data.cumulative?.[index] || createEmptySignatureStats();
+    const metric = getTrendMetricOption(options.metric);
+    const granularity = getTrendGranularityOption(options.granularity);
+    const buckets = data.buckets?.[granularity.value] || [];
+
+    if (!buckets.length) {
+      targetEl.innerHTML = '<div class="backup-trend-empty">暂无可展示的数据</div>';
+      return;
+    }
+
+    const values = buckets.map(bucket => Number(bucket.totals?.[metric.value]) || 0);
+    const maxValue = values.length ? Math.max(...values) : 0;
+    const labelStep = computeTrendLabelStep(buckets.length);
+    let ticks = [];
+    let axisMaxValue = 0;
+    let axisFormatter = (value) => formatTrendValue(metric, value);
+    if (metric.type === 'bytes') {
+      const unitInfo = getByteUnitInfo(maxValue);
+      const tickInfo = buildTrendTicks(maxValue / unitInfo.base, 4);
+      const axisDecimals = getStepDecimals(tickInfo.step);
+      axisMaxValue = tickInfo.maxValue * unitInfo.base;
+      ticks = tickInfo.ticks.map((tick) => ({
+        ratio: tick.ratio,
+        value: tick.value * unitInfo.base
+      }));
+      axisFormatter = (value) => formatByteSizeWithUnit(value, unitInfo, axisDecimals);
+    } else {
+      const tickInfo = buildTrendTicks(maxValue, 4);
+      ticks = tickInfo.ticks;
+      axisMaxValue = tickInfo.maxValue;
+    }
+    const axisHtml = ticks.map((tick) => {
+      const percent = (tick.ratio * 100).toFixed(2);
       return `
-        <tr>
-          <td class="backup-matrix-threshold">
-            <div class="backup-matrix-threshold-label">${bucket.cumulativeLabel}</div>
-            <div class="backup-matrix-threshold-sub">区间 ${bucket.label}</div>
-          </td>
-          <td>${renderSignatureStatsCell(rangeStats, bucket.label)}</td>
-          <td>${renderSignatureStatsCell(cumulativeStats, bucket.cumulativeLabel)}</td>
-        </tr>
+        <div class="backup-trend-axis-tick" style="--tick-percent:${percent};">
+          ${axisFormatter(tick.value)}
+        </div>
       `;
     }).join('');
+    const gridHtml = ticks.map((tick) => (
+      `<div class="backup-trend-grid-line" style="--tick-percent:${(tick.ratio * 100).toFixed(2)};"></div>`
+    )).join('');
+    const barsHtml = buckets.map((bucket) => {
+      const value = Number(bucket.totals?.[metric.value]) || 0;
+      const percent = axisMaxValue > 0 ? (value / axisMaxValue) * 100 : 0;
+      const formattedValue = formatTrendValue(metric, value);
+      const title = `${bucket.fullLabel} · ${metric.label} ${formattedValue}`;
+      return `
+        <div class="backup-trend-bar" title="${title}" style="--bar-percent:${percent.toFixed(2)};">
+          <div class="backup-trend-bar-track">
+            <div class="backup-trend-bar-fill"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    const labelsHtml = buckets.map((bucket, index) => {
+      const label = index % labelStep === 0 ? bucket.label : '';
+      return `<div class="backup-trend-label">${label ? label : ''}</div>`;
+    }).join('');
 
+    const totalValue = values.reduce((sum, v) => sum + v, 0);
     const summaryParts = [];
-    if (data.scannedConversations !== undefined) summaryParts.push(`扫描 ${data.scannedConversations} 条会话`);
-    if (data.matchedConversations !== undefined) summaryParts.push(`纳入 ${data.matchedConversations} 条`);
-    if (data.pinnedSkipped) summaryParts.push(`排除置顶 ${data.pinnedSkipped} 条`);
-    if (data.recentSkipped) summaryParts.push(`排除近7天 ${data.recentSkipped} 条`);
-    if (data.missingEndTime) summaryParts.push(`缺少时间 ${data.missingEndTime} 条`);
-    const timeText = data.updatedAt ? `更新时间 ${new Date(data.updatedAt).toLocaleString()}` : '';
-    if (timeText) summaryParts.push(timeText);
+    if (buckets.length) {
+      const rangeStart = new Date(buckets[0].startTime);
+      const rangeEnd = new Date(buckets[buckets.length - 1].startTime);
+      const rangeText = granularity.value === 'month'
+        ? `${buckets[0].label} ~ ${buckets[buckets.length - 1].label}`
+        : `${formatFullDateLabel(rangeStart)} ~ ${formatFullDateLabel(rangeEnd)}`;
+      summaryParts.push(`范围 ${rangeText}`);
+    }
+    summaryParts.push(`总计(${metric.label}) ${formatTrendValue(metric, totalValue)}`);
+    if (data.scannedConversations !== undefined) summaryParts.push(`扫描 ${data.scannedConversations} 会话`);
+    if (data.missingEndTime) summaryParts.push(`缺少时间 ${data.missingEndTime}`);
+    if (data.updatedAt) summaryParts.push(`更新时间 ${new Date(data.updatedAt).toLocaleString()}`);
 
     targetEl.innerHTML = `
-      <div class="backup-matrix-wrapper">
-        <table class="backup-matrix-table">
-          <thead>
-            <tr>
-              <th class="backup-matrix-col-threshold">阈值</th>
-              <th class="backup-matrix-col-range">区间统计</th>
-              <th class="backup-matrix-col-cumulative">累计统计</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
+      <div class="backup-trend-chart">
+        <div class="backup-trend-plot">
+          <div class="backup-trend-axis">${axisHtml}</div>
+          <div class="backup-trend-plot-area" data-granularity="${granularity.value}">
+            <div class="backup-trend-grid">${gridHtml}</div>
+            <div class="backup-trend-bars">${barsHtml}</div>
+            <div class="backup-trend-labels">${labelsHtml}</div>
+          </div>
+        </div>
+        <div class="backup-trend-summary">${summaryParts.join(' · ')}</div>
       </div>
-      ${summaryParts.length ? `<div class="backup-matrix-footnote">${summaryParts.join(' · ')}</div>` : ''}
     `;
+    bindTrendWheelScroll(targetEl);
   }
 
   /**
@@ -6417,7 +6548,7 @@ export function createChatHistoryUI(appContext) {
     const metas = await getAllConversationMetadata();
     const pinnedIds = excludePinned ? new Set(await getPinnedIds()) : new Set();
     const now = Date.now();
-    const cutoff = minAgeDays > 0 ? (now - minAgeDays * SIGNATURE_DAY_MS) : null;
+    const cutoff = minAgeDays > 0 ? (now - minAgeDays * DAY_MS) : null;
     const targetMetas = [];
     let skippedPinned = 0;
     let skippedRecent = 0;
@@ -6967,7 +7098,7 @@ export function createChatHistoryUI(appContext) {
     signatureLabel.className = 'backup-form-label';
     signatureLabel.textContent = '清理阈值';
     const signatureSelect = document.createElement('select');
-    SIGNATURE_STATS_THRESHOLDS.forEach((days) => {
+    SIGNATURE_CLEANUP_THRESHOLDS.forEach((days) => {
       const opt = document.createElement('option');
       opt.value = String(days);
       opt.textContent = `${days}天前未更新`;
@@ -6981,11 +7112,6 @@ export function createChatHistoryUI(appContext) {
     const signatureButtons = document.createElement('div');
     signatureButtons.className = 'backup-button-group';
 
-    const signatureStatsBtn = document.createElement('button');
-    signatureStatsBtn.className = 'backup-button';
-    signatureStatsBtn.textContent = '统计旧对话';
-    signatureButtons.appendChild(signatureStatsBtn);
-
     const signatureCleanupBtn = document.createElement('button');
     signatureCleanupBtn.className = 'backup-button';
     signatureCleanupBtn.textContent = '清理旧对话签名';
@@ -6993,17 +7119,74 @@ export function createChatHistoryUI(appContext) {
 
     signatureSection.appendChild(signatureButtons);
 
-    const signatureMatrix = document.createElement('div');
-    signatureMatrix.className = 'backup-matrix';
-    signatureMatrix.innerHTML = '<div class="backup-matrix-empty">点击“统计旧对话”生成矩阵</div>';
-    signatureSection.appendChild(signatureMatrix);
-
     const signatureHint = document.createElement('div');
     signatureHint.className = 'backup-panel-hint';
-    signatureHint.textContent = '仅移除 thoughtSignature/thoughtSignatureSource；排除置顶会话。统计会读取完整会话，耗时取决于数据量。';
+    signatureHint.textContent = '仅移除 thoughtSignature/thoughtSignatureSource；排除置顶会话。';
     signatureSection.appendChild(signatureHint);
 
     container.appendChild(signatureSection);
+
+    const trendSection = document.createElement('div');
+    trendSection.className = 'backup-section';
+
+    const trendTitle = document.createElement('div');
+    trendTitle.className = 'backup-panel-subtitle';
+    trendTitle.textContent = '数据趋势';
+    trendSection.appendChild(trendTitle);
+
+    const trendControls = document.createElement('div');
+    trendControls.className = 'backup-trend-controls';
+
+    const trendMetricControl = document.createElement('div');
+    trendMetricControl.className = 'backup-trend-control';
+    const trendMetricLabel = document.createElement('label');
+    trendMetricLabel.textContent = '指标';
+    const trendMetricSelect = document.createElement('select');
+    TREND_METRIC_OPTIONS.forEach((item) => {
+      const opt = document.createElement('option');
+      opt.value = item.value;
+      opt.textContent = item.label;
+      trendMetricSelect.appendChild(opt);
+    });
+    trendMetricSelect.value = 'totalBytes';
+    trendMetricControl.appendChild(trendMetricLabel);
+    trendMetricControl.appendChild(trendMetricSelect);
+
+    const trendGranularityControl = document.createElement('div');
+    trendGranularityControl.className = 'backup-trend-control';
+    const trendGranularityLabel = document.createElement('label');
+    trendGranularityLabel.textContent = '维度';
+    const trendGranularitySelect = document.createElement('select');
+    TREND_GRANULARITY_OPTIONS.forEach((item) => {
+      const opt = document.createElement('option');
+      opt.value = item.value;
+      opt.textContent = item.label;
+      trendGranularitySelect.appendChild(opt);
+    });
+    trendGranularitySelect.value = 'month';
+    trendGranularityControl.appendChild(trendGranularityLabel);
+    trendGranularityControl.appendChild(trendGranularitySelect);
+
+    const trendRefreshBtn = document.createElement('button');
+    trendRefreshBtn.className = 'backup-button backup-trend-action-button';
+    trendRefreshBtn.textContent = '生成图表';
+
+    trendControls.appendChild(trendMetricControl);
+    trendControls.appendChild(trendGranularityControl);
+    trendControls.appendChild(trendRefreshBtn);
+    trendSection.appendChild(trendControls);
+
+    const trendChart = document.createElement('div');
+    trendChart.className = 'backup-trend';
+    trendChart.innerHTML = '<div class="backup-trend-empty">点击“生成图表”以查看趋势</div>';
+    trendSection.appendChild(trendChart);
+
+    const trendHint = document.createElement('div');
+    trendHint.className = 'backup-panel-hint';
+    trendHint.textContent = '按对话最后更新时间汇总；总数据量=文本+图片+元数据。首次生成会扫描全部会话，切换维度无需重新扫描。';
+    trendSection.appendChild(trendHint);
+
+    container.appendChild(trendSection);
 
     const incrementalSection = document.createElement('div');
     incrementalSection.className = 'backup-section';
@@ -7293,71 +7476,59 @@ export function createChatHistoryUI(appContext) {
       }
     });
 
-    const getSignatureStatsForDays = (data, days) => {
-      const index = SIGNATURE_BUCKETS.findIndex((bucket) => bucket.threshold === days);
-      if (index < 0) return null;
-      return data?.cumulative?.[index] || null;
+    const renderTrendIfReady = () => {
+      if (!trendStatsCache.data) return;
+      renderTrendChart(trendChart, trendStatsCache.data, {
+        metric: trendMetricSelect.value,
+        granularity: trendGranularitySelect.value
+      });
     };
 
-    const buildSignatureSummaryText = (stats) => {
-      if (!stats) return '';
-      const metaFieldSizes = stats.metaFieldSizes || {};
-      const signatureBytes = (Number(metaFieldSizes.thoughtSignature) || 0) + (Number(metaFieldSizes.thoughtSignatureSource) || 0);
-      const parts = [
-        `会话 ${Number(stats.conversations) || 0}`,
-        `签名 ${formatByteSize(signatureBytes)}`,
-        `元数据 ${formatByteSize(Number(stats.metaBytes) || 0)}`,
-        `文本 ${formatByteSize(Number(stats.textBytes) || 0)}`
-      ];
-      const imageBytes = Number(stats.imageBytes) || 0;
-      if (imageBytes > 0) parts.push(`图片 ${formatByteSize(imageBytes)}`);
-      return parts.join('；');
-    };
+    trendMetricSelect.addEventListener('change', () => {
+      renderTrendIfReady();
+    });
 
-    signatureStatsBtn.addEventListener('click', async () => {
-      const originalText = signatureStatsBtn.textContent;
-      signatureStatsBtn.disabled = true;
-      signatureCleanupBtn.disabled = true;
-      signatureStatsBtn.textContent = '统计中...';
+    trendGranularitySelect.addEventListener('change', () => {
+      renderTrendIfReady();
+    });
+
+    trendRefreshBtn.addEventListener('click', async () => {
+      const originalText = trendRefreshBtn.textContent;
+      trendRefreshBtn.disabled = true;
+      trendRefreshBtn.textContent = '生成中...';
       try {
-        const data = await getSignatureStatsMatrixCached(true);
-        renderSignatureStatsMatrix(signatureMatrix, data);
-        const summary = data ? `纳入 ${data.matchedConversations || 0} 条会话` : '';
+        const data = await getTrendStatsCached(true);
+        renderTrendChart(trendChart, data, {
+          metric: trendMetricSelect.value,
+          granularity: trendGranularitySelect.value
+        });
         showNotification?.({
-          message: '推理签名统计完成',
-          description: summary || '统计已更新',
+          message: '趋势图已更新',
           type: 'success',
-          duration: 2600
+          duration: 2200
         });
       } catch (error) {
-        console.error('推理签名统计失败:', error);
+        console.error('生成趋势图失败:', error);
         showNotification?.({
-          message: '推理签名统计失败',
+          message: '生成趋势图失败',
           description: String(error?.message || error),
           type: 'error',
           duration: 3200
         });
       } finally {
-        signatureStatsBtn.disabled = false;
-        signatureCleanupBtn.disabled = false;
-        signatureStatsBtn.textContent = originalText;
+        trendRefreshBtn.disabled = false;
+        trendRefreshBtn.textContent = originalText;
       }
     });
 
     signatureCleanupBtn.addEventListener('click', async () => {
       const days = Math.max(1, Number(signatureSelect.value) || 30);
-      const cacheFresh = signatureStatsCache.data && (Date.now() - signatureStatsCache.time <= SIGNATURE_STATS_TTL);
-      const statsData = cacheFresh ? signatureStatsCache.data : null;
-      const targetStats = getSignatureStatsForDays(statsData, days);
-      const summaryText = buildSignatureSummaryText(targetStats);
       const confirmFn = appContext?.utils?.showConfirm;
       let confirmed = true;
       if (typeof confirmFn === 'function') {
         confirmed = await confirmFn({
           message: `确认清理 ${days} 天前的推理签名？`,
-          description: summaryText
-            ? `将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource；${summaryText}`
-            : `将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource。`,
+          description: `将清理 >=${days} 天未更新且未置顶对话的 thoughtSignature/thoughtSignatureSource。`,
           confirmText: '开始清理',
           cancelText: '取消',
           type: 'warning'
@@ -7369,7 +7540,6 @@ export function createChatHistoryUI(appContext) {
 
       const originalText = signatureCleanupBtn.textContent;
       signatureCleanupBtn.disabled = true;
-      signatureStatsBtn.disabled = true;
       signatureCleanupBtn.textContent = '清理中...';
       try {
         const result = await removeThoughtSignatureInDb({ minAgeDays: days, excludePinned: true });
@@ -7388,10 +7558,6 @@ export function createChatHistoryUI(appContext) {
           type: 'success',
           duration: 4200
         });
-        try {
-          const refreshed = await getSignatureStatsMatrixCached(true);
-          renderSignatureStatsMatrix(signatureMatrix, refreshed);
-        } catch (_) {}
       } catch (error) {
         console.error('清理推理签名失败:', error);
         showNotification?.({
@@ -7402,14 +7568,13 @@ export function createChatHistoryUI(appContext) {
         });
       } finally {
         signatureCleanupBtn.disabled = false;
-        signatureStatsBtn.disabled = false;
         signatureCleanupBtn.textContent = originalText;
       }
     });
 
-    const statsCacheFresh = signatureStatsCache.data && (Date.now() - signatureStatsCache.time <= SIGNATURE_STATS_TTL);
-    if (statsCacheFresh) {
-      renderSignatureStatsMatrix(signatureMatrix, signatureStatsCache.data);
+    const trendCacheFresh = trendStatsCache.data && (Date.now() - trendStatsCache.time <= TREND_STATS_TTL);
+    if (trendCacheFresh) {
+      renderTrendIfReady();
     }
 
     refreshPreferences();

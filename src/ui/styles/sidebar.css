@@ -1731,13 +1731,83 @@ input:checked + .slider::before {
     color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
 }
 
-.backup-matrix {
+.backup-trend {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
 
-.backup-matrix-wrapper {
+.backup-trend-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.backup-trend-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 160px;
+    padding: 8px 12px;
+    border-radius: var(--cerebr-control-radius);
+    background: var(--cerebr-control-bg);
+    border: 1px solid var(--cerebr-control-border);
+    box-shadow: var(--cerebr-control-inset-shadow);
+}
+
+.backup-trend-control label {
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+    min-width: 36px;
+}
+
+.backup-trend-control select {
+    flex: 1;
+}
+
+.backup-trend-action-button {
+    width: auto;
+    min-width: 120px;
+}
+
+.backup-trend-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.backup-trend-plot {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 12px;
+    align-items: start;
+}
+
+.backup-trend-axis {
+    position: relative;
+    height: var(--trend-track-height, 120px);
+    min-width: 56px;
+    padding-right: 6px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.backup-trend-axis-tick {
+    position: absolute;
+    right: 0;
+    bottom: calc(var(--tick-percent) * 1%);
+    white-space: nowrap;
+}
+
+.backup-trend-plot-area {
+    position: relative;
+    display: grid;
+    grid-template-rows: var(--trend-track-height, 120px) auto;
+    gap: 6px;
+    --trend-horizontal-padding: 12px;
+    padding: 0 var(--trend-horizontal-padding) 4px;
     overflow-x: auto;
     border-radius: var(--cerebr-control-radius);
     border: 1px solid color-mix(in srgb, var(--cerebr-control-border) 80%, transparent);
@@ -1745,117 +1815,107 @@ input:checked + .slider::before {
     box-shadow: var(--cerebr-control-inset-shadow);
 }
 
-.backup-matrix-table {
+.backup-trend-grid {
+    position: absolute;
+    inset: 0 var(--trend-horizontal-padding) auto var(--trend-horizontal-padding);
+    height: var(--trend-track-height, 120px);
+    pointer-events: none;
+}
+
+.backup-trend-grid-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--tick-percent) * 1%);
+    height: 1px;
+    background: color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    opacity: 0.6;
+}
+
+.backup-trend-bars {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-end;
+    gap: var(--bar-gap, 8px);
+    height: var(--trend-track-height, 120px);
+    min-width: 100%;
+}
+
+.backup-trend-bar {
+    display: flex;
+    align-items: flex-end;
+    width: var(--bar-width, 18px);
+    flex: 0 0 var(--bar-width, 18px);
+    height: 100%;
+}
+
+.backup-trend-bar-track {
     width: 100%;
-    min-width: 720px;
-    border-collapse: collapse;
-    font-size: 12px;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    padding: 2px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--cerebr-control-bg) 85%, transparent);
 }
 
-.backup-matrix-table th,
-.backup-matrix-table td {
-    padding: 10px 12px;
-    vertical-align: top;
-    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-control-border) 70%, transparent);
+.backup-trend-bar-fill {
+    width: 100%;
+    height: calc(var(--bar-percent) * 1%);
+    border-radius: 4px;
+    background: var(--cerebr-highlight);
+    transition: height 0.2s ease;
 }
 
-.backup-matrix-table th {
-    text-align: left;
-    font-weight: 600;
-    color: color-mix(in srgb, var(--cerebr-text-color) 86%, transparent);
-    background: color-mix(in srgb, var(--cerebr-control-bg) 80%, transparent);
-}
-
-.backup-matrix-threshold-label {
-    font-weight: 600;
-    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
-}
-
-.backup-matrix-threshold-sub {
-    margin-top: 4px;
-    font-size: 11px;
+.backup-trend-labels {
+    display: flex;
+    align-items: center;
+    gap: var(--bar-gap, 8px);
+    min-width: 100%;
+    font-size: 10px;
     color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
 }
 
-.backup-matrix-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 210px;
+.backup-trend-label {
+    width: var(--bar-width, 18px);
+    flex: 0 0 var(--bar-width, 18px);
+    text-align: center;
+    min-height: 12px;
+    white-space: nowrap;
 }
 
-.backup-matrix-cell-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+.backup-trend-plot-area[data-granularity="month"] {
+    --bar-width: 18px;
+    --bar-gap: 8px;
 }
 
-.backup-matrix-line {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+.backup-trend-plot-area[data-granularity="week"] {
+    --bar-width: 10px;
+    --bar-gap: 5px;
 }
 
-.backup-matrix-key {
-    font-size: 12px;
-    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+.backup-trend-plot-area[data-granularity="day"] {
+    --bar-width: 4px;
+    --bar-gap: 3px;
 }
 
-.backup-matrix-value {
-    font-weight: 600;
-    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+.backup-trend-plot-area[data-granularity="day"] .backup-trend-bar-track,
+.backup-trend-plot-area[data-granularity="day"] .backup-trend-bar-fill {
+    border-radius: 999px;
 }
 
-.backup-matrix-total .backup-matrix-key,
-.backup-matrix-total .backup-matrix-value {
-    color: color-mix(in srgb, var(--cerebr-text-color) 96%, transparent);
+.backup-trend-plot-area[data-granularity="day"] .backup-trend-bar-track {
+    padding: 0;
 }
 
-.backup-matrix-meta {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px dashed color-mix(in srgb, var(--cerebr-control-border) 70%, transparent);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.backup-matrix-meta-title {
-    font-size: 11px;
-    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
-}
-
-.backup-matrix-meta-list {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}
-
-.backup-matrix-meta-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    font-size: 11px;
-    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
-}
-
-.backup-matrix-meta-key {
-    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
-}
-
-.backup-matrix-meta-value {
-    font-weight: 600;
-    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
-}
-
-.backup-matrix-meta-empty {
+.backup-trend-summary {
     font-size: 11px;
     color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+    padding: 0 4px;
 }
 
-.backup-matrix-empty {
+.backup-trend-empty {
     padding: 12px;
     border-radius: var(--cerebr-control-radius);
     border: 1px dashed color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
@@ -1863,12 +1923,6 @@ input:checked + .slider::before {
     text-align: center;
     font-size: 12px;
     color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
-}
-
-.backup-matrix-footnote {
-    font-size: 11px;
-    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
-    padding: 0 4px;
 }
 
 .gallery-loading,
