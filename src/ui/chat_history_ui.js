@@ -985,7 +985,10 @@ export function createChatHistoryUI(appContext) {
    * 加载选中的对话记录到当前聊天窗口
    * @param {Object} conversation - 对话记录对象
    */
-  async function loadConversationIntoChat(conversation) {
+  async function loadConversationIntoChat(conversation, options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const skipMessageAnimation = !!normalizedOptions.skipMessageAnimation;
+    const skipScrollToBottom = !!normalizedOptions.skipScrollToBottom;
     // 如果传入的是简化版会话对象（可能只有id），则加载完整版
     let fullConversation = conversation;
     if (!conversation.messages || conversation.messages.length === 0) {
@@ -1071,6 +1074,10 @@ export function createChatHistoryUI(appContext) {
 
       if (messageElem && messageElem.classList) {
         messageElem.classList.remove('batch-load');
+        if (skipMessageAnimation) {
+          // 历史跳转场景禁用入场动画，避免定位消息时出现“先空白后出现”的延迟感
+          messageElem.classList.add('skip-appear-animation');
+        }
       }
       messageElem.setAttribute('data-message-id', msg.id);
       // 渲染 API footer（按优先级：uuid->displayName->modelId），带 Thought Signature 的消息用文字标记
@@ -1136,21 +1143,23 @@ export function createChatHistoryUI(appContext) {
     // 通知消息发送器当前会话ID已更新
     services.messageSender.setCurrentConversationId(currentConversationId);
 
-    // 滚动到底部
-    requestAnimationFrame(() => {
-      const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
-      if (aiMessages.length > 0) {
-        const latestAiMessage = aiMessages[aiMessages.length - 1];
-        const rect = latestAiMessage.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(latestAiMessage);
-        const marginBottom = parseInt(computedStyle.marginBottom, 10);
-        const scrollTop = latestAiMessage.offsetTop + rect.height - marginBottom;
-        chatContainer.scrollTo({
-          top: scrollTop,
-          behavior: 'instant'
-        });
-      }
-    });
+    if (!skipScrollToBottom) {
+      // 滚动到底部
+      requestAnimationFrame(() => {
+        const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
+        if (aiMessages.length > 0) {
+          const latestAiMessage = aiMessages[aiMessages.length - 1];
+          const rect = latestAiMessage.getBoundingClientRect();
+          const computedStyle = window.getComputedStyle(latestAiMessage);
+          const marginBottom = parseInt(computedStyle.marginBottom, 10);
+          const scrollTop = latestAiMessage.offsetTop + rect.height - marginBottom;
+          chatContainer.scrollTo({
+            top: scrollTop,
+            behavior: 'instant'
+          });
+        }
+      });
+    }
   }
 
   function scrollMessageElementToTop(messageEl, options = {}) {
@@ -1197,13 +1206,22 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  function highlightMessageInChat(messageId) {
+  function jumpToMessageById(messageId, options = {}) {
     if (!messageId) return;
-    requestAnimationFrame(() => {
+    const tryJump = () => {
       const target = chatContainer.querySelector(`[data-message-id="${messageId}"]`);
-      if (!target) return;
-      scrollMessageElementToTop(target, { highlightClass: 'search-highlight', highlightDuration: 500 });
+      if (!target) return false;
+      scrollMessageElementToTop(target, options);
+      return true;
+    };
+    if (tryJump()) return;
+    requestAnimationFrame(() => {
+      tryJump();
     });
+  }
+
+  function highlightMessageInChat(messageId) {
+    jumpToMessageById(messageId, { highlightClass: 'search-highlight', highlightDuration: 500 });
   }
 
   function removeSearchSummary(panel) {
@@ -3401,14 +3419,23 @@ export function createChatHistoryUI(appContext) {
       hideChatHistoryPreviewTooltip();
       const conversation = await getConversationFromCacheOrLoad(conv.id);
       if (conversation) {
-        await loadConversationIntoChat(conversation);
         const panelNode = document.getElementById('chat-history-panel');
         const normalizedActiveFilter = panelNode?.dataset.normalizedFilter || '';
+        let jumpMessageId = null;
         if (normalizedActiveFilter && searchCache.normalized === normalizedActiveFilter && searchCache.matchMap) {
           const matchInfo = searchCache.matchMap.get(conv.id);
           if (matchInfo && matchInfo.messageId) {
-            highlightMessageInChat(matchInfo.messageId);
+            jumpMessageId = matchInfo.messageId;
           }
+        }
+
+        await loadConversationIntoChat(conversation, {
+          skipMessageAnimation: !!jumpMessageId,
+          skipScrollToBottom: !!jumpMessageId
+        });
+
+        if (jumpMessageId) {
+          highlightMessageInChat(jumpMessageId);
         }
       }
     });
@@ -3770,13 +3797,11 @@ export function createChatHistoryUI(appContext) {
           try {
             const conversation = await getConversationFromCacheOrLoad(record.conversationId);
             if (conversation) {
-              await loadConversationIntoChat(conversation);
-              requestAnimationFrame(() => {
-                const messageEl = chatContainer.querySelector(`[data-message-id="${record.messageId}"]`);
-                if (messageEl) {
-                  scrollMessageElementToTop(messageEl, { highlightClass: 'gallery-highlight', highlightDuration: 1600 });
-                }
+              await loadConversationIntoChat(conversation, {
+                skipMessageAnimation: true,
+                skipScrollToBottom: true
               });
+              jumpToMessageById(record.messageId, { highlightClass: 'gallery-highlight', highlightDuration: 1600 });
             }
           } catch (error) {
             console.error('打开图片所属对话失败:', error);

@@ -584,6 +584,13 @@ body.thread-mode-active #thread-panel {
     /* border: 1px solid rgba(255, 255, 255, 0.1); */
 }
 
+/* 聊天记录历史跳转时禁用入场动画，避免定位消息出现延时 */
+#chat-container .message.skip-appear-animation {
+    animation: none;
+    opacity: 1;
+    transform: none;
+}
+
 .message:hover {
     /* transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); */
