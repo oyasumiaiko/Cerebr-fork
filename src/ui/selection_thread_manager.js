@@ -34,6 +34,7 @@ export function createSelectionThreadManager(appContext) {
     bubbleHovered: false,
     highlightHovered: false,
     bubbleHideTimer: null,
+    bubbleHideAnimationTimer: null,
     bubbleClickHandler: null,
     bubbleActionHandlers: new Map()
   };
@@ -127,6 +128,12 @@ export function createSelectionThreadManager(appContext) {
     state.bubbleHideTimer = null;
   }
 
+  function clearBubbleHideAnimationTimer() {
+    if (!state.bubbleHideAnimationTimer) return;
+    clearTimeout(state.bubbleHideAnimationTimer);
+    state.bubbleHideAnimationTimer = null;
+  }
+
   function scheduleBubbleHide(delay = 220) {
     if (!bubbleEl || bubbleEl.style.display === 'none') return;
     if (state.bubblePinned) return;
@@ -145,9 +152,12 @@ export function createSelectionThreadManager(appContext) {
     const {
       title = '',
       content = '',
+      contentHtml = '',
+      contentItems = null,
       iconClass = '',
       iconButtons = null,
       onClick = null,
+      onItemClick = null,
       pinned = false,
       type = 'preview',
       variant = ''
@@ -155,9 +165,58 @@ export function createSelectionThreadManager(appContext) {
 
     bubbleTitleEl.textContent = title;
     bubbleTitleEl.style.display = title ? 'block' : 'none';
-    const hasContent = !!content;
-    bubbleContentTextEl.textContent = content;
-    bubbleContentTextEl.style.display = hasContent ? 'block' : 'none';
+    const hasItems = Array.isArray(contentItems) && contentItems.length > 0;
+    const hasContent = hasItems || !!contentHtml || !!content;
+    if (hasItems) {
+      bubbleContentTextEl.innerHTML = '';
+      const list = document.createElement('div');
+      list.className = 'selection-thread-bubble__preview-list';
+      contentItems.forEach((item) => {
+        if (!item || !item.messageId) return;
+        const entry = document.createElement('div');
+        entry.className = 'selection-thread-bubble__preview-item';
+        entry.dataset.messageId = item.messageId;
+        entry.setAttribute('role', 'button');
+        entry.setAttribute('tabindex', '0');
+        if (item.role === 'user') {
+          entry.classList.add('selection-thread-bubble__preview-item--user');
+        } else if (item.role === 'assistant') {
+          entry.classList.add('selection-thread-bubble__preview-item--assistant');
+        } else if (item.role) {
+          entry.classList.add('selection-thread-bubble__preview-item--system');
+        }
+
+        const contentBox = document.createElement('div');
+        contentBox.className = 'selection-thread-bubble__preview-content';
+        renderPreviewMarkdownToElement(contentBox, item.text || '');
+
+        entry.appendChild(contentBox);
+        entry.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof onItemClick === 'function') {
+            onItemClick(item);
+          }
+        });
+        entry.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof onItemClick === 'function') {
+            onItemClick(item);
+          }
+        });
+        list.appendChild(entry);
+      });
+      bubbleContentTextEl.appendChild(list);
+      bubbleContentTextEl.style.display = 'block';
+    } else if (contentHtml) {
+      bubbleContentTextEl.innerHTML = contentHtml;
+      bubbleContentTextEl.style.display = hasContent ? 'block' : 'none';
+    } else {
+      bubbleContentTextEl.textContent = content;
+      bubbleContentTextEl.style.display = hasContent ? 'block' : 'none';
+    }
 
     state.bubbleActionHandlers?.clear?.();
     if (Array.isArray(iconButtons) && iconButtons.length) {
@@ -226,12 +285,47 @@ export function createSelectionThreadManager(appContext) {
     bubbleEl.style.display = 'block';
     bubbleEl.dataset.visible = 'true';
     bubbleEl.dataset.type = type;
+    clearBubbleHideAnimationTimer();
+    bubbleEl.classList.remove('selection-thread-bubble--hiding');
+    bubbleEl.classList.remove('selection-thread-bubble--visible');
+    if (type === 'preview') {
+      applyPreviewBubbleWidth();
+    } else {
+      bubbleEl.style.width = '';
+      bubbleEl.style.maxWidth = '';
+    }
     state.bubblePinned = !!pinned;
     state.bubbleType = type;
     state.bubbleHovered = false;
     clearBubbleHideTimer();
 
     positionBubble(rect);
+    window.requestAnimationFrame(() => {
+      if (!bubbleEl || bubbleEl.style.display === 'none') return;
+      bubbleEl.classList.add('selection-thread-bubble--visible');
+    });
+  }
+
+  function applyPreviewBubbleWidth() {
+    if (!bubbleEl) return;
+    const host = chatContainer;
+    if (!host) {
+      bubbleEl.style.width = '';
+      bubbleEl.style.maxWidth = '';
+      return;
+    }
+    const style = window.getComputedStyle(host);
+    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+    const paddingRight = parseFloat(style.paddingRight) || 0;
+    const contentWidth = host.clientWidth - paddingLeft - paddingRight;
+    if (!Number.isFinite(contentWidth) || contentWidth <= 0) {
+      bubbleEl.style.width = '';
+      bubbleEl.style.maxWidth = '';
+      return;
+    }
+    const targetWidth = Math.round(contentWidth * 0.7);
+    bubbleEl.style.width = `${targetWidth}px`;
+    bubbleEl.style.maxWidth = `${targetWidth}px`;
   }
 
   function positionBubble(rect) {
@@ -276,10 +370,10 @@ export function createSelectionThreadManager(appContext) {
     if (!bubbleEl) return;
     if (!force && state.bubblePinned) return;
     clearBubbleHideTimer();
-    bubbleEl.style.display = 'none';
+    clearBubbleHideAnimationTimer();
     bubbleEl.dataset.visible = 'false';
-    delete bubbleEl.dataset.variant;
-    delete bubbleEl.dataset.placement;
+    bubbleEl.classList.remove('selection-thread-bubble--visible');
+    bubbleEl.classList.add('selection-thread-bubble--hiding');
     bubbleEl.classList.remove('selection-thread-bubble--action');
     state.bubblePinned = false;
     state.bubbleType = 'hidden';
@@ -287,6 +381,15 @@ export function createSelectionThreadManager(appContext) {
     state.highlightHovered = false;
     state.bubbleClickHandler = null;
     state.bubbleActionHandlers?.clear?.();
+    const hideDelay = 120;
+    state.bubbleHideAnimationTimer = window.setTimeout(() => {
+      if (!bubbleEl) return;
+      bubbleEl.style.display = 'none';
+      bubbleEl.classList.remove('selection-thread-bubble--hiding');
+      delete bubbleEl.dataset.variant;
+      delete bubbleEl.dataset.placement;
+      state.bubbleHideAnimationTimer = null;
+    }, hideDelay);
   }
 
   function isFullscreenLayout() {
@@ -508,6 +611,16 @@ export function createSelectionThreadManager(appContext) {
     return `${safe.slice(0, maxLength)}…`;
   }
 
+  function renderPreviewMarkdownToElement(target, text) {
+    if (!target) return;
+    const content = typeof text === 'string' ? text : '';
+    if (messageProcessor?.processMathAndMarkdown) {
+      target.innerHTML = messageProcessor.processMathAndMarkdown(content);
+    } else {
+      target.textContent = content;
+    }
+  }
+
   function extractPlainTextFromContent(content) {
     const normalized = normalizeStoredMessageContent(content);
     if (Array.isArray(normalized)) {
@@ -529,6 +642,31 @@ export function createSelectionThreadManager(appContext) {
       const roleLabel = node.role === 'assistant' ? 'AI' : '用户';
       const text = extractPlainTextFromContent(node.content);
       return text ? `${roleLabel}: ${text}` : `${roleLabel}: (空)`;
+    });
+  }
+
+  function buildThreadPreviewItems(threadId) {
+    const info = findThreadById(threadId);
+    if (!info || !info.annotation) return [];
+    const chain = collectThreadChain(info.annotation)
+      .filter(node => !node?.threadHiddenSelection);
+    if (!chain.length) return [];
+
+    return chain.map((node) => {
+      const normalized = normalizeStoredMessageContent(node.content);
+      let text = '';
+      if (Array.isArray(normalized)) {
+        const { text: extractedText } = splitStoredMessageContent(normalized);
+        text = extractedText || '';
+      } else {
+        text = normalized || '';
+      }
+      const safeText = typeof text === 'string' ? text : '';
+      return {
+        messageId: node.id,
+        role: node.role || '',
+        text: safeText.trim() ? safeText : '(空)'
+      };
     });
   }
 
@@ -614,10 +752,11 @@ export function createSelectionThreadManager(appContext) {
     threadBannerTextEl = text;
   }
 
-  async function renderThreadMessages(threadId) {
+  async function renderThreadMessages(threadId, options = {}) {
     // 将线程链路渲染到线程面板，仅用于展示，不写回历史
     if (!threadContainer || !messageProcessor) return;
     if (state.activeThreadId !== threadId) return;
+    const focusMessageId = options?.focusMessageId || '';
     threadContainer.innerHTML = '';
     const info = findThreadById(threadId);
     if (!info || !info.annotation) return;
@@ -710,6 +849,11 @@ export function createSelectionThreadManager(appContext) {
     }
 
     threadContainer.appendChild(fragment);
+    if (focusMessageId) {
+      requestAnimationFrame(() => {
+        scrollThreadMessageIntoView(focusMessageId);
+      });
+    }
   }
 
   function getMessageElementFromNode(node) {
@@ -1119,6 +1263,15 @@ export function createSelectionThreadManager(appContext) {
     return false;
   }
 
+  function scrollThreadMessageIntoView(messageId) {
+    if (!threadContainer || !messageId) return;
+    const target = threadContainer.querySelector(`[data-message-id="${messageId}"]`);
+    if (!target) return;
+    target.classList.add('search-highlight');
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => target.classList.remove('search-highlight'), 1600);
+  }
+
   function buildAnnotationHighlightRanges(textContainer, annotations) {
     if (!textContainer || !annotations.length) return [];
     const fullText = textContainer.textContent || '';
@@ -1321,20 +1474,29 @@ export function createSelectionThreadManager(appContext) {
     const rect = target.getBoundingClientRect();
     const threadId = target.dataset.threadId || '';
     const selectionText = target.dataset.selectionText || target.textContent || '';
-    const previewLines = buildThreadPreviewLines(threadId, 2);
-    const previewText = previewLines.length
-      ? previewLines.join('\n')
-      : (selectionText ? `“${selectionText}”` : '');
+    const previewItems = buildThreadPreviewItems(threadId);
+    const fallbackText = selectionText ? `“${selectionText}”` : '';
+    const fallbackHtml = fallbackText
+      ? (messageProcessor?.processMathAndMarkdown?.(fallbackText) || fallbackText)
+      : '';
 
     showBubbleAtRect(rect, {
       title: '划词对话预览',
-      content: previewText,
+      content: fallbackText,
+      contentHtml: previewItems.length ? '' : fallbackHtml,
+      contentItems: previewItems,
+      onItemClick: (item) => {
+        if (item?.messageId) {
+          enterThread(threadId, { focusMessageId: item.messageId });
+          hideBubble(true);
+        }
+      },
       pinned: false,
       type: 'preview'
     });
   }
 
-  function enterThread(threadId) {
+  async function enterThread(threadId, options = {}) {
     const info = findThreadById(threadId);
     if (!info) {
       showNotification?.({ message: '未找到对应的划词对话', type: 'warning' });
@@ -1346,7 +1508,7 @@ export function createSelectionThreadManager(appContext) {
     document.body.classList.add('thread-mode-active');
     updateThreadPanelTitle(state.activeSelectionText);
     applyThreadLayout();
-    renderThreadMessages(threadId);
+    await renderThreadMessages(threadId, options);
   }
 
   function removeThreadMessageElements(messageId) {

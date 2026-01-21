@@ -2239,6 +2239,19 @@ input:checked + .slider::before {
     display: none;
     color: var(--cerebr-text-color);
     font-size: var(--cerebr-font-size);
+    opacity: 0;
+    transform: translateY(var(--selection-thread-bubble-offset, -8px));
+    transition: opacity 120ms ease, transform 120ms ease;
+    pointer-events: none;
+}
+
+.selection-thread-bubble[data-type="preview"] {
+    width: auto;
+    max-width: none;
+}
+
+.selection-thread-bubble[data-type="preview"] .selection-thread-bubble__content {
+    font-size: 0.7em;
 }
 
 .selection-thread-bubble::after {
@@ -2262,6 +2275,28 @@ input:checked + .slider::before {
     left: calc(50% - 6px);
     border-left: 1px solid var(--selection-thread-bubble-border);
     border-top: 1px solid var(--selection-thread-bubble-border);
+}
+
+.selection-thread-bubble[data-placement="top"] {
+    --selection-thread-bubble-offset: -8px;
+    --selection-thread-bubble-hide-offset: 0px;
+}
+
+.selection-thread-bubble[data-placement="bottom"] {
+    --selection-thread-bubble-offset: 8px;
+    --selection-thread-bubble-hide-offset: 8px;
+}
+
+.selection-thread-bubble--visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.selection-thread-bubble--hiding {
+    opacity: 0;
+    transform: translateY(var(--selection-thread-bubble-hide-offset, var(--selection-thread-bubble-offset, 0px)));
+    pointer-events: none;
 }
 
 .selection-thread-bubble--action {
@@ -2300,6 +2335,115 @@ input:checked + .slider::before {
     flex: 1;
     min-width: 0;
     white-space: pre-wrap;
+}
+
+.selection-thread-bubble__preview-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    max-height: min(80vh, 640px);
+    overflow: auto;
+    padding-right: 4px;
+    white-space: normal;
+}
+
+.selection-thread-bubble__preview-item {
+    display: inline-block;
+    flex: 0 0 auto;
+    text-align: left;
+    width: fit-content;
+    max-width: 92%;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 60%, transparent);
+    background: var(--cerebr-message-ai-bg);
+    color: inherit;
+    cursor: pointer;
+    line-height: 1.5;
+    min-height: 0;
+    height: auto;
+    box-sizing: border-box;
+    align-self: flex-start;
+}
+
+.selection-thread-bubble__preview-item:hover {
+    filter: brightness(1.05);
+}
+
+.selection-thread-bubble__preview-role {
+    font-size: 0.9em;
+    font-weight: 600;
+    opacity: 0.8;
+    margin-bottom: 4px;
+    display: none;
+}
+
+.selection-thread-bubble__preview-content {
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.5;
+    display: block;
+}
+
+.selection-thread-bubble__preview-content p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.selection-thread-bubble__preview-content p + p {
+    margin-top: 0.5em;
+}
+
+.selection-thread-bubble__preview-content ul,
+.selection-thread-bubble__preview-content ol {
+    margin: 0.5em 0;
+    padding-left: 22px;
+}
+
+.selection-thread-bubble__preview-content blockquote {
+    margin: 0.5em 0;
+    padding-left: 10px;
+    border-left: 3px solid color-mix(in srgb, var(--cerebr-text-color) 40%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 85%, transparent);
+}
+
+.selection-thread-bubble__preview-content pre {
+    margin: 0.5em 0;
+}
+
+.selection-thread-bubble__preview-content code {
+    background: var(--cerebr-inline-code-bg);
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: monospace;
+}
+
+.selection-thread-bubble__preview-content hr {
+    border: solid 1px var(--cerebr-text-color);
+}
+
+.selection-thread-bubble__preview-content .katex-display {
+    margin: 0.5em 0;
+}
+
+.selection-thread-bubble__preview-item--user {
+    align-self: flex-end;
+    background: var(--cerebr-message-user-bg);
+    border-bottom-right-radius: 4px;
+}
+
+.selection-thread-bubble__preview-item--assistant {
+    align-self: flex-start;
+    background: var(--cerebr-message-ai-bg);
+    border-bottom-left-radius: 4px;
+}
+
+.selection-thread-bubble__preview-item--system {
+    align-self: center;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+    border-radius: 10px;
+    font-size: 0.95em;
 }
 
 .selection-thread-bubble__content-icon {
