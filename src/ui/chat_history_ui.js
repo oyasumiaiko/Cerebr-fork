@@ -1269,11 +1269,8 @@ export function createChatHistoryUI(appContext) {
   async function clearChatHistory() {
     // 终止当前请求（若存在）
     services.messageSender.abortCurrentRequest();
-    // 如果有消息，等待保存完成
-    // 修改: 使用 services.chatHistoryManager.chatHistory 访问消息
-    if (services.chatHistoryManager.chatHistory.messages.length > 0) {
-      await saveCurrentConversation(true);
-    }
+    // 清空聊天时不再二次保存，避免覆盖已有记录。
+    services.selectionThreadManager?.resetForClearChat?.();
     // 清空聊天容器和内存中的聊天记录
     chatContainer.innerHTML = '';
     // 修改: 直接调用 services.chatHistoryManager.clearHistory()

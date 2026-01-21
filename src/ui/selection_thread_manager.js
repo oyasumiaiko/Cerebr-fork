@@ -1643,6 +1643,24 @@ export function createSelectionThreadManager(appContext) {
     moveThreadPanelHome();
   }
 
+  function resetForClearChat() {
+    // 清空聊天时同时重置线程与气泡状态，避免残留 UI 影响后续划词。
+    hideBubble(true);
+    clearBubbleHideAnimationTimer();
+    clearSelectionRanges();
+    state.pendingSelection = null;
+    exitThread({ skipDraftCleanup: true });
+    if (bubbleEl) {
+      bubbleEl.remove();
+      bubbleEl = null;
+      bubbleHeaderEl = null;
+      bubbleTitleEl = null;
+      bubbleContentEl = null;
+      bubbleContentTextEl = null;
+      bubbleContentIconEl = null;
+    }
+  }
+
   function isThreadModeActive() {
     return !!state.activeThreadId;
   }
@@ -1762,6 +1780,7 @@ export function createSelectionThreadManager(appContext) {
     decorateMessageElement,
     enterThread,
     exitThread,
+    resetForClearChat,
     isThreadModeActive,
     getActiveThreadId: () => state.activeThreadId,
     getActiveAnchorMessageId: () => state.activeAnchorMessageId,
