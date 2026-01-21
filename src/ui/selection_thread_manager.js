@@ -789,11 +789,21 @@ export function createSelectionThreadManager(appContext) {
     return null;
   }
 
-  function findThreadBySelection(anchorNode, selectionText, matchIndex = null) {
+  function findThreadBySelection(anchorNode, selectionText, matchIndex = null, selectionStartOffset = null) {
     if (!anchorNode || !selectionText) return null;
     const annotations = Array.isArray(anchorNode.threadAnnotations) ? anchorNode.threadAnnotations : [];
     const normalizedText = normalizeSelectionText(selectionText);
     if (!normalizedText) return null;
+
+    if (Number.isFinite(selectionStartOffset)) {
+      const targetOffset = Math.max(0, selectionStartOffset);
+      const byOffset = annotations.find(item => (
+        normalizeSelectionText(item?.selectionText || '') === normalizedText
+        && Number.isFinite(item?.selectionStartOffset)
+        && item.selectionStartOffset === targetOffset
+      ));
+      if (byOffset) return byOffset;
+    }
 
     if (matchIndex == null) {
       return annotations.find(item => normalizeSelectionText(item?.selectionText || '') === normalizedText) || null;
@@ -810,11 +820,20 @@ export function createSelectionThreadManager(appContext) {
     if (!normalizedSelectionText) return null;
     const annotations = ensureThreadAnnotations(anchorNode);
     const threadId = buildThreadId();
+    const selectionStartOffset = Number.isFinite(info.selectionStartOffset)
+      ? Math.max(0, info.selectionStartOffset)
+      : null;
+    const selectionEndOffset = Number.isFinite(info.selectionEndOffset)
+      ? Math.max(0, info.selectionEndOffset)
+      : null;
     const payload = {
       id: threadId,
       anchorMessageId: anchorNode.id,
       selectionText: normalizedSelectionText,
       matchIndex: Number.isFinite(info.matchIndex) ? info.matchIndex : 0,
+      // 记录选区在“规范化文本”中的偏移，兜底用于复杂格式/多节点文本的定位。
+      selectionStartOffset,
+      selectionEndOffset,
       createdAt: Date.now(),
       rootMessageId: null,
       lastMessageId: null
@@ -847,10 +866,14 @@ export function createSelectionThreadManager(appContext) {
     const fullText = textContainer.textContent || '';
     const normalizedFullText = stripZeroWidth(fullText);
     const matchIndex = findClosestOccurrenceIndex(normalizedFullText, selectionText, startOffset);
+    const selectionStartOffset = Math.max(0, startOffset);
+    const selectionEndOffset = selectionStartOffset + selectionText.length;
 
     return {
       selectionText,
       matchIndex,
+      selectionStartOffset,
+      selectionEndOffset,
       fullTextLength: normalizedFullText.length
     };
   }
@@ -963,6 +986,56 @@ export function createSelectionThreadManager(appContext) {
         return true;
       }
     }
+    // 多节点/复杂结构 fallback：逐个文本节点包裹，避免 <strong>/<em> 等分割导致 surroundContents 失败。
+    try {
+      const textNodes = [];
+      const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node || !node.nodeValue) return NodeFilter.FILTER_REJECT;
+          if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
+          if (node.parentElement?.closest('.thread-highlight')) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+
+      while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+      }
+
+      if (!textNodes.length) return false;
+
+      const wrapTextNodeRange = (targetNode, startOffset, endOffset, template) => {
+        const text = targetNode.nodeValue || '';
+        const safeStart = Math.max(0, Math.min(startOffset, text.length));
+        const safeEnd = Math.max(safeStart, Math.min(endOffset, text.length));
+        if (safeEnd <= safeStart) return false;
+        const before = document.createTextNode(text.slice(0, safeStart));
+        const middle = document.createTextNode(text.slice(safeStart, safeEnd));
+        const after = document.createTextNode(text.slice(safeEnd));
+        const parent = targetNode.parentNode;
+        if (!parent) return false;
+        template.appendChild(middle);
+        parent.insertBefore(before, targetNode);
+        parent.insertBefore(template, targetNode);
+        parent.insertBefore(after, targetNode);
+        parent.removeChild(targetNode);
+        return true;
+      };
+
+      let wrappedAny = false;
+      textNodes.forEach((node, index) => {
+        const isStart = node === range.startContainer;
+        const isEnd = node === range.endContainer;
+        const startOffset = isStart ? range.startOffset : 0;
+        const endOffset = isEnd ? range.endOffset : (node.nodeValue || '').length;
+        if (startOffset === 0 && endOffset === 0) return;
+        const spanClone = span.cloneNode(false);
+        const didWrap = wrapTextNodeRange(node, startOffset, endOffset, spanClone);
+        if (didWrap) wrappedAny = true;
+      });
+
+      return wrappedAny;
+    } catch (_) {}
     return false;
   }
 
@@ -975,9 +1048,25 @@ export function createSelectionThreadManager(appContext) {
       const selectionText = normalizeSelectionText(annotation?.selectionText || '');
       if (!selectionText) return null;
       const matchIndex = Number.isFinite(annotation.matchIndex) ? annotation.matchIndex : 0;
-      const startPos = findNthOccurrence(normalizedText, selectionText, matchIndex);
-      if (startPos < 0) return null;
-      const endPos = startPos + selectionText.length;
+      const hasOffsets = Number.isFinite(annotation.selectionStartOffset)
+        && Number.isFinite(annotation.selectionEndOffset)
+        && annotation.selectionEndOffset > annotation.selectionStartOffset;
+      let startPos = hasOffsets ? Math.max(0, annotation.selectionStartOffset) : -1;
+      let endPos = hasOffsets
+        ? Math.max(0, annotation.selectionEndOffset)
+        : -1;
+
+      if (!hasOffsets || endPos <= startPos || startPos >= normalizedText.length) {
+        startPos = findNthOccurrence(normalizedText, selectionText, matchIndex);
+        if (startPos < 0) return null;
+        endPos = startPos + selectionText.length;
+      }
+
+      if (endPos > normalizedText.length) {
+        endPos = Math.min(normalizedText.length, endPos);
+        if (endPos <= startPos) return null;
+      }
+
       const mappedStart = mapNormalizedIndexToOriginal(indexMap, startPos);
       const mappedEnd = mapNormalizedIndexToOriginal(indexMap, endPos - 1);
       if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd)) return null;
@@ -1088,7 +1177,12 @@ export function createSelectionThreadManager(appContext) {
     const anchorNode = chatHistoryManager?.chatHistory?.messages?.find(m => m.id === messageId);
     if (!anchorNode) return;
 
-    const existingThread = findThreadBySelection(anchorNode, selectionInfo.selectionText, selectionInfo.matchIndex);
+    const existingThread = findThreadBySelection(
+      anchorNode,
+      selectionInfo.selectionText,
+      selectionInfo.matchIndex,
+      selectionInfo.selectionStartOffset
+    );
     state.pendingSelection = {
       messageId,
       selectionText: selectionInfo.selectionText,
