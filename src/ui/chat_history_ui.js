@@ -135,6 +135,8 @@ export function createChatHistoryUI(appContext) {
     return {
       query: '',
       normalized: '',
+      key: '',
+      contextKey: '',
       results: null,
       matchMap: new Map(),
       timestamp: 0,
@@ -1280,19 +1282,29 @@ export function createChatHistoryUI(appContext) {
    * - matched=false：若 pendingContentRefs 非空，则说明需要进一步解引用 messageContents 才能保证搜索正确性。
    *
    * @param {Object} conversation
-   * @param {string} filterText
-   * @param {string} lowerFilter
+   * @param {{positiveLower:string[], negativeLower:string[], highlightLower:string[], hasPositive:boolean, hasNegative:boolean}} textPlan
+   * @param {string[]|null} remainingTerms - 元数据命中后仍需匹配的正向关键词（小写）
    * @param {() => boolean} isCancelled
-   * @returns {{ cancelled: boolean, matched: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string}, pendingContentRefs: Array<{messageId:string|null, contentRef:string}> }}
+   * @returns {{ cancelled: boolean, matched: boolean, blocked: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string}, pendingContentRefs: Array<{messageId:string|null, contentRef:string}>, remainingTerms: string[] }}
    */
-  function scanConversationInlineMessagesForMatch(conversation, filterText, lowerFilter, isCancelled) {
-    const empty = { cancelled: false, matched: false, matchInfo: { messageId: null, excerpts: [], reason: 'message' }, pendingContentRefs: [] };
+  function scanConversationInlineMessagesForMatch(conversation, textPlan, remainingTerms, isCancelled) {
+    const empty = {
+      cancelled: false,
+      matched: false,
+      blocked: false,
+      matchInfo: { messageId: null, excerpts: [], reason: 'message' },
+      pendingContentRefs: [],
+      remainingTerms: []
+    };
     if (!conversation || !Array.isArray(conversation.messages)) return empty;
 
     const matchInfo = { messageId: null, excerpts: [], reason: 'message' };
     const MAX_EXCERPTS = 20;
     const pendingContentRefs = [];
-    let matched = false;
+    const remainingSet = new Set(Array.isArray(remainingTerms) ? remainingTerms : (textPlan?.positiveLower || []));
+    const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
+    const highlightTerms = Array.isArray(textPlan?.highlightLower) ? textPlan.highlightLower : [];
+    const hasNegative = !!textPlan?.hasNegative;
 
     for (const message of conversation.messages) {
       if (isCancelled()) return { ...empty, cancelled: true };
@@ -1300,14 +1312,43 @@ export function createChatHistoryUI(appContext) {
 
       const plainText = extractMessagePlainText(message);
       if (plainText) {
-        if (plainText.toLowerCase().includes(lowerFilter)) {
-          matched = true;
-          if (!matchInfo.messageId && message.id) matchInfo.messageId = message.id;
-          if (matchInfo.excerpts.length < MAX_EXCERPTS) {
-            const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
-            if (excerpt) matchInfo.excerpts.push(excerpt);
+        const lowerText = plainText.toLowerCase();
+        if (hasNegative) {
+          for (const term of negativeTerms) {
+            if (term && lowerText.includes(term)) {
+              return {
+                cancelled: false,
+                matched: false,
+                blocked: true,
+                matchInfo,
+                pendingContentRefs: [],
+                remainingTerms: Array.from(remainingSet)
+              };
+            }
           }
-          if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
+        }
+
+        let matchedInMessage = false;
+        if (remainingSet.size > 0) {
+          for (const term of Array.from(remainingSet)) {
+            if (term && lowerText.includes(term)) {
+              remainingSet.delete(term);
+              matchedInMessage = true;
+            }
+          }
+        }
+
+        if (matchedInMessage && !matchInfo.messageId && message.id) {
+          matchInfo.messageId = message.id;
+        }
+
+        if (matchedInMessage && highlightTerms.length && matchInfo.excerpts.length < MAX_EXCERPTS) {
+          const excerpt = buildExcerptSegments(plainText, highlightTerms);
+          if (excerpt) matchInfo.excerpts.push(excerpt);
+        }
+
+        if (!hasNegative && remainingSet.size === 0 && matchInfo.excerpts.length >= MAX_EXCERPTS) {
+          break;
         }
         continue;
       }
@@ -1318,7 +1359,17 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
-    return { cancelled: false, matched, matchInfo, pendingContentRefs };
+    const needsContentScan = pendingContentRefs.length > 0 && (remainingSet.size > 0 || hasNegative);
+    const matched = remainingSet.size === 0 && !needsContentScan;
+
+    return {
+      cancelled: false,
+      matched,
+      blocked: false,
+      matchInfo,
+      pendingContentRefs,
+      remainingTerms: Array.from(remainingSet)
+    };
   }
 
   /**
@@ -1328,21 +1379,24 @@ export function createChatHistoryUI(appContext) {
    *
    * @param {Array<{messageId:string|null, contentRef:string}>} pendingContentRefs
    * @param {Map<string, any>} contentMap - contentRefId -> content
-   * @param {string} filterText
-   * @param {string} lowerFilter
+   * @param {{positiveLower:string[], negativeLower:string[], highlightLower:string[], hasPositive:boolean, hasNegative:boolean}} textPlan
+   * @param {string[]|null} remainingTerms - 元数据命中后仍需匹配的正向关键词（小写）
    * @param {() => boolean} isCancelled
    * @param {{messageId:string|null, excerpts:Array<Object>, reason:string}} matchInfo - 会被原地追加 excerpts/messageId
-   * @returns {{ cancelled: boolean, matched: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string} }}
+   * @returns {{ cancelled: boolean, matched: boolean, blocked: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string}, remainingTerms: string[] }}
    */
-  function scanConversationContentRefsForMatch(pendingContentRefs, contentMap, filterText, lowerFilter, isCancelled, matchInfo) {
+  function scanConversationContentRefsForMatch(pendingContentRefs, contentMap, textPlan, remainingTerms, isCancelled, matchInfo) {
     const MAX_EXCERPTS = 20;
     const refs = Array.isArray(pendingContentRefs) ? pendingContentRefs : [];
     const map = contentMap instanceof Map ? contentMap : new Map();
     const info = matchInfo && typeof matchInfo === 'object' ? matchInfo : { messageId: null, excerpts: [], reason: 'message' };
+    const remainingSet = new Set(Array.isArray(remainingTerms) ? remainingTerms : (textPlan?.positiveLower || []));
+    const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
+    const highlightTerms = Array.isArray(textPlan?.highlightLower) ? textPlan.highlightLower : [];
+    const hasNegative = !!textPlan?.hasNegative;
 
-    let matched = false;
     for (const ref of refs) {
-      if (isCancelled()) return { cancelled: true, matched: false, matchInfo: info };
+      if (isCancelled()) return { cancelled: true, matched: false, blocked: false, matchInfo: info, remainingTerms: Array.from(remainingSet) };
       if (!ref?.contentRef) continue;
 
       const content = map.get(ref.contentRef);
@@ -1350,18 +1404,36 @@ export function createChatHistoryUI(appContext) {
 
       const plainText = extractPlainTextFromMessageContent(content);
       if (!plainText) continue;
-      if (!plainText.toLowerCase().includes(lowerFilter)) continue;
+      const lowerText = plainText.toLowerCase();
 
-      matched = true;
-      if (!info.messageId && ref.messageId) info.messageId = ref.messageId;
-      if (info.excerpts.length < MAX_EXCERPTS) {
-        const excerpt = buildExcerptSegments(plainText, filterText, lowerFilter);
+      if (hasNegative) {
+        for (const term of negativeTerms) {
+          if (term && lowerText.includes(term)) {
+            return { cancelled: false, matched: false, blocked: true, matchInfo: info, remainingTerms: Array.from(remainingSet) };
+          }
+        }
+      }
+
+      let matchedInMessage = false;
+      if (remainingSet.size > 0) {
+        for (const term of Array.from(remainingSet)) {
+          if (term && lowerText.includes(term)) {
+            remainingSet.delete(term);
+            matchedInMessage = true;
+          }
+        }
+      }
+
+      if (matchedInMessage && !info.messageId && ref.messageId) info.messageId = ref.messageId;
+      if (matchedInMessage && highlightTerms.length && info.excerpts.length < MAX_EXCERPTS) {
+        const excerpt = buildExcerptSegments(plainText, highlightTerms);
         if (excerpt) info.excerpts.push(excerpt);
       }
-      if (info.excerpts.length >= MAX_EXCERPTS) break;
+      if (!hasNegative && remainingSet.size === 0 && info.excerpts.length >= MAX_EXCERPTS) break;
     }
 
-    return { cancelled: false, matched, matchInfo: info };
+    const matched = remainingSet.size === 0;
+    return { cancelled: false, matched, blocked: false, matchInfo: info, remainingTerms: Array.from(remainingSet) };
   }
 
   /**
@@ -1373,13 +1445,13 @@ export function createChatHistoryUI(appContext) {
    * - 仅当会话在“内联消息文本”中未命中，才按需解引用 contentRef（保证搜索正确性）。
    *
    * @param {string} conversationId
-   * @param {string} filterText - 原始搜索词（用于 excerpt 高亮）
-   * @param {string} lowerFilter - 小写后的搜索词
+   * @param {{positiveLower:string[], negativeLower:string[], highlightLower:string[], hasPositive:boolean, hasNegative:boolean}} textPlan
    * @param {HTMLElement} panel - 用于 runId 取消判断
    * @param {string} runId
+   * @param {string[]|null} [remainingTerms=null] - 若已在元数据中匹配过，传入剩余需要匹配的正向词
    * @returns {Promise<{messageId:string|null, excerpts:Array<Object>, reason:string}|null>}
    */
-  async function scanConversationForTextMatch(conversationId, filterText, lowerFilter, panel, runId) {
+  async function scanConversationForTextMatch(conversationId, textPlan, panel, runId, remainingTerms = null) {
     if (!conversationId) return null;
 
     let conversation = null;
@@ -1396,8 +1468,12 @@ export function createChatHistoryUI(appContext) {
     if (isCancelled()) return null;
 
     // 阶段1：扫描 conversations 记录内的消息文本（不解引用 contentRef）
-    const inlineScan = scanConversationInlineMessagesForMatch(conversation, filterText, lowerFilter, isCancelled);
+    const positiveTerms = Array.isArray(remainingTerms)
+      ? remainingTerms
+      : (Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : []);
+    const inlineScan = scanConversationInlineMessagesForMatch(conversation, textPlan, positiveTerms, isCancelled);
     if (inlineScan.cancelled) return null;
+    if (inlineScan.blocked) return null;
     if (inlineScan.matched) return inlineScan.matchInfo;
 
     // 阶段2：仅在阶段1未命中时，按需解引用 contentRef（批量读取，避免多次事务）
@@ -1413,39 +1489,74 @@ export function createChatHistoryUI(appContext) {
       contentMap = new Map();
     }
 
-    const refScan = scanConversationContentRefsForMatch(pendingRefs, contentMap, filterText, lowerFilter, isCancelled, inlineScan.matchInfo);
+    const refScan = scanConversationContentRefsForMatch(
+      pendingRefs,
+      contentMap,
+      textPlan,
+      inlineScan.remainingTerms,
+      isCancelled,
+      inlineScan.matchInfo
+    );
     if (refScan.cancelled) return null;
+    if (refScan.blocked) return null;
     return refScan.matched ? refScan.matchInfo : null;
   }
 
-  function buildExcerptSegments(sourceText, filterText, lowerFilter, contextLength = 32) {
-    if (!sourceText) return null;
-    const lowerSource = sourceText.toLowerCase();
-    let index = lowerSource.indexOf(lowerFilter);
-    if (index === -1) return null;
+  function escapeRegExp(rawValue) {
+    return String(rawValue || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
 
-    const filterLength = filterText.length;
-    const start = Math.max(0, index - contextLength);
-    const end = Math.min(sourceText.length, index + filterLength + contextLength);
-    const snippet = sourceText.slice(start, end);
-    const snippetLower = snippet.toLowerCase();
-
-    const segments = [];
-    let cursor = 0;
-    while (cursor < snippet.length) {
-      const matchIndex = snippetLower.indexOf(lowerFilter, cursor);
-      if (matchIndex === -1) {
-        if (cursor < snippet.length) {
-          segments.push({ type: 'text', value: snippet.slice(cursor) });
-        }
-        break;
-      }
-      if (matchIndex > cursor) {
-        segments.push({ type: 'text', value: snippet.slice(cursor, matchIndex) });
-      }
-      segments.push({ type: 'mark', value: snippet.slice(matchIndex, matchIndex + filterLength) });
-      cursor = matchIndex + filterLength;
+  function buildHighlightRegex(highlightTerms) {
+    const terms = (Array.isArray(highlightTerms) ? highlightTerms : [])
+      .map(term => (typeof term === 'string' ? term.trim() : ''))
+      .filter(Boolean);
+    if (!terms.length) return null;
+    const pattern = terms.map(escapeRegExp).join('|');
+    if (!pattern) return null;
+    try {
+      return new RegExp(pattern, 'gi');
+    } catch (_) {
+      return null;
     }
+  }
+
+  function buildHighlightSegments(sourceText, highlightTerms) {
+    if (!sourceText) return null;
+    const regex = buildHighlightRegex(highlightTerms);
+    if (!regex) return null;
+    const segments = [];
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(sourceText)) !== null) {
+      const matchIndex = match.index;
+      if (matchIndex > lastIndex) {
+        segments.push({ type: 'text', value: sourceText.slice(lastIndex, matchIndex) });
+      }
+      segments.push({ type: 'mark', value: match[0] });
+      lastIndex = matchIndex + match[0].length;
+      if (match[0].length === 0) regex.lastIndex += 1;
+    }
+    if (!segments.length) return null;
+    if (lastIndex < sourceText.length) {
+      segments.push({ type: 'text', value: sourceText.slice(lastIndex) });
+    }
+    return segments;
+  }
+
+  function buildExcerptSegments(sourceText, highlightTerms, contextLength = 32) {
+    if (!sourceText) return null;
+    const regex = buildHighlightRegex(highlightTerms);
+    if (!regex) return null;
+    const firstMatch = regex.exec(sourceText);
+    if (!firstMatch) return null;
+
+    const matchIndex = firstMatch.index;
+    const matchLength = Math.max(1, firstMatch[0].length);
+    const start = Math.max(0, matchIndex - contextLength);
+    const end = Math.min(sourceText.length, matchIndex + matchLength + contextLength);
+    const snippet = sourceText.slice(start, end);
+    const segments = buildHighlightSegments(snippet, highlightTerms);
+    if (!segments) return null;
 
     return {
       segments,
@@ -2392,23 +2503,339 @@ export function createChatHistoryUI(appContext) {
     return previousFilter === currentFilter ? currentScrollTop : 0;
   }
 
-  /**
-   * 比较数值
-   * @param {number} value - 要比较的值
-   * @param {string} operator - 比较操作符 ('>', '<', '>=', '<=', '=', '==')
-   * @param {number} threshold - 阈值
-   * @returns {boolean} 比较结果
-   */
-  function compareCount(value, operator, threshold) {
-    switch (operator) {
-      case '>': return value > threshold;
-      case '<': return value < threshold;
-      case '>=': return value >= threshold;
-      case '<=': return value <= threshold;
-      case '=': // Fallthrough, treat '=' and '==' the same
-      case '==': return value === threshold;
-      default: return false;
+  const CHAT_HISTORY_SEARCH_FILTER_KEYS = new Map([
+    ['url', 'url'],
+    ['count', 'count'],
+    ['msg', 'count'],
+    ['msgs', 'count'],
+    ['messages', 'count'],
+    ['messagecount', 'count'],
+    ['条数', 'count'],
+    ['消息数', 'count'],
+    ['start', 'start'],
+    ['begin', 'start'],
+    ['from', 'start'],
+    ['开始', 'start'],
+    ['end', 'end'],
+    ['to', 'end'],
+    ['结束', 'end'],
+    ['msgdate', 'msgdate'],
+    ['date', 'msgdate'],
+    ['msgtime', 'msgdate'],
+    ['消息日期', 'msgdate'],
+    ['消息时间', 'msgdate']
+  ]);
+
+  function tokenizeSearchQuery(rawInput) {
+    const input = typeof rawInput === 'string' ? rawInput : '';
+    const tokens = [];
+    let buffer = '';
+    let inQuotes = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+      if (escapeNext) {
+        buffer += ch;
+        escapeNext = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escapeNext = true;
+        continue;
+      }
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (!inQuotes && /\s/.test(ch)) {
+        if (buffer) {
+          tokens.push(buffer);
+          buffer = '';
+        }
+        continue;
+      }
+      buffer += ch;
     }
+
+    if (buffer) tokens.push(buffer);
+    return tokens;
+  }
+
+  function normalizeSearchTerms(rawTerms) {
+    const raw = [];
+    const lower = [];
+    const seen = new Set();
+    (Array.isArray(rawTerms) ? rawTerms : []).forEach((term) => {
+      const trimmed = typeof term === 'string' ? term.trim() : '';
+      if (!trimmed) return;
+      const lowered = trimmed.toLowerCase();
+      if (seen.has(lowered)) return;
+      seen.add(lowered);
+      raw.push(trimmed);
+      lower.push(lowered);
+    });
+    return { raw, lower };
+  }
+
+  function parseSearchOperatorValue(rawValue) {
+    const input = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!input) return null;
+    const match = input.match(/^(>=|<=|==|!=|=|>|<)?\s*(.+)$/);
+    if (!match) return null;
+    const operator = match[1] || '=';
+    const operand = (match[2] || '').trim();
+    if (!operand) return null;
+    return { operator, operand };
+  }
+
+  function parseSearchDateRange(rawValue) {
+    const input = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!input) return null;
+
+    if (/^\d{10}$/.test(input)) {
+      const seconds = Number(input);
+      if (!Number.isFinite(seconds)) return null;
+      const ts = seconds * 1000;
+      return { start: ts, end: ts };
+    }
+
+    if (/^\d{13}$/.test(input)) {
+      const ms = Number(input);
+      if (!Number.isFinite(ms)) return null;
+      return { start: ms, end: ms };
+    }
+
+    const compactDateMatch = input.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compactDateMatch) {
+      const year = Number(compactDateMatch[1]);
+      const month = Number(compactDateMatch[2]);
+      const day = Number(compactDateMatch[3]);
+      const start = new Date(year, month - 1, day);
+      if (!Number.isFinite(start.getTime())) return null;
+      const startMs = start.getTime();
+      return { start: startMs, end: startMs + 24 * 60 * 60 * 1000 - 1 };
+    }
+
+    const dateMatch = input.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (dateMatch) {
+      const year = Number(dateMatch[1]);
+      const month = Number(dateMatch[2]);
+      const day = Number(dateMatch[3]);
+      const start = new Date(year, month - 1, day);
+      if (!Number.isFinite(start.getTime())) return null;
+      const startMs = start.getTime();
+      return { start: startMs, end: startMs + 24 * 60 * 60 * 1000 - 1 };
+    }
+
+    const parsed = Date.parse(input);
+    if (!Number.isFinite(parsed)) return null;
+    return { start: parsed, end: parsed };
+  }
+
+  function parseSearchFilterToken(rawToken) {
+    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    if (!token) return null;
+    const colonIndex = token.indexOf(':');
+    if (colonIndex <= 0) return null;
+    const rawKey = token.slice(0, colonIndex).trim().toLowerCase();
+    const rawValue = token.slice(colonIndex + 1).trim();
+    if (!rawValue) return null;
+    const key = CHAT_HISTORY_SEARCH_FILTER_KEYS.get(rawKey);
+    if (!key) return null;
+
+    if (key === 'url') {
+      return {
+        key,
+        value: rawValue,
+        valueLower: rawValue.toLowerCase()
+      };
+    }
+
+    const parsed = parseSearchOperatorValue(rawValue);
+    if (!parsed) return null;
+
+    if (key === 'count') {
+      const numericValue = Number(parsed.operand);
+      if (!Number.isFinite(numericValue)) return null;
+      return { key, operator: parsed.operator, rangeStart: numericValue, rangeEnd: numericValue };
+    }
+
+    if (key === 'start' || key === 'end' || key === 'msgdate') {
+      const range = parseSearchDateRange(parsed.operand);
+      if (!range) return null;
+      return { key, operator: parsed.operator, rangeStart: range.start, rangeEnd: range.end };
+    }
+
+    return null;
+  }
+
+  function buildChatHistorySearchPlan(rawFilter) {
+    const raw = typeof rawFilter === 'string' ? rawFilter : '';
+    const normalized = raw.trim().toLowerCase();
+    const tokens = tokenizeSearchQuery(raw);
+    const terms = [];
+    const negativeTerms = [];
+    const filters = [];
+
+    tokens.forEach((token) => {
+      let working = token.trim();
+      if (!working) return;
+      let negated = false;
+      while (working.startsWith('!')) {
+        negated = !negated;
+        working = working.slice(1);
+      }
+      if (!working) return;
+
+      const filter = parseSearchFilterToken(working);
+      if (filter) {
+        filter.negated = negated;
+        filters.push(filter);
+        return;
+      }
+
+      if (negated) {
+        negativeTerms.push(working);
+      } else {
+        terms.push(working);
+      }
+    });
+
+    const positive = normalizeSearchTerms(terms);
+    const negative = normalizeSearchTerms(negativeTerms);
+
+    return {
+      raw,
+      normalized,
+      positiveTerms: positive.raw,
+      positiveTermsLower: positive.lower,
+      negativeTerms: negative.raw,
+      negativeTermsLower: negative.lower,
+      filters,
+      hasText: positive.lower.length > 0 || negative.lower.length > 0,
+      hasPositiveText: positive.lower.length > 0,
+      hasNegativeText: negative.lower.length > 0
+    };
+  }
+
+  function buildChatHistorySearchCacheContextKey(urlFilterMode, currentUrl) {
+    if (!urlFilterMode) return 'all';
+    const normalizedUrl = (typeof currentUrl === 'string' ? currentUrl.trim().toLowerCase() : '');
+    return `url:${normalizedUrl}`;
+  }
+
+  function buildChatHistorySearchCacheKey(plan, urlFilterMode, currentUrl) {
+    const contextKey = buildChatHistorySearchCacheContextKey(urlFilterMode, currentUrl);
+    const normalized = plan?.normalized || '';
+    return `${contextKey}::${normalized}`;
+  }
+
+  function compareNumericRange(value, operator, rangeStart, rangeEnd) {
+    const numericValue = Number(value) || 0;
+    switch (operator) {
+      case '>':
+        return numericValue > rangeEnd;
+      case '>=':
+        return numericValue >= rangeStart;
+      case '<':
+        return numericValue < rangeStart;
+      case '<=':
+        return numericValue <= rangeEnd;
+      case '!=':
+        return numericValue < rangeStart || numericValue > rangeEnd;
+      case '=':
+      case '==':
+        return numericValue >= rangeStart && numericValue <= rangeEnd;
+      default:
+        return false;
+    }
+  }
+
+  function compareMessageDateRange(startTime, endTime, operator, rangeStart, rangeEnd) {
+    const convStart = Number(startTime) || 0;
+    const convEnd = Number(endTime) || 0;
+    switch (operator) {
+      case '>':
+        return convEnd > rangeEnd;
+      case '>=':
+        return convEnd >= rangeStart;
+      case '<':
+        return convStart < rangeStart;
+      case '<=':
+        return convStart <= rangeEnd;
+      case '!=':
+        return convEnd < rangeStart || convStart > rangeEnd;
+      case '=':
+      case '==':
+        return convStart <= rangeEnd && convEnd >= rangeStart;
+      default:
+        return false;
+    }
+  }
+
+  function evaluateChatHistoryFilters(meta, filters) {
+    const list = Array.isArray(filters) ? filters : [];
+    if (!list.length) return true;
+    for (const filter of list) {
+      if (!filter || !filter.key) continue;
+      let matched = false;
+      if (filter.key === 'url') {
+        const url = typeof meta?.url === 'string' ? meta.url.toLowerCase() : '';
+        const value = filter.valueLower || '';
+        matched = value ? url.includes(value) : false;
+      } else if (filter.key === 'count') {
+        matched = compareNumericRange(meta?.messageCount, filter.operator, filter.rangeStart, filter.rangeEnd);
+      } else if (filter.key === 'start') {
+        matched = compareNumericRange(meta?.startTime, filter.operator, filter.rangeStart, filter.rangeEnd);
+      } else if (filter.key === 'end') {
+        matched = compareNumericRange(meta?.endTime, filter.operator, filter.rangeStart, filter.rangeEnd);
+      } else if (filter.key === 'msgdate') {
+        matched = compareMessageDateRange(meta?.startTime, meta?.endTime, filter.operator, filter.rangeStart, filter.rangeEnd);
+      }
+
+      if (filter.negated) matched = !matched;
+      if (!matched) return false;
+    }
+    return true;
+  }
+
+  function buildChatHistoryTextPlan(searchPlan) {
+    const positiveRaw = Array.isArray(searchPlan?.positiveTerms) ? searchPlan.positiveTerms.slice() : [];
+    const positiveLower = Array.isArray(searchPlan?.positiveTermsLower) ? searchPlan.positiveTermsLower.slice() : [];
+    const negativeLower = Array.isArray(searchPlan?.negativeTermsLower) ? searchPlan.negativeTermsLower.slice() : [];
+    const highlightRaw = positiveRaw.slice();
+    const highlightLower = positiveLower.slice();
+    return {
+      positiveRaw,
+      positiveLower,
+      negativeLower,
+      highlightRaw,
+      highlightLower,
+      hasPositive: positiveLower.length > 0,
+      hasNegative: negativeLower.length > 0
+    };
+  }
+
+  function buildMetaSearchText(meta) {
+    return (typeof meta?.url === 'string' ? meta.url.toLowerCase() : '');
+  }
+
+  function evaluateMetaTextMatch(metaText, textPlan) {
+    const remaining = new Set(textPlan.positiveLower);
+    if (textPlan.hasNegative) {
+      for (const term of textPlan.negativeLower) {
+        if (term && metaText.includes(term)) {
+          return { blocked: true, remaining };
+        }
+      }
+    }
+    for (const term of textPlan.positiveLower) {
+      if (term && metaText.includes(term)) {
+        remaining.delete(term);
+      }
+    }
+    return { blocked: false, remaining };
   }
 
   /**
@@ -2663,7 +3090,9 @@ export function createChatHistoryUI(appContext) {
     const runId = createRunId();
     panel.dataset.currentFilter = filterText;
     panel.dataset.runId = runId;
-    const normalizedFilter = filterText.trim().toLowerCase();
+    const searchPlan = buildChatHistorySearchPlan(filterText);
+    const textPlan = buildChatHistoryTextPlan(searchPlan);
+    const normalizedFilter = searchPlan.normalized;
     panel.dataset.normalizedFilter = normalizedFilter;
 
     const listContainer = panel.querySelector('#chat-history-list');
@@ -2721,23 +3150,22 @@ export function createChatHistoryUI(appContext) {
       `;
     };
 
-    // 解析筛选条件
-    const countFilterMatch = filterText.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
-    let isCountFilter = false;
-    let countOperator = null;
-    let countThreshold = 0;
-
-    if (countFilterMatch) {
-      isCountFilter = true;
-      countOperator = countFilterMatch[1];
-      countThreshold = parseInt(countFilterMatch[2], 10);
-    }
+    const hasFilterRules = Array.isArray(searchPlan.filters) && searchPlan.filters.length > 0;
+    const hasTextQuery = textPlan.hasPositive || textPlan.hasNegative;
+    const hasActiveQuery = hasFilterRules || hasTextQuery;
 
     const urlFilterMode = panel.dataset.urlFilterMode === 'currentUrl';
+    const currentUrl = urlFilterMode ? (state.pageInfo?.url || '').trim() : '';
+    const searchCacheContextKey = buildChatHistorySearchCacheContextKey(urlFilterMode, currentUrl);
+    const searchCacheKey = buildChatHistorySearchCacheKey(searchPlan, urlFilterMode, currentUrl);
+    panel.dataset.searchCacheKey = searchCacheKey;
+    const canReuseSearchCache = hasTextQuery
+      && Array.isArray(searchCache?.results)
+      && searchCache.key === searchCacheKey;
 
     // 树状视图：只在“无筛选”场景下改变排序（否则会干扰全文搜索/筛选的直觉）
     const isBranchTreeView = panel.dataset.branchViewMode === 'tree';
-    const shouldTreeOrder = isBranchTreeView && !isCountFilter && !filterText.trim();
+    const shouldTreeOrder = isBranchTreeView && !hasActiveQuery;
     // 树状视图首次打开时可能需要全量元数据；若缓存未就绪，则先走“最近记录分页”快速渲染，
     // 同时后台预热元数据，待就绪后再刷新为树状排序，降低打开时的等待感。
     // 说明：metaCache 有 TTL，过期时也视为“未就绪”，避免打开面板再次卡顿。
@@ -2780,7 +3208,7 @@ export function createChatHistoryUI(appContext) {
     // 默认视图（无输入筛选）走“快速分页”：
     // - 首次：置顶 + 最近 50（非置顶）
     // - 后续：滚动到底部再继续加载更多（renderMoreItems 内部触发）
-    if (!baseHistories && !isCountFilter && !filterText.trim() && !shouldTreeOrderForThisRun) {
+    if (!baseHistories && !hasActiveQuery && !shouldTreeOrderForThisRun) {
       panel._historyDataSource = { mode: 'paged', cursor: null, hasMore: false, pageSize: PAGED_UNPINNED_LOAD_SIZE };
       removeSearchSummary(panel);
 
@@ -2807,8 +3235,7 @@ export function createChatHistoryUI(appContext) {
       // 说明：全文搜索需要先拿到“全量会话元数据列表”作为候选池，这一步在会话很多时可能需要 0.5~2s。
       // 旧实现会等“元数据加载完成后”才插入进度条，导致用户感觉“停顿了一秒啥也没干”。
       // 这里提前显示“准备阶段”，让用户能立刻看到反馈。
-      const isFullTextSearch = !isCountFilter && !!filterText.trim() && !urlFilterMode;
-      const canReuseSearchCache = isFullTextSearch && !!searchCache?.results && searchCache.normalized === normalizedFilter;
+      const isFullTextSearch = hasTextQuery;
 
       if (canReuseSearchCache) {
         baseHistories = searchCache.results.slice();
@@ -2827,339 +3254,345 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
+    const highlightPlan = textPlan.hasPositive
+      ? { terms: textPlan.highlightRaw, termsLower: textPlan.highlightLower, hasTerms: true }
+      : { terms: [], termsLower: [], hasTerms: false };
+
+    const applyMetaFilters = (list) => {
+      const items = Array.isArray(list) ? list : [];
+      if (!hasFilterRules) return items;
+      return items.filter((meta) => evaluateChatHistoryFilters(meta, searchPlan.filters));
+    };
+
     let sourceHistories = [];
-    let effectiveFilterTextForHighlight = filterText;
+    let effectiveHighlightPlan = highlightPlan;
 
     if (panel._historyDataSource.mode === 'paged') {
       // 默认分页列表不做额外筛选（filterText 本身为空）
       sourceHistories = baseHistories;
-      effectiveFilterTextForHighlight = '';
+      effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
       removeSearchSummary(panel);
-    } else if (panel._historyDataSource.mode === 'url') {
-      // URL 模式保持“快速”：仅在元数据维度做筛选（避免全文消息扫描导致的延迟）
-      removeSearchSummary(panel);
-
-      if (isCountFilter) {
-        sourceHistories = baseHistories.filter((history) =>
-          compareCount(history.messageCount, countOperator, countThreshold)
-        );
-        effectiveFilterTextForHighlight = '';
-      } else if (filterText.trim()) {
-        const lowerFilter = normalizedFilter;
-        sourceHistories = baseHistories.filter((history) => {
-          const url = (history.url || '').toLowerCase();
-          const summary = (history.summary || '').toLowerCase();
-          const title = (history.title || '').toLowerCase();
-          return url.includes(lowerFilter) || summary.includes(lowerFilter) || title.includes(lowerFilter);
-        });
-        effectiveFilterTextForHighlight = filterText;
-      } else {
-        sourceHistories = baseHistories;
-        effectiveFilterTextForHighlight = '';
-      }
     } else {
       const allHistoriesMeta = baseHistories;
 
-      if (isCountFilter) {
-        sourceHistories = allHistoriesMeta.filter(history =>
-          compareCount(history.messageCount, countOperator, countThreshold)
-        );
-        effectiveFilterTextForHighlight = '';
+      if (!hasActiveQuery) {
+        sourceHistories = allHistoriesMeta;
+        effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
         removeSearchSummary(panel);
-      } else if (filterText.trim()) {
-        const normalizedFilter = panel.dataset.normalizedFilter || filterText.trim().toLowerCase();
-        if (searchCache.results && searchCache.normalized === normalizedFilter) {
-          sourceHistories = searchCache.results.slice();
-          effectiveFilterTextForHighlight = filterText;
-          const meta = searchCache.meta || {};
-          renderSearchSummary(panel, {
-            query: searchCache.query || filterText,
-            normalized: searchCache.normalized,
-            durationMs: meta.durationMs,
-            resultCount: meta.resultCount ?? sourceHistories.length,
-            excerptCount: meta.excerptCount,
-            scannedCount: meta.scannedCount,
-            reused: true
-          });
-	        } else {
-	          removeSearchSummary(panel);
-	          const lowerFilter = normalizedFilter;
-	          const searchStartTime = performance.now();
-	          const matchedEntries = [];
-	          const matchInfoMap = new Map();
-	          // 连续输入优化：若本次查询是“上次查询的前缀扩展”，则只需要在上次结果集合里继续筛即可。
-	          // 典型场景：用户从 "http" 继续输入到 "https://..."，无需每次都从全量会话重扫。
-	          const previousNormalized = (typeof searchCache?.normalized === 'string') ? searchCache.normalized : '';
-	          const canReusePrefixCache = (
-	            !!previousNormalized &&
-	            previousNormalized !== normalizedFilter &&
-	            normalizedFilter.startsWith(previousNormalized) &&
-	            Array.isArray(searchCache?.results)
-	          );
+      } else if (!hasTextQuery) {
+        sourceHistories = applyMetaFilters(allHistoriesMeta);
+        effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
+        removeSearchSummary(panel);
+      } else if (canReuseSearchCache) {
+        sourceHistories = searchCache.results.slice();
+        const meta = searchCache.meta || {};
+        renderSearchSummary(panel, {
+          query: filterText,
+          normalized: searchCache.normalized,
+          durationMs: meta.durationMs,
+          resultCount: meta.resultCount ?? sourceHistories.length,
+          excerptCount: meta.excerptCount,
+          scannedCount: meta.scannedCount,
+          reused: true
+        });
+      } else {
+        removeSearchSummary(panel);
+        const searchStartTime = performance.now();
+        const matchedEntries = [];
+        const matchInfoMap = new Map();
+        // 连续输入优化：若本次查询是“上次查询的前缀扩展”，则只需要在上次结果集合里继续筛即可。
+        // 典型场景：用户从 "http" 继续输入到 "https://..."，无需每次都从全量会话重扫。
+        const previousNormalized = (typeof searchCache?.normalized === 'string') ? searchCache.normalized : '';
+        const canReusePrefixCache = (
+          !!previousNormalized &&
+          previousNormalized !== normalizedFilter &&
+          normalizedFilter.startsWith(previousNormalized) &&
+          Array.isArray(searchCache?.results) &&
+          searchCache.contextKey === searchCacheContextKey
+        );
 
-	          const candidateMetas = canReusePrefixCache ? searchCache.results.slice() : allHistoriesMeta;
-	          const totalItems = candidateMetas.length;
-	          let nextIndex = 0;
-	          let processedCount = 0;
-	          let lastProgressUpdate = 0;
-	          let cancelled = false;
+        const candidateMetas = applyMetaFilters(canReusePrefixCache ? searchCache.results.slice() : allHistoriesMeta);
+        const totalItems = candidateMetas.length;
+        let nextIndex = 0;
+        let processedCount = 0;
+        let lastProgressUpdate = 0;
+        let cancelled = false;
 
-	          // 在列表容器顶部插入搜索进度指示器
-	          const searchProgressIndicator = upsertSearchProgressIndicator();
+        // 在列表容器顶部插入搜索进度指示器
+        const searchProgressIndicator = upsertSearchProgressIndicator();
 
-	          const PROGRESS_UPDATE_INTERVAL = 10;
-	          // 批量读取会话后，每个 worker 的“单次工作量”更大；并发过高反而可能造成 IndexedDB 竞争与 UI 抖动。
-	          const CONCURRENCY = Math.min(4, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-	          const SEARCH_SCAN_BATCH_SIZE = 12;
-	          let lastYieldTime = performance.now();
-	          const isCancelled = createSearchCancelledChecker(panel, runId);
+        const PROGRESS_UPDATE_INTERVAL = 10;
+        // 批量读取会话后，每个 worker 的“单次工作量”更大；并发过高反而可能造成 IndexedDB 竞争与 UI 抖动。
+        const CONCURRENCY = Math.min(4, Math.max(2, navigator?.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
+        const SEARCH_SCAN_BATCH_SIZE = 12;
+        let lastYieldTime = performance.now();
+        const isCancelled = createSearchCancelledChecker(panel, runId);
 
-	          const updateProgress = (force = false) => {
-	            if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
-	            lastProgressUpdate = processedCount;
-	            const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
-	            const matchCount = matchedEntries.length;
-	            const reuseHint = canReusePrefixCache ? ' · 候选池来自缓存' : '';
-	            searchProgressIndicator.innerHTML = `
-	              <div class="search-progress">
-	                <div class="search-progress-text">
-	                  正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''}${reuseHint})
-	                </div>
-	                <div class="search-progress-bar">
-	                  <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
-	                </div>
-	              </div>
-	            `;
-	          };
+        const updateProgress = (force = false) => {
+          if (!force && processedCount - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) return;
+          lastProgressUpdate = processedCount;
+          const percentComplete = totalItems === 0 ? 100 : Math.round((processedCount / totalItems) * 100);
+          const matchCount = matchedEntries.length;
+          const reuseHint = canReusePrefixCache ? ' · 候选池来自缓存' : '';
+          searchProgressIndicator.innerHTML = `
+            <div class="search-progress">
+              <div class="search-progress-text">
+                正在搜索聊天记录... (${processedCount}/${totalItems}${matchCount ? ` · 已找到 ${matchCount}` : ''}${reuseHint})
+              </div>
+              <div class="search-progress-bar">
+                <div class="search-progress-fill" style="width: ${percentComplete}%"></div>
+              </div>
+            </div>
+          `;
+        };
 
-	          updateProgress(true);
+        updateProgress(true);
 
-	          const workers = Array.from({ length: CONCURRENCY }).map(async () => {
-	            while (true) {
-	              const batchStart = nextIndex;
-	              nextIndex += SEARCH_SCAN_BATCH_SIZE;
-	              if (batchStart >= totalItems || cancelled) break;
+        const workers = Array.from({ length: CONCURRENCY }).map(async () => {
+          while (true) {
+            const batchStart = nextIndex;
+            nextIndex += SEARCH_SCAN_BATCH_SIZE;
+            if (batchStart >= totalItems || cancelled) break;
 
-	              if (isCancelled()) {
-	                cancelled = true;
-	                break;
-	              }
+            if (isCancelled()) {
+              cancelled = true;
+              break;
+            }
 
-	              const batchEnd = Math.min(totalItems, batchStart + SEARCH_SCAN_BATCH_SIZE);
-	              const batchMetas = candidateMetas.slice(batchStart, batchEnd);
-	              const batchToScan = [];
+            const batchEnd = Math.min(totalItems, batchStart + SEARCH_SCAN_BATCH_SIZE);
+            const batchMetas = candidateMetas.slice(batchStart, batchEnd);
+            const batchToScan = [];
 
-	              // 1) 先在“元数据字段”上做快速命中（无需读 messages）
-	              for (let offset = 0; offset < batchMetas.length; offset++) {
-	                const historyMeta = batchMetas[offset];
-	                if (!historyMeta?.id) {
-	                  processedCount++;
-	                  updateProgress();
-	                  continue;
-	                }
-	                if (isCancelled()) {
-	                  cancelled = true;
-	                  break;
-	                }
+            // 1) 先在“元数据字段”上做快速命中（无需读 messages）
+            for (let offset = 0; offset < batchMetas.length; offset++) {
+              const historyMeta = batchMetas[offset];
+              if (!historyMeta?.id) {
+                processedCount++;
+                updateProgress();
+                continue;
+              }
+              if (isCancelled()) {
+                cancelled = true;
+                break;
+              }
 
-	                const url = (historyMeta.url || '').toLowerCase();
-	                const summary = (historyMeta.summary || '').toLowerCase();
-	                const title = (historyMeta.title || '').toLowerCase();
-	                const metaMatched = url.includes(lowerFilter) || summary.includes(lowerFilter) || title.includes(lowerFilter);
+              const metaText = buildMetaSearchText(historyMeta);
+              const metaResult = evaluateMetaTextMatch(metaText, textPlan);
+              if (metaResult.blocked) {
+                processedCount++;
+                updateProgress();
+                continue;
+              }
 
-	                if (metaMatched) {
-	                  matchedEntries.push({ index: batchStart + offset, data: historyMeta });
-	                  matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
-	                  processedCount++;
-	                  updateProgress();
-	                } else {
-	                  batchToScan.push({ index: batchStart + offset, meta: historyMeta });
-	                }
-	              }
+              const remainingTerms = Array.from(metaResult.remaining || []);
+              const needsMessageScan = textPlan.hasNegative || remainingTerms.length > 0;
 
-	              if (cancelled) break;
+              if (!needsMessageScan) {
+                matchedEntries.push({ index: batchStart + offset, data: historyMeta });
+                matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
+                processedCount++;
+                updateProgress();
+              } else {
+                batchToScan.push({ index: batchStart + offset, meta: historyMeta, remainingTerms });
+              }
+            }
 
-	              // 2) 未命中元数据的条目：批量读取会话并扫描 messages（减少 transaction 次数）
-	              if (batchToScan.length > 0) {
-	                const idsToLoad = batchToScan.map((item) => item.meta.id).filter(Boolean);
-	                let conversations = [];
-	                try {
-	                  conversations = await getConversationsByIds(idsToLoad, false);
-	                } catch (error) {
-	                  console.error('批量加载会话失败（全文搜索）:', error);
-	                  conversations = [];
-	                }
+            if (cancelled) break;
 
-	                if (isCancelled()) {
-	                  cancelled = true;
-	                  break;
-	                }
+            // 2) 未命中元数据的条目：批量读取会话并扫描 messages（减少 transaction 次数）
+            if (batchToScan.length > 0) {
+              const idsToLoad = batchToScan.map((item) => item.meta.id).filter(Boolean);
+              let conversations = [];
+              try {
+                conversations = await getConversationsByIds(idsToLoad, false);
+              } catch (error) {
+                console.error('批量加载会话失败（全文搜索）:', error);
+                conversations = [];
+              }
 
-	                const conversationById = new Map();
-	                for (const conv of conversations) {
-	                  if (conv?.id) conversationById.set(conv.id, conv);
-	                }
+              if (isCancelled()) {
+                cancelled = true;
+                break;
+              }
 
-	                // 2.1 先扫内联 messages；必要时收集 contentRef，后续批量解引用
-	                const pendingRefByConversationId = new Map();
-	                const pendingRefIdSet = new Set();
+              const conversationById = new Map();
+              for (const conv of conversations) {
+                if (conv?.id) conversationById.set(conv.id, conv);
+              }
 
-	                for (const item of batchToScan) {
-	                  if (isCancelled()) {
-	                    cancelled = true;
-	                    break;
-	                  }
+              // 2.1 先扫内联 messages；必要时收集 contentRef，后续批量解引用
+              const pendingRefByConversationId = new Map();
+              const pendingRefIdSet = new Set();
 
-	                  const conv = conversationById.get(item.meta.id);
-	                  if (!conv || !Array.isArray(conv.messages)) {
-	                    processedCount++;
-	                    updateProgress();
-	                    continue;
-	                  }
+              for (const item of batchToScan) {
+                if (isCancelled()) {
+                  cancelled = true;
+                  break;
+                }
 
-	                  const inlineScan = scanConversationInlineMessagesForMatch(conv, filterText, lowerFilter, isCancelled);
-	                  if (inlineScan.cancelled) {
-	                    cancelled = true;
-	                    break;
-	                  }
+                const conv = conversationById.get(item.meta.id);
+                if (!conv || !Array.isArray(conv.messages)) {
+                  processedCount++;
+                  updateProgress();
+                  continue;
+                }
 
-	                  if (inlineScan.matched) {
-	                    matchInfoMap.set(item.meta.id, inlineScan.matchInfo);
-	                    matchedEntries.push({ index: item.index, data: item.meta });
-	                    processedCount++;
-	                    updateProgress();
-	                  } else if (Array.isArray(inlineScan.pendingContentRefs) && inlineScan.pendingContentRefs.length > 0) {
-	                    pendingRefByConversationId.set(item.meta.id, {
-	                      index: item.index,
-	                      meta: item.meta,
-	                      matchInfo: inlineScan.matchInfo,
-	                      pendingRefs: inlineScan.pendingContentRefs
-	                    });
-	                    inlineScan.pendingContentRefs.forEach((ref) => {
-	                      if (ref?.contentRef) pendingRefIdSet.add(ref.contentRef);
-	                    });
-	                  } else {
-	                    processedCount++;
-	                    updateProgress();
-	                  }
+                const inlineScan = scanConversationInlineMessagesForMatch(
+                  conv,
+                  textPlan,
+                  item.remainingTerms,
+                  isCancelled
+                );
+                if (inlineScan.cancelled) {
+                  cancelled = true;
+                  break;
+                }
+                if (inlineScan.blocked) {
+                  processedCount++;
+                  updateProgress();
+                  continue;
+                }
 
-	                  // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
-	                  const now = performance.now();
-	                  if (now - lastYieldTime >= 16) {
-	                    lastYieldTime = now;
-	                    await new Promise(resolve => setTimeout(resolve, 0));
-	                  }
-	                }
+                if (inlineScan.matched) {
+                  matchInfoMap.set(item.meta.id, inlineScan.matchInfo);
+                  matchedEntries.push({ index: item.index, data: item.meta });
+                  processedCount++;
+                  updateProgress();
+                } else if (Array.isArray(inlineScan.pendingContentRefs) && inlineScan.pendingContentRefs.length > 0) {
+                  pendingRefByConversationId.set(item.meta.id, {
+                    index: item.index,
+                    meta: item.meta,
+                    matchInfo: inlineScan.matchInfo,
+                    pendingRefs: inlineScan.pendingContentRefs,
+                    remainingTerms: inlineScan.remainingTerms
+                  });
+                  inlineScan.pendingContentRefs.forEach((ref) => {
+                    if (ref?.contentRef) pendingRefIdSet.add(ref.contentRef);
+                  });
+                } else {
+                  processedCount++;
+                  updateProgress();
+                }
 
-	                if (cancelled) break;
+                // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
+                const now = performance.now();
+                if (now - lastYieldTime >= 16) {
+                  lastYieldTime = now;
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                }
+              }
 
-	                // 2.2 仍未命中：批量解引用 messageContents 并扫描文本（图片/多模态消息）
-	                if (pendingRefByConversationId.size > 0 && pendingRefIdSet.size > 0) {
-	                  let contentMap = new Map();
-	                  try {
-	                    contentMap = await loadMessageContentsByIds(Array.from(pendingRefIdSet));
-	                  } catch (_) {
-	                    contentMap = new Map();
-	                  }
+              if (cancelled) break;
 
-	                  if (isCancelled()) {
-	                    cancelled = true;
-	                    break;
-	                  }
+              // 2.2 仍未命中：批量解引用 messageContents 并扫描文本（图片/多模态消息）
+              if (pendingRefByConversationId.size > 0 && pendingRefIdSet.size > 0) {
+                let contentMap = new Map();
+                try {
+                  contentMap = await loadMessageContentsByIds(Array.from(pendingRefIdSet));
+                } catch (_) {
+                  contentMap = new Map();
+                }
 
-	                  for (const [conversationId, payload] of pendingRefByConversationId.entries()) {
-	                    if (isCancelled()) {
-	                      cancelled = true;
-	                      break;
-	                    }
+                if (isCancelled()) {
+                  cancelled = true;
+                  break;
+                }
 
-	                    const refScan = scanConversationContentRefsForMatch(
-	                      payload.pendingRefs,
-	                      contentMap,
-	                      filterText,
-	                      lowerFilter,
-	                      isCancelled,
-	                      payload.matchInfo
-	                    );
-	                    if (refScan.cancelled) {
-	                      cancelled = true;
-	                      break;
-	                    }
+                for (const [conversationId, payload] of pendingRefByConversationId.entries()) {
+                  if (isCancelled()) {
+                    cancelled = true;
+                    break;
+                  }
 
-	                    if (refScan.matched) {
-	                      matchInfoMap.set(conversationId, refScan.matchInfo);
-	                      matchedEntries.push({ index: payload.index, data: payload.meta });
-	                    }
+                  const refScan = scanConversationContentRefsForMatch(
+                    payload.pendingRefs,
+                    contentMap,
+                    textPlan,
+                    payload.remainingTerms,
+                    isCancelled,
+                    payload.matchInfo
+                  );
+                  if (refScan.cancelled) {
+                    cancelled = true;
+                    break;
+                  }
+                  if (refScan.blocked) {
+                    processedCount++;
+                    updateProgress();
+                    continue;
+                  }
 
-	                    processedCount++;
-	                    updateProgress();
+                  if (refScan.matched) {
+                    matchInfoMap.set(conversationId, refScan.matchInfo);
+                    matchedEntries.push({ index: payload.index, data: payload.meta });
+                  }
 
-	                    const now = performance.now();
-	                    if (now - lastYieldTime >= 16) {
-	                      lastYieldTime = now;
-	                      await new Promise(resolve => setTimeout(resolve, 0));
-	                    }
-	                  }
-	                } else if (pendingRefByConversationId.size > 0) {
-	                  // 无法解引用（极少数异常情况），也要推进进度，避免进度条卡死。
-	                  processedCount += pendingRefByConversationId.size;
-	                  updateProgress(true);
-	                }
-	              }
+                  processedCount++;
+                  updateProgress();
 
-	              // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
-	              // 注意：不必每条都 setTimeout(0)，否则会明显拖慢搜索；这里按时间片让出即可。
-	              const now = performance.now();
-	              if (now - lastYieldTime >= 16) {
-	                lastYieldTime = now;
-	                await new Promise(resolve => setTimeout(resolve, 0));
-	              }
-	            }
-	          });
+                  const now = performance.now();
+                  if (now - lastYieldTime >= 16) {
+                    lastYieldTime = now;
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                  }
+                }
+              } else if (pendingRefByConversationId.size > 0) {
+                // 无法解引用（极少数异常情况），也要推进进度，避免进度条卡死。
+                processedCount += pendingRefByConversationId.size;
+                updateProgress(true);
+              }
+            }
 
-	          await Promise.all(workers);
+            // 让出主线程给 UI（进度条/滚动/输入），避免长时间占用导致卡顿。
+            // 注意：不必每条都 setTimeout(0)，否则会明显拖慢搜索；这里按时间片让出即可。
+            const now = performance.now();
+            if (now - lastYieldTime >= 16) {
+              lastYieldTime = now;
+              await new Promise(resolve => setTimeout(resolve, 0));
+            }
+          }
+        });
 
-	          if (panel.dataset.runId !== runId || cancelled) {
-	            if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
-	            return;
-	          }
+        await Promise.all(workers);
 
-          updateProgress(true);
+        if (panel.dataset.runId !== runId || cancelled) {
           if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
+          return;
+        }
 
-          matchedEntries.sort((a, b) => a.index - b.index);
-          const finalResults = matchedEntries.map(entry => entry.data);
-          const durationMs = performance.now() - searchStartTime;
-          const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
-          const scannedCount = Math.min(processedCount, totalItems);
-	          searchCache = {
-	            query: filterText,
-	            normalized: normalizedFilter,
-	            results: finalResults.slice(),
-	            matchMap: matchInfoMap,
-	            timestamp: Date.now(),
-	            meta: {
-	              durationMs,
-	              resultCount: finalResults.length,
-	              excerptCount,
-	              scannedCount
-	            }
-	          };
-	          sourceHistories = searchCache.results.slice();
-	          renderSearchSummary(panel, {
-	            query: filterText,
-	            normalized: normalizedFilter,
-	            durationMs,
-	            resultCount: finalResults.length,
-	            excerptCount,
-	            scannedCount,
-	            reused: canReusePrefixCache
-	          });
-	        }
-	      } else {
-	        removeSearchSummary(panel);
-	        sourceHistories = allHistoriesMeta;
-        effectiveFilterTextForHighlight = '';
+        updateProgress(true);
+        if (searchProgressIndicator.parentNode) searchProgressIndicator.remove();
+
+        matchedEntries.sort((a, b) => a.index - b.index);
+        const finalResults = matchedEntries.map(entry => entry.data);
+        const durationMs = performance.now() - searchStartTime;
+        const excerptCount = Array.from(matchInfoMap.values()).reduce((acc, info) => acc + (Array.isArray(info?.excerpts) ? info.excerpts.length : 0), 0);
+        const scannedCount = Math.min(processedCount, totalItems);
+        searchCache = {
+          query: filterText,
+          normalized: normalizedFilter,
+          key: searchCacheKey,
+          contextKey: searchCacheContextKey,
+          results: finalResults.slice(),
+          matchMap: matchInfoMap,
+          timestamp: Date.now(),
+          meta: {
+            durationMs,
+            resultCount: finalResults.length,
+            excerptCount,
+            scannedCount
+          }
+        };
+        sourceHistories = searchCache.results.slice();
+        renderSearchSummary(panel, {
+          query: filterText,
+          normalized: normalizedFilter,
+          durationMs,
+          resultCount: finalResults.length,
+          excerptCount,
+          scannedCount,
+          reused: canReusePrefixCache
+        });
       }
     }
 
@@ -3223,9 +3656,7 @@ export function createChatHistoryUI(appContext) {
     if (currentDisplayItems.length === 0) {
       removeSkeleton(listContainer);
       const emptyMsg = document.createElement('div');
-      if (isCountFilter) {
-        emptyMsg.textContent = `没有消息数量 ${countOperator} ${countThreshold} 的聊天记录`;
-      } else if (filterText) {
+      if (hasActiveQuery) {
         emptyMsg.textContent = '没有匹配的聊天记录';
       } else {
         emptyMsg.textContent = '暂无聊天记录';
@@ -3243,12 +3674,12 @@ export function createChatHistoryUI(appContext) {
     }
 
     // 首次加载批次
-    await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+    await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
 
     // 使用 IntersectionObserver 进行后续批次加载
     setupEndSentinelObserver(panel, listContainer, async () => {
       if (panel.dataset.runId !== runId) return;
-      await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+      await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
     }, runId);
 
     // Fallback：滚动监听，兼容拖动滚动条与键盘 End 场景
@@ -3262,7 +3693,7 @@ export function createChatHistoryUI(appContext) {
       if (!panelNow) return;
       if (panelNow.dataset.runId !== runId) return;
       if (!isLoadingMoreItems && (listContainer.scrollTop + listContainer.clientHeight >= listContainer.scrollHeight - 48)) {
-        await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+        await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
       }
     };
     listContainer.addEventListener('scroll', listContainer._scrollListener);
@@ -3272,7 +3703,7 @@ export function createChatHistoryUI(appContext) {
       const panelNow = listContainer.closest('#chat-history-panel');
       if (!panelNow || panelNow.dataset.runId !== runId) return;
       while (listContainer.scrollHeight <= listContainer.clientHeight && currentlyRenderedCount < currentDisplayItems.length) {
-        await renderMoreItems(listContainer, pinnedIds, effectiveFilterTextForHighlight, panel.dataset.currentFilter, runId);
+        await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
         await new Promise(r => setTimeout(r, 0));
       }
     });
@@ -3938,7 +4369,7 @@ export function createChatHistoryUI(appContext) {
 
   bindAltPreviewHandlersOnce();
 
-  function createConversationItemElement(conv, filterText, isPinned) {
+  function createConversationItemElement(conv, highlightPlan, isPinned) {
     const item = document.createElement('div');
     item.className = 'chat-history-item';
     item.setAttribute('data-id', conv.id);
@@ -3968,25 +4399,26 @@ export function createChatHistoryUI(appContext) {
     const summaryDiv = document.createElement('div');
     summaryDiv.className = 'summary';
     let displaySummary = conv.summary || '无摘要';
-    const isTextFilterActive = filterText && !filterText.trim().match(/^(>|>=|<|<=|=|==)\s*(\d+)$/);
-    if (isTextFilterActive && displaySummary) {
+    const highlightTerms = Array.isArray(highlightPlan?.termsLower) && highlightPlan.termsLower.length
+      ? highlightPlan.termsLower
+      : (Array.isArray(highlightPlan?.terms) ? highlightPlan.terms : []);
+    const hasHighlightTerms = highlightTerms.length > 0;
+    if (hasHighlightTerms && displaySummary) {
       try {
-        const escapedFilterForSummary = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(escapedFilterForSummary, 'gi');
-        let lastIndex = 0;
-        summaryDiv.textContent = '';
-        let match;
-        while ((match = regex.exec(displaySummary)) !== null) {
-          if (match.index > lastIndex) {
-            summaryDiv.appendChild(document.createTextNode(displaySummary.slice(lastIndex, match.index)));
-          }
-          const mark = document.createElement('mark');
-          mark.textContent = match[0];
-          summaryDiv.appendChild(mark);
-          lastIndex = match.index + match[0].length;
-        }
-        if (lastIndex < displaySummary.length) {
-          summaryDiv.appendChild(document.createTextNode(displaySummary.slice(lastIndex)));
+        const segments = buildHighlightSegments(displaySummary, highlightTerms);
+        if (segments && segments.length) {
+          summaryDiv.textContent = '';
+          segments.forEach((segment) => {
+            if (segment.type === 'mark') {
+              const mark = document.createElement('mark');
+              mark.textContent = segment.value;
+              summaryDiv.appendChild(mark);
+            } else {
+              summaryDiv.appendChild(document.createTextNode(segment.value));
+            }
+          });
+        } else {
+          summaryDiv.textContent = displaySummary;
         }
       } catch (e) {
         console.error("高亮摘要时发生错误:", e);
@@ -3999,8 +4431,8 @@ export function createChatHistoryUI(appContext) {
     let searchMatchInfo = null;
     try {
       const panelNode = document.getElementById('chat-history-panel');
-      const normalizedActiveFilter = panelNode?.dataset.normalizedFilter || '';
-      if (normalizedActiveFilter && searchCache.normalized === normalizedActiveFilter && searchCache.matchMap) {
+      const activeSearchCacheKey = panelNode?.dataset.searchCacheKey || '';
+      if (activeSearchCacheKey && searchCache.key === activeSearchCacheKey && searchCache.matchMap) {
         searchMatchInfo = searchCache.matchMap.get(conv.id) || null;
       }
     } catch (_) {}
@@ -4088,7 +4520,7 @@ export function createChatHistoryUI(appContext) {
     item._previewHoverMeta = hoverMeta;
 
     let snippetRendered = false;
-    if (isTextFilterActive && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
+    if (hasHighlightTerms && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
       const snippetDiv = document.createElement('div');
       snippetDiv.className = 'highlight-snippet';
       searchMatchInfo.excerpts.forEach(excerpt => {
@@ -4111,56 +4543,49 @@ export function createChatHistoryUI(appContext) {
       snippetRendered = true;
     }
 
-    if (!snippetRendered && isTextFilterActive && conv.messages && Array.isArray(conv.messages)) {
-      let snippets = [];
+    if (!snippetRendered && hasHighlightTerms && conv.messages && Array.isArray(conv.messages)) {
+      const snippets = [];
       let totalMatches = 0;
-      const escapedFilter = filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const lowerFilter = filterText.toLowerCase();
-      let highlightRegex;
-      try {
-        highlightRegex = new RegExp(escapedFilter, 'gi');
-      } catch (e) {
-        console.error("创建高亮正则表达式失败:", e);
-        highlightRegex = null;
-      }
+      const highlightRegex = buildHighlightRegex(highlightTerms);
 
       for (const msg of conv.messages) {
         const plainText = extractMessagePlainText(msg);
-        if (plainText) {
-          const content = plainText;
-          const contentLower = content.toLowerCase();
-          if (contentLower.indexOf(lowerFilter) === -1) continue;
-          
-          let startIndex = 0;
-          while (true) {
-            const index = contentLower.indexOf(lowerFilter, startIndex);
-            if (index === -1) break;
-            totalMatches++;
-            if (snippets.length < 8) {
-              const snippetStart = Math.max(0, index - 30);
-              const snippetEnd = Math.min(content.length, index + filterText.length + 30);
-              let snippet = content.substring(snippetStart, snippetEnd);
-              if (highlightRegex) {
-                 snippet = snippet.replace(highlightRegex, '<mark>$&</mark>');
-              }
-              const snippetSpan = document.createElement('span');
-              snippetSpan.innerHTML = `…${snippet}…`;
-              snippets.push(snippetSpan);
+        if (!plainText || !highlightRegex) continue;
+
+        highlightRegex.lastIndex = 0;
+        let matchCount = 0;
+        let match;
+        while ((match = highlightRegex.exec(plainText)) !== null) {
+          matchCount++;
+          if (match[0].length === 0) highlightRegex.lastIndex += 1;
+        }
+        if (matchCount === 0) continue;
+        totalMatches += matchCount;
+
+        if (snippets.length < 8) {
+          const excerpt = buildExcerptSegments(plainText, highlightTerms);
+          if (!excerpt) continue;
+          const line = document.createElement('div');
+          line.className = 'highlight-snippet-line';
+          if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
+          excerpt.segments.forEach(segment => {
+            if (segment.type === 'mark') {
+              const markEl = document.createElement('mark');
+              markEl.textContent = segment.value;
+              line.appendChild(markEl);
+            } else {
+              line.appendChild(document.createTextNode(segment.value));
             }
-            startIndex = index + 1; 
-          }
+          });
+          if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
+          snippets.push(line);
         }
       }
-      
+
       if (snippets.length > 0) {
         const snippetDiv = document.createElement('div');
         snippetDiv.className = 'highlight-snippet';
-        snippets.forEach((span) => {
-          const line = document.createElement('div');
-          line.className = 'highlight-snippet-line';
-          line.appendChild(span);
-          snippetDiv.appendChild(line);
-        });
+        snippets.forEach((line) => snippetDiv.appendChild(line));
         if (totalMatches > snippets.length) {
           const moreMatchesLine = document.createElement('div');
           moreMatchesLine.className = 'highlight-snippet-line';
@@ -4176,9 +4601,9 @@ export function createChatHistoryUI(appContext) {
       const conversation = await getConversationFromCacheOrLoad(conv.id);
       if (conversation) {
         const panelNode = document.getElementById('chat-history-panel');
-        const normalizedActiveFilter = panelNode?.dataset.normalizedFilter || '';
+        const activeSearchCacheKey = panelNode?.dataset.searchCacheKey || '';
         let jumpMessageId = null;
-        if (normalizedActiveFilter && searchCache.normalized === normalizedActiveFilter && searchCache.matchMap) {
+        if (activeSearchCacheKey && searchCache.key === activeSearchCacheKey && searchCache.matchMap) {
           const matchInfo = searchCache.matchMap.get(conv.id);
           if (matchInfo && matchInfo.messageId) {
             jumpMessageId = matchInfo.messageId;
@@ -4282,10 +4707,10 @@ export function createChatHistoryUI(appContext) {
    * 渲染下一批聊天记录项。
    * @param {HTMLElement} listContainer - 列表容器元素
    * @param {string[]} pinnedIds - 当前置顶的ID列表
-   * @param {string} originalFilterTextForHighlight - 用于文本高亮的原始过滤文本
+   * @param {{terms:string[], termsLower:string[], hasTerms:boolean}} highlightPlan - 用于文本高亮的关键词计划
    * @param {string} currentPanelFilter - 调用此函数时面板当前的过滤条件，用于一致性检查
    */
-  async function renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId) {
+  async function renderMoreItems(listContainer, pinnedIds, highlightPlan, currentPanelFilter, currentRunId) {
     if (isLoadingMoreItems) {
       return;
     }
@@ -4364,7 +4789,7 @@ export function createChatHistoryUI(appContext) {
         }
       }
 
-      const itemElement = createConversationItemElement(conv, originalFilterTextForHighlight, isConvPinned);
+      const itemElement = createConversationItemElement(conv, highlightPlan, isConvPinned);
       fragment.appendChild(itemElement);
       itemsRenderedInThisCall++;
     }
@@ -4392,7 +4817,7 @@ export function createChatHistoryUI(appContext) {
         const ds = panelNow._historyDataSource;
         const mayHaveMore = ds && ds.mode === 'paged' && ds.hasMore;
         if (listContainer.scrollHeight <= listContainer.clientHeight && (currentlyRenderedCount < currentDisplayItems.length || mayHaveMore)) {
-          renderMoreItems(listContainer, pinnedIds, originalFilterTextForHighlight, currentPanelFilter, currentRunId);
+          renderMoreItems(listContainer, pinnedIds, highlightPlan, currentPanelFilter, currentRunId);
         }
       });
     }
@@ -6014,7 +6439,7 @@ export function createChatHistoryUI(appContext) {
       filterContainer.className = 'filter-container';
       filterInput = document.createElement('input');
       filterInput.type = 'text';
-      filterInput.placeholder = '筛选文本 或 >10, <5, =20...';
+      filterInput.placeholder = '搜索（URL+消息）：空格=AND，!否定，url:xxx，count:>10，start:2024-01-01';
       
       // 改为输入防抖实时搜索，且输入法构词期间不触发
       let filterDebounceTimer = null;
@@ -6069,8 +6494,8 @@ export function createChatHistoryUI(appContext) {
         const isUrlMode = panel.dataset.urlFilterMode === 'currentUrl';
         const isTreeMode = panel.dataset.branchViewMode === 'tree';
         const base = isUrlMode
-          ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
-          : '筛选文本 或 >10, <5, =20...';
+          ? '本页会话搜索：空格=AND，!否定，count:>10，start:2024-01-01'
+          : '搜索（URL+消息）：空格=AND，!否定，url:xxx，count:>10，start:2024-01-01';
         // 树状视图本身只在“无筛选”时改变排序；这里仅提示用户当前处于该模式
         filterInput.placeholder = isTreeMode ? `${base}（树状）` : base;
       };
