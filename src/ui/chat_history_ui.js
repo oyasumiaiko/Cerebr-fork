@@ -89,10 +89,16 @@ export function createChatHistoryUI(appContext) {
     loaded: false,
     lastLoadTs: 0,
     loadingPromise: null,
-    runId: null
+    runId: null,
+    scanState: null,
+    cleanupTimer: null,
+    inactiveAt: 0,
+    scrollTop: 0,
+    scrollRestorePending: false
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
   const GALLERY_META_PAGE_SIZE = 80;
+  const GALLERY_INACTIVE_CLEANUP_MS = 15 * 60 * 1000;
   const GALLERY_THUMB_MIN_EDGE = 96;
   const GALLERY_THUMB_MAX_EDGE = 280;
   const GALLERY_THUMB_QUALITY = 0.82;
@@ -113,6 +119,10 @@ export function createChatHistoryUI(appContext) {
   let searchCache = createEmptySearchCache();
 
   function invalidateGalleryCache() {
+    if (galleryCache.cleanupTimer) {
+      clearTimeout(galleryCache.cleanupTimer);
+      galleryCache.cleanupTimer = null;
+    }
     if (Array.isArray(galleryCache.items)) {
       galleryCache.items.length = 0;
     } else {
@@ -122,6 +132,13 @@ export function createChatHistoryUI(appContext) {
     galleryCache.lastLoadTs = 0;
     galleryCache.loadingPromise = null;
     galleryCache.runId = null;
+    galleryCache.scanState = null;
+    galleryCache.inactiveAt = 0;
+    galleryCache.scrollTop = 0;
+    galleryCache.scrollRestorePending = false;
+    if (galleryThumbQueue.pending.length) {
+      galleryThumbQueue.pending.length = 0;
+    }
     try {
       const panel = document.getElementById('chat-history-panel');
       if (panel) {
@@ -137,7 +154,8 @@ export function createChatHistoryUI(appContext) {
           }
           revokeGalleryThumbUrls(galleryContent);
           galleryContent.dataset.rendered = '';
-          if (!galleryContent.classList.contains('active')) {
+          const panelVisible = panel.classList.contains('visible');
+          if (!panelVisible || !galleryContent.classList.contains('active')) {
             galleryContent.innerHTML = '';
           }
         }
@@ -151,6 +169,75 @@ export function createChatHistoryUI(appContext) {
       const panel = document.getElementById('chat-history-panel');
       if (panel) removeSearchSummary(panel);
     } catch (_) {}
+  }
+
+  function restoreGalleryScrollIfNeeded(container) {
+    if (!container || !galleryCache.scrollRestorePending) return;
+    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (maxScroll <= 0) return;
+    if (galleryCache.scrollTop <= maxScroll) {
+      container.scrollTop = galleryCache.scrollTop;
+      galleryCache.scrollRestorePending = false;
+    }
+  }
+
+  function setupGalleryScrollTracking(container) {
+    if (!container) return;
+    if (container._galleryScrollListener) return;
+    container._galleryScrollListener = () => {
+      galleryCache.scrollTop = container.scrollTop;
+    };
+    container.addEventListener('scroll', container._galleryScrollListener, { passive: true });
+  }
+
+  function cancelGalleryCleanupTimer() {
+    if (galleryCache.cleanupTimer) {
+      clearTimeout(galleryCache.cleanupTimer);
+      galleryCache.cleanupTimer = null;
+    }
+  }
+
+  function clearGalleryCacheAfterInactive(panel) {
+    const now = Date.now();
+    const panelActive = panel && panel.classList.contains('visible');
+    const activeTab = panelActive ? panel.querySelector('.history-tab.active')?.dataset?.tab : null;
+    if (panelActive && activeTab === 'gallery') {
+      galleryCache.inactiveAt = 0;
+      return;
+    }
+    if (galleryCache.inactiveAt && (now - galleryCache.inactiveAt < GALLERY_INACTIVE_CLEANUP_MS)) {
+      return;
+    }
+    invalidateGalleryCache();
+  }
+
+  function scheduleGalleryCleanup(panel) {
+    cancelGalleryCleanupTimer();
+    galleryCache.inactiveAt = Date.now();
+    galleryCache.cleanupTimer = setTimeout(() => {
+      const panelNow = panel || document.getElementById('chat-history-panel');
+      clearGalleryCacheAfterInactive(panelNow);
+    }, GALLERY_INACTIVE_CLEANUP_MS);
+  }
+
+  function markGalleryInactive(panel) {
+    const galleryContent = panel?.querySelector('.history-tab-content[data-tab="gallery"]');
+    if (galleryContent) {
+      galleryCache.scrollTop = galleryContent.scrollTop;
+    }
+    scheduleGalleryCleanup(panel);
+  }
+
+  function markGalleryActive(panel, container) {
+    cancelGalleryCleanupTimer();
+    galleryCache.inactiveAt = 0;
+    if (container) {
+      setupGalleryScrollTracking(container);
+      if (galleryCache.scrollTop > 0) {
+        galleryCache.scrollRestorePending = true;
+        requestAnimationFrame(() => restoreGalleryScrollIfNeeded(container));
+      }
+    }
   }
 
   function scheduleGalleryThumbDrain() {
@@ -541,6 +628,11 @@ export function createChatHistoryUI(appContext) {
       if (listContainer && listContainer._scrollListener) {
         listContainer.removeEventListener('scroll', listContainer._scrollListener);
         listContainer._scrollListener = null;
+      }
+      const galleryContent = panel.querySelector('.history-tab-content[data-tab="gallery"]');
+      if (galleryContent && galleryContent._galleryScrollListener) {
+        galleryContent.removeEventListener('scroll', galleryContent._galleryScrollListener);
+        galleryContent._galleryScrollListener = null;
       }
       if (panel._ioObserver) {
         panel._ioObserver.disconnect();
@@ -1509,6 +1601,7 @@ export function createChatHistoryUI(appContext) {
     if (panel && panel.classList.contains('visible')) {
       // 关闭面板时一并关闭 hover 预览 tooltip，避免遗留浮层
       hideChatHistoryPreviewTooltip();
+      markGalleryInactive(panel);
       panel.classList.remove('visible');
       panel.addEventListener('transitionend', function handler(e) {
         if (e.propertyName === 'opacity' && !panel.classList.contains('visible')) {
@@ -3805,7 +3898,7 @@ export function createChatHistoryUI(appContext) {
     galleryCache.runId = runId;
 
     const runPromise = (async () => {
-      if (forceRefresh || !galleryCache.loaded) {
+      if (forceRefresh) {
         if (Array.isArray(galleryCache.items)) {
           galleryCache.items.length = 0;
         } else {
@@ -3813,10 +3906,28 @@ export function createChatHistoryUI(appContext) {
         }
         galleryCache.loaded = false;
         galleryCache.lastLoadTs = 0;
+        galleryCache.scanState = null;
       }
 
       const images = galleryCache.items;
-      const seenKeys = new Set();
+      if (!galleryCache.scanState) {
+        galleryCache.scanState = {
+          cursor: null,
+          hasMore: true,
+          seenKeys: new Set(),
+          scannedConversations: 0
+        };
+      }
+      const scanState = galleryCache.scanState;
+      const seenKeys = scanState.seenKeys instanceof Set ? scanState.seenKeys : new Set();
+      scanState.seenKeys = seenKeys;
+
+      if (seenKeys.size === 0 && images.length) {
+        images.forEach((item) => {
+          const key = item?.dedupeKey || (item?.url ? `url:${item.url}` : '');
+          if (key) seenKeys.add(key);
+        });
+      }
       let downloadRoot = null;
       try {
         downloadRoot = await loadDownloadRoot();
@@ -3881,9 +3992,9 @@ export function createChatHistoryUI(appContext) {
         return fallback ? `url:${fallback}` : '';
       };
 
-      let cursor = null;
-      let hasMore = true;
-      let scannedConversations = 0;
+      let cursor = scanState.cursor || null;
+      let hasMore = scanState.hasMore !== false;
+      let scannedConversations = scanState.scannedConversations || 0;
       // 分页流式扫描：边读边产出，避免一次性“收集图片”阻塞 UI
       while (hasMore) {
         if (shouldCancel() || galleryCache.runId !== runId) {
@@ -3904,8 +4015,14 @@ export function createChatHistoryUI(appContext) {
         const metas = Array.isArray(page?.items) ? page.items : [];
         cursor = page?.cursor || null;
         hasMore = !!page?.hasMore;
+        scanState.cursor = cursor;
+        scanState.hasMore = hasMore;
 
-        if (!metas.length) break;
+        if (!metas.length) {
+          hasMore = false;
+          scanState.hasMore = false;
+          break;
+        }
 
         for (const meta of metas) {
           if (shouldCancel() || galleryCache.runId !== runId) {
@@ -3913,6 +4030,7 @@ export function createChatHistoryUI(appContext) {
           }
           const conv = await getConversationById(meta.id, true);
           scannedConversations += 1;
+          scanState.scannedConversations = scannedConversations;
           if (!conv || !Array.isArray(conv.messages)) {
             if (scannedConversations % 4 === 0) {
               flushBatch();
@@ -3953,7 +4071,8 @@ export function createChatHistoryUI(appContext) {
                 timestamp,
                 summary: conv.summary || '',
                 title: conv.title || '',
-                domain: convDomain || '未知来源'
+                domain: convDomain || '未知来源',
+                dedupeKey
               });
             }
 
@@ -3977,7 +4096,7 @@ export function createChatHistoryUI(appContext) {
       }
 
       flushBatch(null, { force: true, done: true });
-      galleryCache.loaded = true;
+      galleryCache.loaded = !scanState.hasMore;
       galleryCache.lastLoadTs = Date.now();
       return images;
     })();
@@ -4017,6 +4136,7 @@ export function createChatHistoryUI(appContext) {
         container._galleryLazyObserver.disconnect();
         container._galleryLazyObserver = null;
       }
+      setupGalleryScrollTracking(container);
 
       const status = document.createElement('div');
       status.className = 'gallery-stream-status';
@@ -4186,6 +4306,7 @@ export function createChatHistoryUI(appContext) {
         requestAnimationFrame(() => {
           renderScheduled = false;
           appendBatch();
+          restoreGalleryScrollIfNeeded(container);
           if (container.scrollHeight <= container.clientHeight && renderedCount < images.length) {
             scheduleAppend();
           }
@@ -4218,6 +4339,7 @@ export function createChatHistoryUI(appContext) {
         onProgress: () => {
           if (shouldCancel()) return;
           updateStatus();
+          restoreGalleryScrollIfNeeded(container);
         }
       });
 
@@ -4231,6 +4353,7 @@ export function createChatHistoryUI(appContext) {
       } else {
         status.remove();
         appendBatch();
+        restoreGalleryScrollIfNeeded(container);
       }
       container.dataset.rendered = 'true';
     })().catch((error) => {
@@ -4536,6 +4659,7 @@ export function createChatHistoryUI(appContext) {
       || tabBar.querySelector('.history-tab');
     if (!targetTabEl) return;
 
+    const prevActiveTabName = tabBar.querySelector('.history-tab.active')?.dataset?.tab || '';
     const resolvedTabName = targetTabEl.dataset.tab || 'history';
     const targetContent = tabContents.querySelector(`.history-tab-content[data-tab="${resolvedTabName}"]`);
 
@@ -4547,6 +4671,10 @@ export function createChatHistoryUI(appContext) {
       targetContent.classList.add('active');
     }
 
+    if (prevActiveTabName === 'gallery' && resolvedTabName !== 'gallery') {
+      markGalleryInactive(panel);
+    }
+
     if (resolvedTabName === 'history') {
       const filterInput = panel.querySelector('.filter-container input[type="text"]');
       requestAnimationFrame(() => filterInput?.focus());
@@ -4554,6 +4682,7 @@ export function createChatHistoryUI(appContext) {
     }
 
     if (resolvedTabName === 'gallery') {
+      markGalleryActive(panel, targetContent);
       if (targetContent) await renderGalleryTab(targetContent);
       return;
     }
