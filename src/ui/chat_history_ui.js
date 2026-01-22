@@ -91,6 +91,12 @@ export function createChatHistoryUI(appContext) {
     loadingPromise: null
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
+  const GALLERY_THUMB_MIN_EDGE = 96;
+  const GALLERY_THUMB_MAX_EDGE = 280;
+  const GALLERY_THUMB_QUALITY = 0.82;
+  const GALLERY_THUMB_CONCURRENCY = 3;
+  const GALLERY_THUMB_ROOT_MARGIN = '640px 0px';
+  const galleryThumbQueue = { active: 0, pending: [], scheduled: false };
 
   function createEmptySearchCache() {
     return {
@@ -122,6 +128,7 @@ export function createChatHistoryUI(appContext) {
             galleryContent._galleryLazyObserver.disconnect();
             galleryContent._galleryLazyObserver = null;
           }
+          revokeGalleryThumbUrls(galleryContent);
           galleryContent.dataset.rendered = '';
           if (!galleryContent.classList.contains('active')) {
             galleryContent.innerHTML = '';
@@ -137,6 +144,126 @@ export function createChatHistoryUI(appContext) {
       const panel = document.getElementById('chat-history-panel');
       if (panel) removeSearchSummary(panel);
     } catch (_) {}
+  }
+
+  function scheduleGalleryThumbDrain() {
+    if (galleryThumbQueue.scheduled) return;
+    galleryThumbQueue.scheduled = true;
+    const run = () => {
+      galleryThumbQueue.scheduled = false;
+      drainGalleryThumbQueue();
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(run, { timeout: 240 });
+    } else {
+      setTimeout(run, 0);
+    }
+  }
+
+  function drainGalleryThumbQueue() {
+    while (galleryThumbQueue.active < GALLERY_THUMB_CONCURRENCY && galleryThumbQueue.pending.length > 0) {
+      const item = galleryThumbQueue.pending.shift();
+      if (!item) break;
+      galleryThumbQueue.active += 1;
+      Promise.resolve()
+        .then(item.task)
+        .catch(() => null)
+        .finally(() => {
+          galleryThumbQueue.active = Math.max(0, galleryThumbQueue.active - 1);
+          if (typeof item.resolve === 'function') item.resolve();
+          drainGalleryThumbQueue();
+        });
+    }
+  }
+
+  function enqueueGalleryThumbTask(task) {
+    if (typeof task !== 'function') return Promise.resolve();
+    return new Promise((resolve) => {
+      galleryThumbQueue.pending.push({ task, resolve });
+      scheduleGalleryThumbDrain();
+    });
+  }
+
+  function getGalleryThumbTargetSize(img) {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const base = Math.round((img?.clientWidth || GALLERY_THUMB_MIN_EDGE) * dpr);
+    return Math.max(GALLERY_THUMB_MIN_EDGE, Math.min(GALLERY_THUMB_MAX_EDGE, base || GALLERY_THUMB_MIN_EDGE));
+  }
+
+  function isGifImageReference(imageUrlObj, resolvedUrl) {
+    const mime = String(imageUrlObj?.mimeType || imageUrlObj?.mime_type || '').toLowerCase();
+    if (mime.includes('gif')) return true;
+    const candidates = [imageUrlObj?.path, imageUrlObj?.url, resolvedUrl].filter(Boolean);
+    return candidates.some((value) => {
+      const lower = String(value).toLowerCase();
+      if (lower.startsWith('data:image/gif')) return true;
+      const clean = lower.split('#')[0].split('?')[0];
+      return clean.endsWith('.gif');
+    });
+  }
+
+  function revokeGalleryThumbUrls(container) {
+    if (!container) return;
+    try {
+      const imgs = container.querySelectorAll('img[data-thumb-url]');
+      imgs.forEach((img) => {
+        const url = img?.dataset?.thumbUrl || '';
+        if (url && url.startsWith('blob:')) {
+          URL.revokeObjectURL(url);
+        }
+      });
+    } catch (_) {}
+  }
+
+  function canvasToBlobSafe(canvas, type, quality) {
+    return new Promise((resolve) => {
+      try {
+        if (canvas && typeof canvas.convertToBlob === 'function') {
+          canvas.convertToBlob({ type, quality }).then(resolve).catch(() => resolve(null));
+          return;
+        }
+        if (!canvas || typeof canvas.toBlob !== 'function') {
+          resolve(null);
+          return;
+        }
+        canvas.toBlob((blob) => resolve(blob || null), type, quality);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function generateGalleryThumbUrl(sourceUrl, targetSize) {
+    if (!sourceUrl) return null;
+    try {
+      const img = await new Promise((resolve) => {
+        const image = new Image();
+        image.decoding = 'async';
+        image.crossOrigin = 'anonymous';
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = sourceUrl;
+      });
+      if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+
+      const minSide = Math.min(img.naturalWidth, img.naturalHeight);
+      const sx = Math.max(0, Math.floor((img.naturalWidth - minSide) / 2));
+      const sy = Math.max(0, Math.floor((img.naturalHeight - minSide) / 2));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
+
+      const blob = await canvasToBlobSafe(canvas, 'image/jpeg', GALLERY_THUMB_QUALITY);
+      if (!blob) return null;
+      return URL.createObjectURL(blob);
+    } catch (_) {
+      return null;
+    }
   }
 
   function invalidateTrendStatsCache() {
@@ -3765,6 +3892,7 @@ export function createChatHistoryUI(appContext) {
         for (const part of orderedParts) {
           const resolvedUrl = resolveImageUrlForGallery(part.imageUrl);
           if (!resolvedUrl) continue;
+          if (isGifImageReference(part.imageUrl, resolvedUrl)) continue;
           const dedupeKey = buildGalleryImageKey(part.imageUrl, resolvedUrl);
           if (!dedupeKey || seenKeys.has(dedupeKey)) continue;
           seenKeys.add(dedupeKey);
@@ -3814,6 +3942,7 @@ export function createChatHistoryUI(appContext) {
 
     const renderPromise = (async () => {
       const images = await loadGalleryImages(forceRefresh);
+      revokeGalleryThumbUrls(container);
       container.innerHTML = '';
       if (!images || images.length === 0) {
         const empty = document.createElement('div');
@@ -3841,22 +3970,63 @@ export function createChatHistoryUI(appContext) {
       grid.appendChild(sentinel);
 
       const placeholderSrc = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-      // 仅在接近可视区域时加载图片，避免一次性解码过多大图导致卡顿
-      const lazyObserver = (typeof IntersectionObserver === 'function')
-        ? new IntersectionObserver((entries, observer) => {
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting) return;
-            const img = entry.target;
-            const realSrc = img?.dataset?.src || '';
-            if (realSrc) {
-              img.src = realSrc;
-              img.removeAttribute('data-src');
+      const ensureThumbLoaded = (img) => {
+        if (!img || !img.dataset) return;
+        if (img.dataset.thumbState === 'loading' || img.dataset.thumbState === 'loaded') return;
+        const sourceUrl = img.dataset.src || '';
+        if (!sourceUrl) return;
+        if (img.dataset.thumbFallback === 'origin') {
+          img.dataset.thumbState = 'loaded';
+          img.dataset.thumbKind = 'origin';
+          img.src = sourceUrl;
+          return;
+        }
+
+        const token = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        img.dataset.thumbToken = token;
+        img.dataset.thumbState = 'loading';
+
+        enqueueGalleryThumbTask(async () => {
+          if (!img.isConnected || img.dataset.thumbToken !== token) return;
+          const targetSize = getGalleryThumbTargetSize(img);
+          const thumbUrl = await generateGalleryThumbUrl(sourceUrl, targetSize);
+          if (!img.isConnected || img.dataset.thumbToken !== token) {
+            if (thumbUrl && thumbUrl.startsWith('blob:')) {
+              URL.revokeObjectURL(thumbUrl);
             }
-            observer.unobserve(img);
+            return;
+          }
+          if (thumbUrl) {
+            const oldThumb = img.dataset.thumbUrl;
+            if (oldThumb && oldThumb.startsWith('blob:')) {
+              URL.revokeObjectURL(oldThumb);
+            }
+            img.dataset.thumbUrl = thumbUrl;
+            img.dataset.thumbKind = 'thumb';
+            img.src = thumbUrl;
+          } else {
+            // 生成缩略图失败时回退到原图（少量兜底场景）
+            img.dataset.thumbFallback = 'origin';
+            img.dataset.thumbKind = 'origin';
+            img.src = sourceUrl;
+          }
+          img.dataset.thumbState = 'loaded';
+        });
+      };
+
+      // 仅在接近可视区域时生成缩略图，生成后在本次会话内保留，避免反复读取原图
+      const lazyObserver = (typeof IntersectionObserver === 'function')
+        ? new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            const img = entry.target;
+            if (!img) return;
+            if (entry.isIntersecting) {
+              ensureThumbLoaded(img);
+            }
           });
         }, {
           root: container,
-          rootMargin: '400px 0px'
+          rootMargin: GALLERY_THUMB_ROOT_MARGIN
         })
         : null;
       container._galleryLazyObserver = lazyObserver;
@@ -3876,12 +4046,13 @@ export function createChatHistoryUI(appContext) {
           const img = document.createElement('img');
           img.loading = 'lazy';
           img.decoding = 'async';
+          img.dataset.src = record.url;
+          img.dataset.thumbState = 'idle';
+          img.src = placeholderSrc;
           if (lazyObserver) {
-            img.src = placeholderSrc;
-            img.dataset.src = record.url;
             lazyObserver.observe(img);
           } else {
-            img.src = record.url;
+            ensureThumbLoaded(img);
           }
           img.alt = record.summary || record.title || record.domain || '聊天图片';
           item.appendChild(img);
@@ -3923,10 +4094,6 @@ export function createChatHistoryUI(appContext) {
           if (container._galleryObserver) {
             container._galleryObserver.disconnect();
             container._galleryObserver = null;
-          }
-          if (container._galleryLazyObserver) {
-            container._galleryLazyObserver.disconnect();
-            container._galleryLazyObserver = null;
           }
           if (sentinel.parentNode) {
             sentinel.remove();
