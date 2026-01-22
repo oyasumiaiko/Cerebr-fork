@@ -533,8 +533,15 @@ export function createChatHistoryUI(appContext) {
     groupGrid.appendChild(frag);
   }
 
-  function applyGalleryFitLayout(container) {
+  function applyGalleryFitLayout(container, targetGrids = null) {
     if (!container) return;
+    const list = Array.isArray(targetGrids)
+      ? targetGrids.filter(Boolean)
+      : (targetGrids ? [targetGrids] : null);
+    if (list && list.length) {
+      list.forEach((grid) => layoutGalleryGroupFit(grid));
+      return;
+    }
     const grids = container.querySelectorAll('.gallery-group-grid');
     grids.forEach((grid) => layoutGalleryGroupFit(grid));
   }
@@ -543,6 +550,21 @@ export function createChatHistoryUI(appContext) {
     if (!container || galleryCache.layoutMode !== 'fit') return;
     const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const force = !!normalizedOptions.force;
+    const targetGrids = normalizedOptions.targetGrids || normalizedOptions.targetGrid || null;
+    const targetList = Array.isArray(targetGrids)
+      ? targetGrids.filter(Boolean)
+      : (targetGrids ? [targetGrids] : null);
+
+    if (targetList && targetList.length && !force) {
+      // 只标记当前新增的分组，避免旧分组反复重排导致闪烁。
+      if (!container._galleryFitDirtyGrids) {
+        container._galleryFitDirtyGrids = new Set();
+      }
+      targetList.forEach((grid) => container._galleryFitDirtyGrids.add(grid));
+    } else if (force && container._galleryFitDirtyGrids) {
+      container._galleryFitDirtyGrids.clear();
+    }
+
     if (container._galleryFitLayoutRaf) {
       if (!force) return;
       if (typeof cancelAnimationFrame === 'function') {
@@ -558,7 +580,12 @@ export function createChatHistoryUI(appContext) {
       container._galleryFitLayoutRaf = null;
       if (!container.isConnected) return;
       if (galleryCache.layoutMode !== 'fit') return;
-      applyGalleryFitLayout(container);
+      let grids = null;
+      if (!force && container._galleryFitDirtyGrids && container._galleryFitDirtyGrids.size) {
+        grids = Array.from(container._galleryFitDirtyGrids);
+        container._galleryFitDirtyGrids.clear();
+      }
+      applyGalleryFitLayout(container, grids);
     });
   }
 
@@ -5177,10 +5204,12 @@ export function createChatHistoryUI(appContext) {
       const appendBatch = () => {
         const nextCount = Math.min(renderedCount + GALLERY_RENDER_BATCH_SIZE, images.length);
         if (nextCount <= renderedCount) return;
+        const touchedGrids = new Set();
         for (let i = renderedCount; i < nextCount; i++) {
           const record = images[i];
           const group = getOrCreateGalleryGroup(record);
           const targetGrid = group?.grid || grid;
+          if (targetGrid) touchedGrids.add(targetGrid);
           const item = document.createElement('div');
           item.className = 'gallery-item';
           if (record.messageKey) {
@@ -5207,7 +5236,7 @@ export function createChatHistoryUI(appContext) {
               record.aspectRatio = nextRatio;
             }
             if (galleryCache.layoutMode === 'fit') {
-              scheduleGalleryFitLayout(container);
+              scheduleGalleryFitLayout(container, { targetGrid: item.closest('.gallery-group-grid') });
             }
           });
           img.src = placeholderSrc;
@@ -5266,7 +5295,7 @@ export function createChatHistoryUI(appContext) {
         }
         renderedCount = nextCount;
         if (galleryCache.layoutMode === 'fit') {
-          scheduleGalleryFitLayout(container);
+          scheduleGalleryFitLayout(container, { targetGrids: Array.from(touchedGrids) });
         }
         if (grid.style.display === 'none') {
           grid.style.display = '';
