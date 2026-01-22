@@ -2035,7 +2035,7 @@ input:checked + .slider::before {
     position: relative;
     aspect-ratio: 1 / 1;
     overflow: hidden;
-    border-radius: 6px;
+    border-radius: 0;
     background: color-mix(in srgb, var(--cerebr-control-bg) 82%, transparent);
     cursor: pointer;
     content-visibility: auto;
