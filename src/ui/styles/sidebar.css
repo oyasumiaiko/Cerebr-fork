@@ -2055,6 +2055,22 @@ input:checked + .slider::before {
     align-content: start;
 }
 
+.history-tab-content[data-tab="gallery"][data-gallery-layout="fit"] .gallery-group-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-layout="fit"] .gallery-fit-row {
+    display: flex;
+    gap: 2px;
+    align-items: stretch;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-layout="fit"] .gallery-item {
+    aspect-ratio: auto;
+}
+
 .gallery-group-label {
     padding: 6px 6px 4px;
     font-size: 12px;

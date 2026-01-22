@@ -22,10 +22,11 @@ self.onmessage = async (event) => {
       self.postMessage({ id, ok: false, error: 'decode' });
       return;
     }
-    const minSide = Math.min(bitmap.width, bitmap.height);
-    const sx = Math.max(0, Math.floor((bitmap.width - minSide) / 2));
-    const sy = Math.max(0, Math.floor((bitmap.height - minSide) / 2));
-    const canvas = new OffscreenCanvas(size, size);
+    const maxSide = Math.max(bitmap.width, bitmap.height);
+    const scale = maxSide > 0 ? (size / maxSide) : 1;
+    const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
+    const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(targetWidth, targetHeight);
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       if (bitmap && bitmap.close) bitmap.close();
@@ -34,7 +35,7 @@ self.onmessage = async (event) => {
     }
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(bitmap, sx, sy, minSide, minSide, 0, 0, size, size);
+    ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
     if (bitmap && bitmap.close) bitmap.close();
     const outBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
     if (!outBlob) {

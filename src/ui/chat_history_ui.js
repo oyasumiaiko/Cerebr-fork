@@ -99,7 +99,8 @@ export function createChatHistoryUI(appContext) {
     scrollRestorePending: false,
     selectMode: false,
     selectedKeys: new Set(),
-    thumbSize: 92
+    thumbSize: 92,
+    layoutMode: 'grid'
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
   const GALLERY_META_PAGE_SIZE = 80;
@@ -114,6 +115,9 @@ export function createChatHistoryUI(appContext) {
   const GALLERY_THUMB_SIZE_MIN = 72;
   const GALLERY_THUMB_SIZE_MAX = 160;
   const GALLERY_THUMB_SIZE_STEP = 4;
+  const GALLERY_FIT_GAP = 2;
+  const GALLERY_FIT_ROW_MIN_SCALE = 0.65;
+  const GALLERY_FIT_ROW_MAX_SCALE = 1.35;
   const galleryThumbQueue = { active: 0, pending: [], scheduled: false };
   // 使用 Worker + OffscreenCanvas 生成缩略图，降低主线程解码/绘制的阻塞。
   const galleryThumbWorkerPool = {
@@ -178,6 +182,18 @@ export function createChatHistoryUI(appContext) {
           if (galleryContent._galleryLazyObserver) {
             galleryContent._galleryLazyObserver.disconnect();
             galleryContent._galleryLazyObserver = null;
+          }
+          if (galleryContent._galleryFitLayoutRaf) {
+            if (typeof cancelAnimationFrame === 'function') {
+              cancelAnimationFrame(galleryContent._galleryFitLayoutRaf);
+            }
+            galleryContent._galleryFitLayoutRaf = null;
+          }
+          if (galleryContent._galleryFitResizeObserver) {
+            try {
+              galleryContent._galleryFitResizeObserver.disconnect();
+            } catch (_) {}
+            galleryContent._galleryFitResizeObserver = null;
           }
           if (galleryContent._galleryGroupMap instanceof Map) {
             galleryContent._galleryGroupMap.clear();
@@ -395,6 +411,170 @@ export function createChatHistoryUI(appContext) {
     return `${margin}px 0px`;
   }
 
+  function setGalleryItemAspectRatio(item, ratio) {
+    if (!item) return null;
+    const raw = Number(ratio);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    const clamped = Math.min(4, Math.max(0.25, raw));
+    const prev = Number(item.dataset.aspectRatio || 0);
+    if (Number.isFinite(prev) && Math.abs(prev - clamped) < 0.01) return clamped;
+    item.dataset.aspectRatio = clamped.toFixed(4);
+    return clamped;
+  }
+
+  function getGalleryItemAspectRatio(item) {
+    if (!item) return 1;
+    const cached = Number(item.dataset.aspectRatio || 0);
+    if (Number.isFinite(cached) && cached > 0) return cached;
+    const img = item.querySelector('img');
+    const width = Number(img?.naturalWidth || 0);
+    const height = Number(img?.naturalHeight || 0);
+    if (width > 0 && height > 0) {
+      return Math.min(4, Math.max(0.25, width / height));
+    }
+    return 1;
+  }
+
+  function flattenGalleryGroupGrid(groupGrid) {
+    if (!groupGrid) return;
+    const items = Array.from(groupGrid.querySelectorAll('.gallery-item'));
+    if (!items.length) {
+      groupGrid.innerHTML = '';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    items.forEach((item) => {
+      item.style.width = '';
+      item.style.height = '';
+      item.style.flex = '';
+      frag.appendChild(item);
+    });
+    groupGrid.innerHTML = '';
+    groupGrid.appendChild(frag);
+  }
+
+  function layoutGalleryGroupFit(groupGrid) {
+    if (!groupGrid) return;
+    const items = Array.from(groupGrid.querySelectorAll('.gallery-item'));
+    if (!items.length) return;
+    const containerWidth = Math.max(0, groupGrid.clientWidth);
+    if (!containerWidth) return;
+
+    // 按目标高度累加宽度，超过容器宽度后回算行高，实现“铺满”效果。
+    const targetHeight = Math.max(1, Math.round(Number(galleryCache.thumbSize) || GALLERY_THUMB_SIZE_DEFAULT));
+    const minHeight = Math.max(1, Math.round(targetHeight * GALLERY_FIT_ROW_MIN_SCALE));
+    const maxHeight = Math.max(minHeight, Math.round(targetHeight * GALLERY_FIT_ROW_MAX_SCALE));
+    const gap = GALLERY_FIT_GAP;
+
+    const frag = document.createDocumentFragment();
+    let rowItems = [];
+    let rowRatio = 0;
+
+    const flushRow = (row, height, { justify = true } = {}) => {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'gallery-fit-row';
+      const safeHeight = Math.max(1, Math.round(height));
+      const availableWidth = Math.max(1, containerWidth - gap * Math.max(0, row.length - 1));
+      const widths = row.map((entry) => Math.max(1, Math.round(entry.ratio * safeHeight)));
+      if (justify && row.length > 0) {
+        const used = widths.reduce((sum, value) => sum + value, 0);
+        const diff = availableWidth - used;
+        if (Math.abs(diff) >= 1) {
+          widths[widths.length - 1] = Math.max(1, widths[widths.length - 1] + diff);
+        }
+      }
+      row.forEach((entry, index) => {
+        const width = widths[index];
+        entry.item.style.width = `${width}px`;
+        entry.item.style.height = `${safeHeight}px`;
+        entry.item.style.flex = '0 0 auto';
+        rowEl.appendChild(entry.item);
+      });
+      frag.appendChild(rowEl);
+    };
+
+    for (const item of items) {
+      const ratio = getGalleryItemAspectRatio(item);
+      rowItems.push({ item, ratio });
+      rowRatio += ratio;
+      const rowWidthAtTarget = rowRatio * targetHeight + gap * Math.max(0, rowItems.length - 1);
+      if (rowWidthAtTarget >= containerWidth && rowItems.length > 0) {
+        let rowHeight = (containerWidth - gap * Math.max(0, rowItems.length - 1)) / rowRatio;
+        if (rowHeight < minHeight && rowItems.length > 1) {
+          const last = rowItems.pop();
+          rowRatio -= last.ratio;
+          rowHeight = rowRatio > 0
+            ? (containerWidth - gap * Math.max(0, rowItems.length - 1)) / rowRatio
+            : targetHeight;
+          flushRow(rowItems, Math.max(minHeight, Math.min(maxHeight, rowHeight)), { justify: true });
+          rowItems = [last];
+          rowRatio = last.ratio;
+        } else {
+          flushRow(rowItems, Math.max(minHeight, Math.min(maxHeight, rowHeight)), { justify: true });
+          rowItems = [];
+          rowRatio = 0;
+        }
+      }
+    }
+
+    if (rowItems.length) {
+      const availableWidth = containerWidth - gap * Math.max(0, rowItems.length - 1);
+      let rowHeight = rowRatio > 0 ? (availableWidth / rowRatio) : targetHeight;
+      rowHeight = Math.min(targetHeight, rowHeight);
+      flushRow(rowItems, rowHeight, { justify: false });
+    }
+
+    groupGrid.innerHTML = '';
+    groupGrid.appendChild(frag);
+  }
+
+  function applyGalleryFitLayout(container) {
+    if (!container) return;
+    const grids = container.querySelectorAll('.gallery-group-grid');
+    grids.forEach((grid) => layoutGalleryGroupFit(grid));
+  }
+
+  function scheduleGalleryFitLayout(container, options = {}) {
+    if (!container || galleryCache.layoutMode !== 'fit') return;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const force = !!normalizedOptions.force;
+    if (container._galleryFitLayoutRaf) {
+      if (!force) return;
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(container._galleryFitLayoutRaf);
+      }
+      container._galleryFitLayoutRaf = null;
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      applyGalleryFitLayout(container);
+      return;
+    }
+    container._galleryFitLayoutRaf = requestAnimationFrame(() => {
+      container._galleryFitLayoutRaf = null;
+      if (!container.isConnected) return;
+      if (galleryCache.layoutMode !== 'fit') return;
+      applyGalleryFitLayout(container);
+    });
+  }
+
+  function setupGalleryFitResizeObserver(container) {
+    if (!container || container._galleryFitResizeObserver) return;
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => {
+      scheduleGalleryFitLayout(container, { force: true });
+    });
+    observer.observe(container);
+    container._galleryFitResizeObserver = observer;
+  }
+
+  function teardownGalleryFitResizeObserver(container) {
+    if (!container || !container._galleryFitResizeObserver) return;
+    try {
+      container._galleryFitResizeObserver.disconnect();
+    } catch (_) {}
+    container._galleryFitResizeObserver = null;
+  }
+
   function isGifImageReference(imageUrlObj, resolvedUrl) {
     const mime = String(imageUrlObj?.mimeType || imageUrlObj?.mime_type || '').toLowerCase();
     if (mime.includes('gif')) return true;
@@ -582,17 +762,18 @@ export function createChatHistoryUI(appContext) {
       });
       if (!img || !img.naturalWidth || !img.naturalHeight) return null;
 
-      const minSide = Math.min(img.naturalWidth, img.naturalHeight);
-      const sx = Math.max(0, Math.floor((img.naturalWidth - minSide) / 2));
-      const sy = Math.max(0, Math.floor((img.naturalHeight - minSide) / 2));
+      const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
+      const scale = maxSide > 0 ? (targetSize / maxSide) : 1;
+      const targetWidth = Math.max(1, Math.round(img.naturalWidth * scale));
+      const targetHeight = Math.max(1, Math.round(img.naturalHeight * scale));
       const canvas = document.createElement('canvas');
-      canvas.width = targetSize;
-      canvas.height = targetSize;
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) return null;
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
+      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
       const blob = await canvasToBlobSafe(canvas, 'image/jpeg', GALLERY_THUMB_QUALITY);
       if (!blob) return null;
@@ -877,6 +1058,18 @@ export function createChatHistoryUI(appContext) {
       if (galleryContent && galleryContent._galleryScrollListener) {
         galleryContent.removeEventListener('scroll', galleryContent._galleryScrollListener);
         galleryContent._galleryScrollListener = null;
+      }
+      if (galleryContent && galleryContent._galleryFitLayoutRaf) {
+        if (typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(galleryContent._galleryFitLayoutRaf);
+        }
+        galleryContent._galleryFitLayoutRaf = null;
+      }
+      if (galleryContent && galleryContent._galleryFitResizeObserver) {
+        try {
+          galleryContent._galleryFitResizeObserver.disconnect();
+        } catch (_) {}
+        galleryContent._galleryFitResizeObserver = null;
       }
       if (panel._ioObserver) {
         panel._ioObserver.disconnect();
@@ -4621,6 +4814,9 @@ export function createChatHistoryUI(appContext) {
       );
       galleryCache.thumbSize = currentThumbSize;
       container.style.setProperty('--gallery-thumb-size', `${currentThumbSize}px`);
+      const layoutMode = galleryCache.layoutMode === 'fit' ? 'fit' : 'grid';
+      galleryCache.layoutMode = layoutMode;
+      container.dataset.galleryLayout = layoutMode;
 
       const sizeControl = document.createElement('div');
       sizeControl.className = 'gallery-size-control';
@@ -4640,6 +4836,9 @@ export function createChatHistoryUI(appContext) {
       sizeControl.appendChild(sizeSlider);
       sizeControl.appendChild(sizeValue);
 
+      const layoutToggleBtn = document.createElement('button');
+      layoutToggleBtn.className = 'gallery-toolbar-btn gallery-layout-toggle';
+
       const deleteButton = document.createElement('button');
       deleteButton.className = 'gallery-toolbar-btn gallery-delete-btn';
       deleteButton.textContent = '删除选中';
@@ -4647,6 +4846,7 @@ export function createChatHistoryUI(appContext) {
       toolbarLeft.appendChild(selectToggleBtn);
       toolbarLeft.appendChild(selectionCount);
       toolbarRight.appendChild(sizeControl);
+      toolbarRight.appendChild(layoutToggleBtn);
       toolbarRight.appendChild(deleteButton);
       toolbar.appendChild(toolbarLeft);
       toolbar.appendChild(toolbarRight);
@@ -4681,11 +4881,44 @@ export function createChatHistoryUI(appContext) {
         // 仅调整显示尺寸，不触发缩略图重新生成。
         container.style.setProperty('--gallery-thumb-size', `${nextSize}px`);
         sizeValue.textContent = `${nextSize}px`;
+        if (galleryCache.layoutMode === 'fit') {
+          scheduleGalleryFitLayout(container, { force: true });
+        }
+      };
+
+      const applyLayoutMode = (force = false) => {
+        if (galleryCache.layoutMode === 'fit') {
+          setupGalleryFitResizeObserver(container);
+          scheduleGalleryFitLayout(container, { force });
+          return;
+        }
+        teardownGalleryFitResizeObserver(container);
+        const groups = container.querySelectorAll('.gallery-group-grid');
+        groups.forEach((group) => flattenGalleryGroupGrid(group));
+      };
+
+      const updateLayoutToggle = () => {
+        const mode = galleryCache.layoutMode === 'fit' ? 'fit' : 'grid';
+        galleryCache.layoutMode = mode;
+        container.dataset.galleryLayout = mode;
+        if (mode === 'fit') {
+          layoutToggleBtn.textContent = '自适应';
+          layoutToggleBtn.title = '切换为方形网格';
+        } else {
+          layoutToggleBtn.textContent = '方形';
+          layoutToggleBtn.title = '切换为自适应铺满';
+        }
+        applyLayoutMode(true);
       };
 
       sizeSlider.addEventListener('input', () => {
         applyThumbSize(sizeSlider.value);
       });
+      layoutToggleBtn.addEventListener('click', () => {
+        galleryCache.layoutMode = galleryCache.layoutMode === 'fit' ? 'grid' : 'fit';
+        updateLayoutToggle();
+      });
+      updateLayoutToggle();
 
       const getOrCreateGalleryGroup = (record) => {
         const key = getGalleryMonthKey(record?.timestamp);
@@ -4840,6 +5073,9 @@ export function createChatHistoryUI(appContext) {
             updateSelectionCount();
             updateSelectionStyles();
             updateStatus();
+            if (galleryCache.layoutMode === 'fit') {
+              scheduleGalleryFitLayout(container, { force: true });
+            }
             try {
               showNotification({
                 message: `已删除 ${result.removedImages} 处图片引用`,
@@ -4935,12 +5171,26 @@ export function createChatHistoryUI(appContext) {
             item.dataset.dedupeKey = record.dedupeKey;
             domByKey.set(record.dedupeKey, item);
           }
+          setGalleryItemAspectRatio(item, record?.aspectRatio);
 
           const img = document.createElement('img');
           img.loading = 'lazy';
           img.decoding = 'async';
           img.dataset.src = record.url;
           img.dataset.thumbState = 'idle';
+          img.addEventListener('load', () => {
+            if (!img.dataset.thumbKind) return;
+            const ratio = (img.naturalWidth && img.naturalHeight)
+              ? (img.naturalWidth / img.naturalHeight)
+              : 0;
+            const nextRatio = setGalleryItemAspectRatio(item, ratio);
+            if (nextRatio && record) {
+              record.aspectRatio = nextRatio;
+            }
+            if (galleryCache.layoutMode === 'fit') {
+              scheduleGalleryFitLayout(container);
+            }
+          });
           img.src = placeholderSrc;
           ensureThumbLoaded(img);
           img.alt = record.summary || record.title || record.domain || '聊天图片';
@@ -4996,6 +5246,9 @@ export function createChatHistoryUI(appContext) {
           targetGrid.appendChild(item);
         }
         renderedCount = nextCount;
+        if (galleryCache.layoutMode === 'fit') {
+          scheduleGalleryFitLayout(container);
+        }
         if (grid.style.display === 'none') {
           grid.style.display = '';
         }
