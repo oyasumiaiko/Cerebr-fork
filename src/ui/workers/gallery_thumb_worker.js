@@ -4,8 +4,9 @@ self.onmessage = async (event) => {
   if (!id) return;
   const url = typeof data.url === 'string' ? data.url : '';
   const size = Number(data.size || 0);
+  const minEdge = Number(data.minEdge || 0);
   const quality = typeof data.quality === 'number' ? data.quality : 0.82;
-  if (!url || !size || typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') {
+  if (!url || (!size && !minEdge) || typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') {
     self.postMessage({ id, ok: false, error: 'unsupported' });
     return;
   }
@@ -23,7 +24,15 @@ self.onmessage = async (event) => {
       return;
     }
     const maxSide = Math.max(bitmap.width, bitmap.height);
-    const scale = maxSide > 0 ? (size / maxSide) : 1;
+    const minSide = Math.min(bitmap.width, bitmap.height);
+    const scaleByMax = size > 0 && maxSide > 0 ? (size / maxSide) : 0;
+    const scaleByMin = minEdge > 0 && minSide > 0 ? (minEdge / minSide) : 0;
+    const scale = Math.max(scaleByMax, scaleByMin, 0);
+    if (!Number.isFinite(scale) || scale <= 0) {
+      if (bitmap && bitmap.close) bitmap.close();
+      self.postMessage({ id, ok: false, error: 'scale' });
+      return;
+    }
     const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
     const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
     const canvas = new OffscreenCanvas(targetWidth, targetHeight);

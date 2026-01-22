@@ -107,6 +107,7 @@ export function createChatHistoryUI(appContext) {
   const GALLERY_INACTIVE_CLEANUP_MS = 15 * 60 * 1000;
   const GALLERY_THUMB_MIN_EDGE = 96;
   const GALLERY_THUMB_MAX_EDGE = 280;
+  const GALLERY_THUMB_MIN_PREVIEW_EDGE = 160;
   const GALLERY_THUMB_QUALITY = 0.82;
   const GALLERY_THUMB_CONCURRENCY = 3;
   const GALLERY_THUMB_PREFETCH_VIEWPORTS = 2;
@@ -391,10 +392,14 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  function getGalleryThumbTargetSize(img) {
+  function getGalleryThumbTargetSpec(img) {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const base = Math.round((img?.clientWidth || GALLERY_THUMB_MIN_EDGE) * dpr);
-    return Math.max(GALLERY_THUMB_MIN_EDGE, Math.min(GALLERY_THUMB_MAX_EDGE, base || GALLERY_THUMB_MIN_EDGE));
+    return {
+      maxEdge: Math.max(GALLERY_THUMB_MIN_EDGE, Math.min(GALLERY_THUMB_MAX_EDGE, base || GALLERY_THUMB_MIN_EDGE)),
+      // 保证缩略图短边不小于指定像素，避免横/竖图过糊。
+      minEdge: Math.max(1, Math.round(GALLERY_THUMB_MIN_PREVIEW_EDGE * dpr))
+    };
   }
 
   function getGalleryThumbRootMargin(container) {
@@ -700,10 +705,11 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  function requestGalleryThumbFromWorker(sourceUrl, targetSize) {
+  function requestGalleryThumbFromWorker(sourceUrl, targetSpec) {
     if (!sourceUrl) return Promise.resolve({ blob: null, error: 'invalid' });
-    const size = Number(targetSize || 0);
-    if (!size) return Promise.resolve({ blob: null, error: 'invalid' });
+    const size = Number(targetSpec?.maxEdge || 0);
+    const minEdge = Number(targetSpec?.minEdge || 0);
+    if (!size && !minEdge) return Promise.resolve({ blob: null, error: 'invalid' });
     const workers = ensureGalleryThumbWorkers();
     if (!workers || !workers.length) return Promise.resolve({ blob: null, error: 'unavailable' });
     return new Promise((resolve) => {
@@ -712,7 +718,13 @@ export function createChatHistoryUI(appContext) {
       galleryThumbWorkerPool.nextIndex = (galleryThumbWorkerPool.nextIndex + 1) % workers.length;
       galleryThumbWorkerPool.pending.set(id, { resolve, url: sourceUrl });
       try {
-        worker.postMessage({ id, url: sourceUrl, size, quality: GALLERY_THUMB_QUALITY });
+        worker.postMessage({
+          id,
+          url: sourceUrl,
+          size,
+          minEdge,
+          quality: GALLERY_THUMB_QUALITY
+        });
       } catch (_) {
         galleryThumbWorkerPool.pending.delete(id);
         resolve({ blob: null, error: 'post' });
@@ -738,20 +750,23 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  async function generateGalleryThumbUrl(sourceUrl, targetSize) {
+  async function generateGalleryThumbUrl(sourceUrl, targetSpec) {
     if (!sourceUrl) return null;
     if (shouldUseGalleryThumbWorker(sourceUrl)) {
-      const result = await requestGalleryThumbFromWorker(sourceUrl, targetSize);
+      const result = await requestGalleryThumbFromWorker(sourceUrl, targetSpec);
       if (result?.blob) {
         return URL.createObjectURL(result.blob);
       }
     }
-    return generateGalleryThumbUrlOnMain(sourceUrl, targetSize);
+    return generateGalleryThumbUrlOnMain(sourceUrl, targetSpec);
   }
 
-  async function generateGalleryThumbUrlOnMain(sourceUrl, targetSize) {
+  async function generateGalleryThumbUrlOnMain(sourceUrl, targetSpec) {
     if (!sourceUrl) return null;
     try {
+      const maxEdge = Number(targetSpec?.maxEdge || 0);
+      const minEdge = Number(targetSpec?.minEdge || 0);
+      if (!maxEdge && !minEdge) return null;
       const img = await new Promise((resolve) => {
         const image = new Image();
         image.decoding = 'async';
@@ -763,7 +778,11 @@ export function createChatHistoryUI(appContext) {
       if (!img || !img.naturalWidth || !img.naturalHeight) return null;
 
       const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
-      const scale = maxSide > 0 ? (targetSize / maxSide) : 1;
+      const minSide = Math.min(img.naturalWidth, img.naturalHeight);
+      const scaleByMax = maxEdge > 0 && maxSide > 0 ? (maxEdge / maxSide) : 0;
+      const scaleByMin = minEdge > 0 && minSide > 0 ? (minEdge / minSide) : 0;
+      const scale = Math.max(scaleByMax, scaleByMin, 0);
+      if (!Number.isFinite(scale) || scale <= 0) return null;
       const targetWidth = Math.max(1, Math.round(img.naturalWidth * scale));
       const targetHeight = Math.max(1, Math.round(img.naturalHeight * scale));
       const canvas = document.createElement('canvas');
@@ -5125,8 +5144,8 @@ export function createChatHistoryUI(appContext) {
 
         enqueueGalleryThumbTask(async () => {
           if (!img.isConnected || img.dataset.thumbToken !== token) return;
-          const targetSize = getGalleryThumbTargetSize(img);
-          const thumbUrl = await generateGalleryThumbUrl(sourceUrl, targetSize);
+          const targetSpec = getGalleryThumbTargetSpec(img);
+          const thumbUrl = await generateGalleryThumbUrl(sourceUrl, targetSpec);
           if (!img.isConnected || img.dataset.thumbToken !== token) {
             if (thumbUrl && thumbUrl.startsWith('blob:')) {
               URL.revokeObjectURL(thumbUrl);
