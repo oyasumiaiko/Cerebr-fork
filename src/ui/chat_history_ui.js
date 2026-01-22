@@ -1293,7 +1293,7 @@ export function createChatHistoryUI(appContext) {
     const summary = buildConversationSummaryFromMessages(messagesCopy, {
       promptsConfig,
       pageTitle: startPageMeta.title || '',
-      maxLength: 50
+      maxLength: 160
     });
 
     let urlToSave = '';
@@ -1332,7 +1332,7 @@ export function createChatHistoryUI(appContext) {
             summaryToSave = buildConversationSummaryFromMessages(messagesCopy, {
               promptsConfig,
               pageTitle: existingConversation.title || '',
-              maxLength: 50
+              maxLength: 160
             });
           }
         }
@@ -9323,7 +9323,7 @@ export function createChatHistoryUI(appContext) {
       const baseSummary = buildConversationSummaryFromMessages(newChatHistory.messages, {
         promptsConfig,
         pageTitle: pageInfo?.title || '',
-        maxLength: 50
+        maxLength: 160
       });
       const summary = baseSummary ? `${baseSummary} (分支)` : '分支对话';
       
