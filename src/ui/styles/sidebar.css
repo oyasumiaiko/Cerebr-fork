@@ -6042,15 +6042,15 @@ html.fullscreen-mode::before {
   padding-right: 0px;
 }
 
-/* 全屏下：AI 消息不再强制充满整行，避免超宽 */
+/* 全屏下：消息宽度跟随容器，避免被全屏宽度变量二次限制 */
 .fullscreen-mode .ai-message {
   width: auto;
-  max-width: var(--cerebr-fullscreen-width);
+  max-width: 100%;
 }
 
-/* 全屏下：用户消息也遵守统一的内容最大宽度，便于在独立聊天页面中调整整体内容宽度 */
+/* 全屏下：用户消息宽度跟随容器 */
 .fullscreen-mode .user-message {
-  max-width: var(--cerebr-fullscreen-width);
+  max-width: 100%;
 }
 
 /* 深色主题全屏模式 */
