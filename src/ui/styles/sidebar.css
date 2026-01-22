@@ -1947,6 +1947,13 @@ input:checked + .slider::before {
     color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
 }
 
+.gallery-stream-status {
+    padding: 8px 4px 4px;
+    text-align: left;
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 65%, transparent);
+}
+
 .gallery-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));

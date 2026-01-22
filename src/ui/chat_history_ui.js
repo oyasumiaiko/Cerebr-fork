@@ -88,9 +88,11 @@ export function createChatHistoryUI(appContext) {
     items: [],
     loaded: false,
     lastLoadTs: 0,
-    loadingPromise: null
+    loadingPromise: null,
+    runId: null
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
+  const GALLERY_META_PAGE_SIZE = 80;
   const GALLERY_THUMB_MIN_EDGE = 96;
   const GALLERY_THUMB_MAX_EDGE = 280;
   const GALLERY_THUMB_QUALITY = 0.82;
@@ -111,10 +113,15 @@ export function createChatHistoryUI(appContext) {
   let searchCache = createEmptySearchCache();
 
   function invalidateGalleryCache() {
-    galleryCache.items = [];
+    if (Array.isArray(galleryCache.items)) {
+      galleryCache.items.length = 0;
+    } else {
+      galleryCache.items = [];
+    }
     galleryCache.loaded = false;
     galleryCache.lastLoadTs = 0;
     galleryCache.loadingPromise = null;
+    galleryCache.runId = null;
     try {
       const panel = document.getElementById('chat-history-panel');
       if (panel) {
@@ -3779,30 +3786,64 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  async function loadGalleryImages(forceRefresh = false) {
+  async function loadGalleryImages(forceRefresh = false, options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const onBatch = typeof normalizedOptions.onBatch === 'function' ? normalizedOptions.onBatch : null;
+    const onProgress = typeof normalizedOptions.onProgress === 'function' ? normalizedOptions.onProgress : null;
+    const shouldCancel = typeof normalizedOptions.shouldCancel === 'function' ? normalizedOptions.shouldCancel : () => false;
+    const runId = normalizedOptions.runId || createRunId();
+
     if (!forceRefresh && galleryCache.loaded) {
+      if (onBatch) onBatch(galleryCache.items, { done: true, fromCache: true });
       return galleryCache.items;
     }
-    if (galleryCache.loadingPromise) {
+
+    if (galleryCache.loadingPromise && !forceRefresh && !onBatch) {
       return galleryCache.loadingPromise;
     }
 
+    galleryCache.runId = runId;
+
     const runPromise = (async () => {
-      if (forceRefresh) {
-        galleryCache.items = [];
+      if (forceRefresh || !galleryCache.loaded) {
+        if (Array.isArray(galleryCache.items)) {
+          galleryCache.items.length = 0;
+        } else {
+          galleryCache.items = [];
+        }
         galleryCache.loaded = false;
         galleryCache.lastLoadTs = 0;
       }
 
-      const metas = await getAllConversationMetadataWithCache(forceRefresh);
-      // 按最新时间降序扫描，确保相册默认按时间倒序展示。
-      const sortedMetas = Array.isArray(metas)
-        ? [...metas].sort((a, b) => (Number(b?.endTime) || 0) - (Number(a?.endTime) || 0))
-        : [];
+      const images = galleryCache.items;
+      const seenKeys = new Set();
       let downloadRoot = null;
       try {
         downloadRoot = await loadDownloadRoot();
       } catch (_) {}
+
+      const yieldToMain = () => new Promise((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+
+      const flushBatch = (() => {
+        let buffer = [];
+        return (records = null, meta = null) => {
+          if (Array.isArray(records) && records.length) {
+            buffer.push(...records);
+          }
+          const shouldFlush = buffer.length >= 24 || (!!meta && meta.force) || (!records && buffer.length);
+          if (shouldFlush && onBatch) {
+            const payload = buffer;
+            buffer = [];
+            onBatch(payload, meta || {});
+          }
+        };
+      })();
 
       // 相册专用：避免逐条 await，优先用已缓存的下载根路径拼接。
       const resolveImageUrlForGallery = (imageUrlObj) => {
@@ -3840,76 +3881,102 @@ export function createChatHistoryUI(appContext) {
         return fallback ? `url:${fallback}` : '';
       };
 
-      // 先收集“带图片的消息”，按时间倒序处理，确保同一消息图片连续且去重保留最新记录
-      const messageEntries = [];
-      let seq = 0;
-      for (let i = 0; i < sortedMetas.length; i++) {
-        const meta = sortedMetas[i];
-        const conv = await getConversationById(meta.id, true);
-        if (!conv || !Array.isArray(conv.messages)) continue;
-        const convDomain = getDisplayUrl(conv.url);
+      let cursor = null;
+      let hasMore = true;
+      let scannedConversations = 0;
+      // 分页流式扫描：边读边产出，避免一次性“收集图片”阻塞 UI
+      while (hasMore) {
+        if (shouldCancel() || galleryCache.runId !== runId) {
+          return images;
+        }
 
-        for (let m = conv.messages.length - 1; m >= 0; m--) {
-          const msg = conv.messages[m];
-          const timestamp = Number(msg?.timestamp || conv.endTime || conv.startTime || Date.now());
-          const normalizedContent = normalizeStoredMessageContent(msg?.content);
-          if (!Array.isArray(normalizedContent)) continue;
+        let page = null;
+        try {
+          page = await getConversationMetadataPageByEndTimeDesc({
+            limit: Math.max(1, Number(normalizedOptions.pageSize) || GALLERY_META_PAGE_SIZE),
+            cursor
+          });
+        } catch (error) {
+          console.error('流式读取相册元数据失败:', error);
+          break;
+        }
 
-          const imageParts = [];
-          for (let idx = 0; idx < normalizedContent.length; idx++) {
-            const part = normalizedContent[idx];
-            if (!part || part.type !== 'image_url' || !part.image_url) continue;
-            imageParts.push({ imageUrl: part.image_url, partIndex: idx });
+        const metas = Array.isArray(page?.items) ? page.items : [];
+        cursor = page?.cursor || null;
+        hasMore = !!page?.hasMore;
+
+        if (!metas.length) break;
+
+        for (const meta of metas) {
+          if (shouldCancel() || galleryCache.runId !== runId) {
+            return images;
           }
-          if (!imageParts.length) continue;
+          const conv = await getConversationById(meta.id, true);
+          scannedConversations += 1;
+          if (!conv || !Array.isArray(conv.messages)) {
+            if (scannedConversations % 4 === 0) {
+              flushBatch();
+              await yieldToMain();
+            }
+            continue;
+          }
 
-          messageEntries.push({
-            conversationId: conv.id,
-            messageId: msg.id,
-            messageKey: `${conv.id || 'conv'}_${msg.id || m}`,
-            timestamp,
-            summary: conv.summary || '',
-            title: conv.title || '',
-            domain: convDomain || '未知来源',
-            imageParts,
-            seq
-          });
-          seq += 1;
+          const convDomain = getDisplayUrl(conv.url);
+          for (let m = conv.messages.length - 1; m >= 0; m--) {
+            const msg = conv.messages[m];
+            const timestamp = Number(msg?.timestamp || conv.endTime || conv.startTime || Date.now());
+            const normalizedContent = normalizeStoredMessageContent(msg?.content);
+            if (!Array.isArray(normalizedContent)) continue;
+
+            const imageParts = [];
+            for (let idx = 0; idx < normalizedContent.length; idx++) {
+              const part = normalizedContent[idx];
+              if (!part || part.type !== 'image_url' || !part.image_url) continue;
+              imageParts.push({ imageUrl: part.image_url, partIndex: idx });
+            }
+            if (!imageParts.length) continue;
+
+            const records = [];
+            const orderedParts = imageParts.slice().sort((a, b) => a.partIndex - b.partIndex);
+            for (const part of orderedParts) {
+              const resolvedUrl = resolveImageUrlForGallery(part.imageUrl);
+              if (!resolvedUrl) continue;
+              if (isGifImageReference(part.imageUrl, resolvedUrl)) continue;
+              const dedupeKey = buildGalleryImageKey(part.imageUrl, resolvedUrl);
+              if (!dedupeKey || seenKeys.has(dedupeKey)) continue;
+              seenKeys.add(dedupeKey);
+              records.push({
+                conversationId: conv.id,
+                messageId: msg.id,
+                messageKey: `${conv.id || 'conv'}_${msg.id || m}`,
+                url: resolvedUrl,
+                timestamp,
+                summary: conv.summary || '',
+                title: conv.title || '',
+                domain: convDomain || '未知来源'
+              });
+            }
+
+            if (records.length) {
+              images.push(...records);
+              flushBatch(records);
+            }
+          }
+
+          if (scannedConversations % 4 === 0) {
+            flushBatch();
+            await yieldToMain();
+          }
         }
+
+        flushBatch();
+        if (onProgress) {
+          onProgress({ scannedConversations, imageCount: images.length, hasMore });
+        }
+        await yieldToMain();
       }
 
-      messageEntries.sort((a, b) => {
-        const diff = Number(b.timestamp || 0) - Number(a.timestamp || 0);
-        if (diff !== 0) return diff;
-        return a.seq - b.seq;
-      });
-
-      const seenKeys = new Set();
-      const images = [];
-      for (const entry of messageEntries) {
-        // 同一条消息的图片保持连续，便于相册聚类查看
-        const orderedParts = entry.imageParts.slice().sort((a, b) => a.partIndex - b.partIndex);
-        for (const part of orderedParts) {
-          const resolvedUrl = resolveImageUrlForGallery(part.imageUrl);
-          if (!resolvedUrl) continue;
-          if (isGifImageReference(part.imageUrl, resolvedUrl)) continue;
-          const dedupeKey = buildGalleryImageKey(part.imageUrl, resolvedUrl);
-          if (!dedupeKey || seenKeys.has(dedupeKey)) continue;
-          seenKeys.add(dedupeKey);
-          images.push({
-            conversationId: entry.conversationId,
-            messageId: entry.messageId,
-            messageKey: entry.messageKey,
-            url: resolvedUrl,
-            timestamp: entry.timestamp,
-            summary: entry.summary || '',
-            title: entry.title || '',
-            domain: entry.domain || '未知来源'
-          });
-        }
-      }
-
-      galleryCache.items = images;
+      flushBatch(null, { force: true, done: true });
       galleryCache.loaded = true;
       galleryCache.lastLoadTs = Date.now();
       return images;
@@ -3935,23 +4002,12 @@ export function createChatHistoryUI(appContext) {
     }
     container.dataset.rendered = '';
     container.innerHTML = '';
-    const loading = document.createElement('div');
-    loading.className = 'gallery-loading';
-    loading.textContent = '正在收集图片…';
-    container.appendChild(loading);
 
     const renderPromise = (async () => {
-      const images = await loadGalleryImages(forceRefresh);
+      const runId = createRunId();
+      container.dataset.galleryRunId = runId;
       revokeGalleryThumbUrls(container);
       container.innerHTML = '';
-      if (!images || images.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'gallery-empty';
-        empty.textContent = '暂无可展示的图片';
-        container.appendChild(empty);
-        container.dataset.rendered = 'true';
-        return;
-      }
 
       if (container._galleryObserver) {
         container._galleryObserver.disconnect();
@@ -3962,12 +4018,36 @@ export function createChatHistoryUI(appContext) {
         container._galleryLazyObserver = null;
       }
 
+      const status = document.createElement('div');
+      status.className = 'gallery-stream-status';
+      status.textContent = '正在扫描图片…';
+      container.appendChild(status);
+
       const grid = document.createElement('div');
       grid.className = 'gallery-grid';
       const sentinel = document.createElement('div');
       sentinel.className = 'gallery-sentinel';
       sentinel.textContent = '加载更多…';
       grid.appendChild(sentinel);
+      container.appendChild(grid);
+
+      const images = galleryCache.items;
+      let renderedCount = 0;
+      let renderScheduled = false;
+      let scanDone = false;
+
+      const updateStatus = () => {
+        if (!status) return;
+        if (scanDone) {
+          if (images.length) {
+            status.textContent = `已加载 ${images.length} 张图片`;
+          }
+        } else if (images.length) {
+          status.textContent = `正在扫描图片… 已加载 ${images.length} 张`;
+        } else {
+          status.textContent = '正在扫描图片…';
+        }
+      };
 
       const placeholderSrc = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
       const ensureThumbLoaded = (img) => {
@@ -4031,10 +4111,9 @@ export function createChatHistoryUI(appContext) {
         : null;
       container._galleryLazyObserver = lazyObserver;
 
-      let renderedCount = 0;
-      // 分批追加 DOM，避免一次性渲染大量图片导致卡顿/长时间白屏
       const appendBatch = () => {
         const nextCount = Math.min(renderedCount + GALLERY_RENDER_BATCH_SIZE, images.length);
+        if (nextCount <= renderedCount) return;
         for (let i = renderedCount; i < nextCount; i++) {
           const record = images[i];
           const item = document.createElement('div');
@@ -4090,7 +4169,7 @@ export function createChatHistoryUI(appContext) {
           grid.insertBefore(item, sentinel);
         }
         renderedCount = nextCount;
-        if (renderedCount >= images.length) {
+        if (scanDone && renderedCount >= images.length) {
           if (container._galleryObserver) {
             container._galleryObserver.disconnect();
             container._galleryObserver = null;
@@ -4101,22 +4180,58 @@ export function createChatHistoryUI(appContext) {
         }
       };
 
-      container.appendChild(grid);
-      appendBatch();
-
-      if (renderedCount < images.length) {
-        const observer = new IntersectionObserver((entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            appendBatch();
+      const scheduleAppend = () => {
+        if (renderScheduled) return;
+        renderScheduled = true;
+        requestAnimationFrame(() => {
+          renderScheduled = false;
+          appendBatch();
+          if (container.scrollHeight <= container.clientHeight && renderedCount < images.length) {
+            scheduleAppend();
           }
-        }, {
-          root: container,
-          rootMargin: '240px 0px'
         });
-        observer.observe(sentinel);
-        container._galleryObserver = observer;
-      }
+      };
 
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          scheduleAppend();
+        }
+      }, {
+        root: container,
+        rootMargin: '240px 0px'
+      });
+      observer.observe(sentinel);
+      container._galleryObserver = observer;
+
+      updateStatus();
+      scheduleAppend();
+
+      const shouldCancel = () => container.dataset.galleryRunId !== runId;
+      await loadGalleryImages(forceRefresh, {
+        runId,
+        shouldCancel,
+        onBatch: () => {
+          if (shouldCancel()) return;
+          updateStatus();
+          scheduleAppend();
+        },
+        onProgress: () => {
+          if (shouldCancel()) return;
+          updateStatus();
+        }
+      });
+
+      if (shouldCancel()) return;
+      scanDone = true;
+      updateStatus();
+      if (!images.length) {
+        grid.remove();
+        status.textContent = '暂无可展示的图片';
+        status.className = 'gallery-empty';
+      } else {
+        status.remove();
+        appendBatch();
+      }
       container.dataset.rendered = 'true';
     })().catch((error) => {
       console.error('加载图片相册失败:', error);
