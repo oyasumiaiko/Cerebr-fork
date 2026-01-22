@@ -246,33 +246,7 @@ export function createUIManager(appContext) {
    */
   function setupScrollableContainerEventListeners(container) {
     const AUTO_SCROLL_THRESHOLD = 100;
-    const ALT_SCROLL_MIN_MULTIPLIER = 3;
-    const ALT_SCROLL_MAX_SCROLL_RATIO = 0.05;
-    const ALT_SCROLL_ACCELERATION_MIN_INTERVAL = 24;
-    const ALT_SCROLL_ACCELERATION_MAX_INTERVAL = 180;
-    let lastAltWheelTime = 0;
-    let lastAltWheelDirection = 0;
-
-    // Alt 滚轮按频率做加速度映射：间隔越短倍数越高，上限由“最大滚动距离”动态决定。
-    const getAltScrollMultiplier = (now, lastTime, direction, lastDirection, maxMultiplier) => {
-      const safeMaxMultiplier = Number.isFinite(maxMultiplier)
-        ? Math.max(ALT_SCROLL_MIN_MULTIPLIER, maxMultiplier)
-        : ALT_SCROLL_MIN_MULTIPLIER;
-      if (!lastTime || !direction || direction !== lastDirection) {
-        return ALT_SCROLL_MIN_MULTIPLIER;
-      }
-      const interval = now - lastTime;
-      if (!Number.isFinite(interval)) return ALT_SCROLL_MIN_MULTIPLIER;
-      if (interval <= ALT_SCROLL_ACCELERATION_MIN_INTERVAL) {
-        return safeMaxMultiplier;
-      }
-      if (interval >= ALT_SCROLL_ACCELERATION_MAX_INTERVAL) {
-        return ALT_SCROLL_MIN_MULTIPLIER;
-      }
-      const ratio = (ALT_SCROLL_ACCELERATION_MAX_INTERVAL - interval)
-        / (ALT_SCROLL_ACCELERATION_MAX_INTERVAL - ALT_SCROLL_ACCELERATION_MIN_INTERVAL);
-      return ALT_SCROLL_MIN_MULTIPLIER + ratio * (safeMaxMultiplier - ALT_SCROLL_MIN_MULTIPLIER);
-    };
+    const ALT_SCROLL_MULTIPLIER = 5; // 固定 5 倍滚动速度，避免动态加速带来的不可控跳跃；如需调节手感只改这里。
 
     /**
      * 将滚轮事件的 delta 值统一转换为像素单位
@@ -303,30 +277,8 @@ export function createUIManager(appContext) {
 
       if (e.altKey) {
         e.preventDefault();
-        const now = performance.now();
-        const normalizedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode);
-        const normalizedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode);
-        const primaryDelta = Math.abs(normalizedDeltaY) >= Math.abs(normalizedDeltaX)
-          ? normalizedDeltaY
-          : normalizedDeltaX;
-        const direction = Math.sign(primaryDelta);
-        const scrollableHeight = Math.max(container.scrollHeight - container.clientHeight, 0);
-        // 最高滚动距离限制为总可滚动高度的 5%，避免 Alt 快速滚动过度跳跃。
-        const maxScrollDistance = scrollableHeight * ALT_SCROLL_MAX_SCROLL_RATIO;
-        const normalizedMagnitude = Math.max(Math.abs(normalizedDeltaY), Math.abs(normalizedDeltaX));
-        const maxMultiplier = normalizedMagnitude ? (maxScrollDistance / normalizedMagnitude) : ALT_SCROLL_MIN_MULTIPLIER;
-        const altScrollMultiplier = getAltScrollMultiplier(
-          now,
-          lastAltWheelTime,
-          direction,
-          lastAltWheelDirection,
-          maxMultiplier
-        );
-        const acceleratedDeltaY = normalizedDeltaY * altScrollMultiplier;
-        const acceleratedDeltaX = normalizedDeltaX * altScrollMultiplier;
-
-        lastAltWheelTime = now;
-        lastAltWheelDirection = direction;
+        const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
+        const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
 
         if (acceleratedDeltaY) {
           container.scrollTop += acceleratedDeltaY;
