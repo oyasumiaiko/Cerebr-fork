@@ -3599,6 +3599,15 @@ export function createChatHistoryUI(appContext) {
     let pinnedItems = [];
     let unpinnedItems = [];
     let isTreeOrderingActive = false;
+    let displayPinnedIds = pinnedIds;
+    if (panel?._historyDataSource?.mode === 'url') {
+      // URL 本页筛选模式下不展示置顶会话，避免“全局置顶”干扰本页视图。
+      displayPinnedIds = [];
+      if (Array.isArray(sourceHistories) && pinnedIds.length) {
+        const pinnedSet = new Set(pinnedIds);
+        sourceHistories = sourceHistories.filter((item) => !pinnedSet.has(item?.id));
+      }
+    }
 
     if (shouldTreeOrderForThisRun) {
       // 树状排序：
@@ -3606,14 +3615,14 @@ export function createChatHistoryUI(appContext) {
       // - “置顶”提升为树级（树内任一会话被置顶，则整棵树进入置顶分段），避免同一棵树被拆开/重复渲染；
       // - 时间分组同样按树级（基于子树最新 endTime），保证分组标题不会把父子节点拆开。
       isTreeOrderingActive = true;
-      const treeDisplay = buildConversationBranchTreeDisplayList(sourceHistories, pinnedIds);
+      const treeDisplay = buildConversationBranchTreeDisplayList(sourceHistories, displayPinnedIds);
       currentDisplayItems = treeDisplay.items;
       // 注意：树状模式下“置顶”以“整棵树”为单位，因此 pinnedCountInDisplay 可能包含未置顶的根/祖先节点。
       currentPinnedItemsCountInDisplay = Math.max(0, Number(treeDisplay.pinnedCountInDisplay) || 0);
     } else {
-      const pinnedIndexMap = new Map(pinnedIds.map((id, index) => [id, index]));
+      const pinnedIndexMap = new Map(displayPinnedIds.map((id, index) => [id, index]));
       sourceHistories.forEach(hist => {
-        if (pinnedIds.includes(hist.id)) {
+        if (displayPinnedIds.includes(hist.id)) {
           pinnedItems.push(hist);
         } else {
           unpinnedItems.push(hist);
@@ -3674,12 +3683,12 @@ export function createChatHistoryUI(appContext) {
     }
 
     // 首次加载批次
-    await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
+    await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
 
     // 使用 IntersectionObserver 进行后续批次加载
     setupEndSentinelObserver(panel, listContainer, async () => {
       if (panel.dataset.runId !== runId) return;
-      await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
+      await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
     }, runId);
 
     // Fallback：滚动监听，兼容拖动滚动条与键盘 End 场景
@@ -3693,7 +3702,7 @@ export function createChatHistoryUI(appContext) {
       if (!panelNow) return;
       if (panelNow.dataset.runId !== runId) return;
       if (!isLoadingMoreItems && (listContainer.scrollTop + listContainer.clientHeight >= listContainer.scrollHeight - 48)) {
-        await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
+        await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
       }
     };
     listContainer.addEventListener('scroll', listContainer._scrollListener);
@@ -3703,7 +3712,7 @@ export function createChatHistoryUI(appContext) {
       const panelNow = listContainer.closest('#chat-history-panel');
       if (!panelNow || panelNow.dataset.runId !== runId) return;
       while (listContainer.scrollHeight <= listContainer.clientHeight && currentlyRenderedCount < currentDisplayItems.length) {
-        await renderMoreItems(listContainer, pinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
+        await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
         await new Promise(r => setTimeout(r, 0));
       }
     });
