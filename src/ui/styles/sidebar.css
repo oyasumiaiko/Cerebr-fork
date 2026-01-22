@@ -1974,6 +1974,24 @@ input:checked + .slider::before {
     gap: 6px;
 }
 
+.gallery-size-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.gallery-size-slider {
+    width: 120px;
+}
+
+.gallery-size-value {
+    min-width: 42px;
+    text-align: right;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
 .gallery-toolbar-btn {
     background: color-mix(in srgb, var(--cerebr-control-bg) 88%, transparent);
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
@@ -2000,14 +2018,14 @@ input:checked + .slider::before {
 }
 
 .gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-    gap: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     padding: 2px;
-    align-content: start;
 }
 
 .history-tab-content[data-tab="gallery"] {
+    --gallery-thumb-size: 92px;
     overflow-y: scroll;
     overflow-x: hidden;
     scrollbar-gutter: stable;
@@ -2021,7 +2039,28 @@ input:checked + .slider::before {
     background: color-mix(in srgb, var(--cerebr-control-bg) 82%, transparent);
     cursor: pointer;
     content-visibility: auto;
-    contain-intrinsic-size: 96px 96px;
+    contain-intrinsic-size: var(--gallery-thumb-size, 92px) var(--gallery-thumb-size, 92px);
+}
+
+.gallery-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.gallery-group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--gallery-thumb-size, 92px), 1fr));
+    gap: 2px;
+    align-content: start;
+}
+
+.gallery-group-label {
+    padding: 6px 6px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
 }
 
 .gallery-dup-badge {

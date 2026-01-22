@@ -98,7 +98,8 @@ export function createChatHistoryUI(appContext) {
     scrollTop: 0,
     scrollRestorePending: false,
     selectMode: false,
-    selectedKeys: new Set()
+    selectedKeys: new Set(),
+    thumbSize: 92
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
   const GALLERY_META_PAGE_SIZE = 80;
@@ -108,6 +109,10 @@ export function createChatHistoryUI(appContext) {
   const GALLERY_THUMB_QUALITY = 0.82;
   const GALLERY_THUMB_CONCURRENCY = 3;
   const GALLERY_THUMB_ROOT_MARGIN = '640px 0px';
+  const GALLERY_THUMB_SIZE_DEFAULT = 92;
+  const GALLERY_THUMB_SIZE_MIN = 72;
+  const GALLERY_THUMB_SIZE_MAX = 160;
+  const GALLERY_THUMB_SIZE_STEP = 4;
   const galleryThumbQueue = { active: 0, pending: [], scheduled: false };
   // 使用 Worker + OffscreenCanvas 生成缩略图，降低主线程解码/绘制的阻塞。
   const galleryThumbWorkerPool = {
@@ -173,6 +178,10 @@ export function createChatHistoryUI(appContext) {
             galleryContent._galleryLazyObserver.disconnect();
             galleryContent._galleryLazyObserver = null;
           }
+          if (galleryContent._galleryGroupMap instanceof Map) {
+            galleryContent._galleryGroupMap.clear();
+          }
+          galleryContent._galleryGroupMap = null;
           revokeGalleryThumbUrls(galleryContent);
           galleryContent.dataset.rendered = '';
           const panelVisible = panel.classList.contains('visible');
@@ -1773,6 +1782,40 @@ export function createChatHistoryUI(appContext) {
     if (hours < 24) return `${hours}小时前`;
     const days = Math.floor(hours / 24);
     return `${days}天前`;
+  }
+
+  function extractTimestampFromMessageId(messageId) {
+    if (typeof messageId !== 'string' || !messageId) return null;
+    const match = messageId.match(/(?:^|_)(\d{10,13})(?:_|$)/);
+    if (!match) return null;
+    const raw = Number(match[1]);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    // 兼容秒级与毫秒级时间戳。
+    return raw < 1e12 ? raw * 1000 : raw;
+  }
+
+  function getGalleryMessageTimestamp(message, conversation) {
+    const ts = Number(message?.timestamp);
+    if (Number.isFinite(ts) && ts > 0) return ts;
+    const idTs = extractTimestampFromMessageId(message?.id);
+    if (Number.isFinite(idTs) && idTs > 0) return idTs;
+    const convStart = Number(conversation?.startTime);
+    if (Number.isFinite(convStart) && convStart > 0) return convStart;
+    return Date.now();
+  }
+
+  function getGalleryMonthKey(timestamp) {
+    const ts = Number(timestamp);
+    const date = Number.isFinite(ts) ? new Date(ts) : new Date();
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    return `${year}-${String(month).padStart(2, '0')}`;
+  }
+
+  function formatGalleryMonthLabel(timestamp) {
+    const ts = Number(timestamp);
+    const date = Number.isFinite(ts) ? new Date(ts) : new Date();
+    return `${date.getFullYear()}年${date.getMonth() + 1}月`;
   }
 
   /**
@@ -4252,7 +4295,7 @@ export function createChatHistoryUI(appContext) {
           const convDomain = getDisplayUrl(conv.url);
           for (let m = conv.messages.length - 1; m >= 0; m--) {
             const msg = conv.messages[m];
-            const timestamp = Number(msg?.timestamp || conv.endTime || conv.startTime || Date.now());
+            const timestamp = getGalleryMessageTimestamp(msg, conv);
             const normalizedContent = normalizeStoredMessageContent(msg?.content);
             if (!Array.isArray(normalizedContent)) continue;
 
@@ -4374,6 +4417,19 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
+  function cleanupEmptyGalleryGroups(container) {
+    if (!container) return;
+    try {
+      container.querySelectorAll('.gallery-group').forEach((group) => {
+        const grid = group.querySelector('.gallery-group-grid');
+        const hasItem = grid && grid.querySelector('.gallery-item');
+        if (!hasItem) {
+          group.remove();
+        }
+      });
+    } catch (_) {}
+  }
+
   function removeGalleryItemsFromDom(container, deletedKeys) {
     if (!container) return 0;
     const keySet = deletedKeys instanceof Set
@@ -4391,6 +4447,7 @@ export function createChatHistoryUI(appContext) {
         }
         domByKey.delete(key);
       });
+      cleanupEmptyGalleryGroups(container);
       return removed;
     }
     try {
@@ -4401,6 +4458,7 @@ export function createChatHistoryUI(appContext) {
         }
       });
     } catch (_) {}
+    cleanupEmptyGalleryGroups(container);
     return removed;
   }
 
@@ -4542,12 +4600,38 @@ export function createChatHistoryUI(appContext) {
       const selectionCount = document.createElement('span');
       selectionCount.className = 'gallery-select-count';
 
+      const currentThumbSize = Math.max(
+        GALLERY_THUMB_SIZE_MIN,
+        Math.min(GALLERY_THUMB_SIZE_MAX, Number(galleryCache.thumbSize) || GALLERY_THUMB_SIZE_DEFAULT)
+      );
+      galleryCache.thumbSize = currentThumbSize;
+      container.style.setProperty('--gallery-thumb-size', `${currentThumbSize}px`);
+
+      const sizeControl = document.createElement('div');
+      sizeControl.className = 'gallery-size-control';
+      const sizeLabel = document.createElement('span');
+      sizeLabel.textContent = '缩略图';
+      const sizeSlider = document.createElement('input');
+      sizeSlider.className = 'gallery-size-slider';
+      sizeSlider.type = 'range';
+      sizeSlider.min = String(GALLERY_THUMB_SIZE_MIN);
+      sizeSlider.max = String(GALLERY_THUMB_SIZE_MAX);
+      sizeSlider.step = String(GALLERY_THUMB_SIZE_STEP);
+      sizeSlider.value = String(currentThumbSize);
+      const sizeValue = document.createElement('span');
+      sizeValue.className = 'gallery-size-value';
+      sizeValue.textContent = `${currentThumbSize}px`;
+      sizeControl.appendChild(sizeLabel);
+      sizeControl.appendChild(sizeSlider);
+      sizeControl.appendChild(sizeValue);
+
       const deleteButton = document.createElement('button');
       deleteButton.className = 'gallery-toolbar-btn gallery-delete-btn';
       deleteButton.textContent = '删除选中';
 
       toolbarLeft.appendChild(selectToggleBtn);
       toolbarLeft.appendChild(selectionCount);
+      toolbarRight.appendChild(sizeControl);
       toolbarRight.appendChild(deleteButton);
       toolbar.appendChild(toolbarLeft);
       toolbar.appendChild(toolbarRight);
@@ -4572,6 +4656,52 @@ export function createChatHistoryUI(appContext) {
       let renderScheduled = false;
       let scanDone = false;
       let deletionInProgress = false;
+      const monthGroupMap = new Map();
+      container._galleryGroupMap = monthGroupMap;
+
+      const applyThumbSize = (value) => {
+        const nextSize = Math.max(GALLERY_THUMB_SIZE_MIN, Math.min(GALLERY_THUMB_SIZE_MAX, Number(value) || GALLERY_THUMB_SIZE_DEFAULT));
+        if (nextSize === galleryCache.thumbSize) return;
+        galleryCache.thumbSize = nextSize;
+        // 仅调整显示尺寸，不触发缩略图重新生成。
+        container.style.setProperty('--gallery-thumb-size', `${nextSize}px`);
+        sizeValue.textContent = `${nextSize}px`;
+      };
+
+      sizeSlider.addEventListener('input', () => {
+        applyThumbSize(sizeSlider.value);
+      });
+
+      const getOrCreateGalleryGroup = (record) => {
+        const key = getGalleryMonthKey(record?.timestamp);
+        if (!key) return null;
+        let group = monthGroupMap.get(key);
+        if (group) return group;
+        const groupEl = document.createElement('div');
+        groupEl.className = 'gallery-group';
+        groupEl.dataset.monthKey = key;
+        const label = document.createElement('div');
+        label.className = 'gallery-group-label';
+        label.textContent = formatGalleryMonthLabel(record?.timestamp);
+        const groupGrid = document.createElement('div');
+        groupGrid.className = 'gallery-group-grid';
+        groupEl.appendChild(label);
+        groupEl.appendChild(groupGrid);
+        // 按月份倒序插入分组，避免流式扫描导致月份标签错位。
+        let insertBefore = sentinel;
+        const groups = Array.from(grid.querySelectorAll('.gallery-group'));
+        for (const existing of groups) {
+          const existingKey = existing.dataset.monthKey || '';
+          if (existingKey && existingKey < key) {
+            insertBefore = existing;
+            break;
+          }
+        }
+        grid.insertBefore(groupEl, insertBefore);
+        group = { key, element: groupEl, grid: groupGrid };
+        monthGroupMap.set(key, group);
+        return group;
+      };
 
       const updateSelectionCount = () => {
         const count = selectedKeys.size;
@@ -4792,6 +4922,8 @@ export function createChatHistoryUI(appContext) {
         if (nextCount <= renderedCount) return;
         for (let i = renderedCount; i < nextCount; i++) {
           const record = images[i];
+          const group = getOrCreateGalleryGroup(record);
+          const targetGrid = group?.grid || grid;
           const item = document.createElement('div');
           item.className = 'gallery-item';
           if (record.messageKey) {
@@ -4863,7 +4995,7 @@ export function createChatHistoryUI(appContext) {
             } catch (_) {}
           });
 
-          grid.insertBefore(item, sentinel);
+          targetGrid.appendChild(item);
         }
         renderedCount = nextCount;
         if (grid.style.display === 'none') {
