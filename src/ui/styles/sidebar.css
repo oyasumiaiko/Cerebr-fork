@@ -2571,9 +2571,10 @@ input:checked + .slider::before {
 .image-tag .delete-btn {
     position: absolute;
     top: 2px;
-    right: 2px;
+    left: 2px;
     width: 16px;
     height: 16px;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
