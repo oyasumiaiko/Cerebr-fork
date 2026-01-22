@@ -17,6 +17,11 @@ input, textarea, select {
     --cerebr-sidebar-width: 430px;
     /* 全屏模式下的“内容列宽度”，用于控制居中内容区域的最大宽度（与侧栏宽度解耦） */
     --cerebr-fullscreen-width: 800px;
+    --cerebr-thread-left-width: var(--cerebr-fullscreen-width);
+    --cerebr-thread-right-width: var(--cerebr-fullscreen-width);
+    --cerebr-thread-total-width: calc(var(--cerebr-thread-left-width) + var(--cerebr-thread-right-width));
+    --cerebr-thread-splitter-hit: 12px;
+    --cerebr-thread-edge-hit: 12px;
     --cerebr-font-size: 14px; /* 消息内容字体 */
     --cerebr-ui-font-size: 15px; /* UI 默认字体（不影响消息内容） */
 
@@ -392,6 +397,7 @@ body.standalone-mode #empty-state-repomix {
     flex: 1;
     min-height: 0;
     gap: 12px;
+    position: relative;
 }
 
 /* 聊天容器样式 */
@@ -435,6 +441,90 @@ body.standalone-mode #empty-state-repomix {
 
 body.thread-mode-active #thread-panel {
     display: flex;
+}
+
+#thread-splitter,
+#thread-resize-edge-left,
+#thread-resize-edge-right {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: none;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 6;
+    transition: opacity 0.12s ease;
+}
+
+#thread-splitter {
+    width: var(--cerebr-thread-splitter-hit);
+    left: calc(50% - (var(--cerebr-thread-total-width) / 2) + var(--cerebr-thread-left-width));
+    transform: translateX(-50%);
+    cursor: col-resize;
+}
+
+#thread-resize-edge-left,
+#thread-resize-edge-right {
+    width: var(--cerebr-thread-edge-hit);
+    cursor: col-resize;
+}
+
+#thread-resize-edge-left {
+    left: calc(50% - (var(--cerebr-thread-total-width) / 2));
+    transform: translateX(-50%);
+}
+
+#thread-resize-edge-right {
+    left: calc(50% + (var(--cerebr-thread-total-width) / 2));
+    transform: translateX(-50%);
+}
+
+#thread-splitter::before,
+#thread-resize-edge-left::before,
+#thread-resize-edge-right::before {
+    content: '';
+    position: absolute;
+    top: 18px;
+    bottom: 18px;
+    left: 50%;
+    width: 2px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+    transform: translateX(-50%);
+}
+
+.fullscreen-mode body.thread-mode-active #thread-splitter,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-left,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-right {
+    display: block;
+    pointer-events: auto;
+}
+
+.fullscreen-mode body.thread-mode-active #thread-splitter {
+    opacity: 1;
+}
+
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-left,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-right {
+    opacity: 0.12;
+}
+
+.fullscreen-mode body.thread-mode-active #thread-splitter:hover,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-left:hover,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-right:hover,
+body.thread-resize-active #thread-splitter,
+body.thread-resize-active #thread-resize-edge-left,
+body.thread-resize-active #thread-resize-edge-right {
+    opacity: 1;
+}
+
+body.thread-resize-active {
+    cursor: col-resize;
+    user-select: none;
+}
+
+body.thread-resize-active * {
+    user-select: none;
 }
 
 /* 侧栏模式：线程面板插入主消息流后使用的内联样式 */
@@ -5905,10 +5995,14 @@ html.fullscreen-mode::before {
   gap: 0;
 }
 
-.fullscreen-mode body.thread-mode-active #chat-container,
+.fullscreen-mode body.thread-mode-active #chat-container {
+  flex: 0 0 var(--cerebr-thread-left-width, var(--cerebr-fullscreen-width));
+  max-width: var(--cerebr-thread-left-width, var(--cerebr-fullscreen-width));
+}
+
 .fullscreen-mode body.thread-mode-active #thread-panel {
-  flex: 0 0 var(--cerebr-fullscreen-width);
-  max-width: var(--cerebr-fullscreen-width);
+  flex: 0 0 var(--cerebr-thread-right-width, var(--cerebr-fullscreen-width));
+  max-width: var(--cerebr-thread-right-width, var(--cerebr-fullscreen-width));
 }
 
 .fullscreen-mode body.thread-mode-active #chat-container,
@@ -5927,7 +6021,7 @@ html.fullscreen-mode::before {
 }
 
 .fullscreen-mode body.thread-mode-active #thread-panel {
-  max-width: var(--cerebr-fullscreen-width);
+  max-width: var(--cerebr-thread-right-width, var(--cerebr-fullscreen-width));
   border: none;
   background: transparent;
   box-shadow: none;

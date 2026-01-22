@@ -15,6 +15,9 @@ export function createSelectionThreadManager(appContext) {
   const chatLayout = dom.chatLayout;
   const threadPanel = dom.threadPanel;
   const threadContainer = dom.threadContainer;
+  const threadSplitter = dom.threadSplitter;
+  const threadResizeEdgeLeft = dom.threadResizeEdgeLeft;
+  const threadResizeEdgeRight = dom.threadResizeEdgeRight;
   const chatHistoryManager = services.chatHistoryManager;
   const chatHistoryUI = services.chatHistoryUI;
   const messageProcessor = services.messageProcessor;
@@ -39,7 +42,11 @@ export function createSelectionThreadManager(appContext) {
     bubbleHideTimer: null,
     bubbleHideAnimationTimer: null,
     bubbleClickHandler: null,
-    bubbleActionHandlers: new Map()
+    bubbleActionHandlers: new Map(),
+    threadLayoutLeft: null,
+    threadLayoutRight: null,
+    threadLayoutRatio: 0.5,
+    threadLayoutCustomized: false
   };
 
   const threadPanelHome = {
@@ -60,6 +67,16 @@ export function createSelectionThreadManager(appContext) {
   let threadBannerTextEl = null;
   const THREAD_BANNER_TOP_EDGE_PX = 80;
   let threadScrollListenerBound = false;
+  const THREAD_RESIZE_MIN_COLUMN_WIDTH = 240;
+  const THREAD_RESIZE_EDGE_PADDING = 30;
+  const threadResizeState = {
+    active: false,
+    mode: '',
+    startX: 0,
+    startLeft: 0,
+    startTotal: 0,
+    ratio: 0.5
+  };
 
   function updateThreadBannerPeek() {
     if (!threadBannerEl) return;
@@ -526,6 +543,7 @@ export function createSelectionThreadManager(appContext) {
     if (isFullscreenLayout()) {
       resetHiddenMessages();
       moveThreadPanelHome();
+      syncThreadLayoutWidths();
       return;
     }
 
@@ -2089,6 +2107,7 @@ export function createSelectionThreadManager(appContext) {
 
   function exitThread(options = {}) {
     const { skipDraftCleanup = false } = options || {};
+    stopThreadResize();
     const currentThreadId = state.activeThreadId;
     if (!skipDraftCleanup && currentThreadId) {
       cleanupDraftThreadIfNeeded(currentThreadId);
@@ -2125,6 +2144,187 @@ export function createSelectionThreadManager(appContext) {
       bubbleContentTextEl = null;
       bubbleContentIconEl = null;
     }
+  }
+
+  function clampNumber(value, min, max) {
+    if (!Number.isFinite(value)) return Number.isFinite(min) ? min : 0;
+    if (Number.isFinite(min) && value < min) return min;
+    if (Number.isFinite(max) && value > max) return max;
+    return value;
+  }
+
+  function parsePixelValue(rawValue) {
+    if (!rawValue) return NaN;
+    const parsed = parseFloat(rawValue);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+
+  function getRootCssPixelVar(name) {
+    if (!document.documentElement) return NaN;
+    return parsePixelValue(getComputedStyle(document.documentElement).getPropertyValue(name));
+  }
+
+  function getViewportWidth() {
+    const cssWidth = getRootCssPixelVar('--cerebr-viewport-width');
+    if (Number.isFinite(cssWidth) && cssWidth > 0) return cssWidth;
+    const fallback = document.documentElement?.clientWidth || window.innerWidth || 0;
+    return Number.isFinite(fallback) ? fallback : 0;
+  }
+
+  function getDefaultThreadColumnWidth() {
+    const cssWidth = getRootCssPixelVar('--cerebr-fullscreen-width');
+    if (Number.isFinite(cssWidth) && cssWidth > 0) return cssWidth;
+    return 800;
+  }
+
+  function getThreadLayoutWidths() {
+    const storedLeft = state.threadLayoutCustomized && Number.isFinite(state.threadLayoutLeft)
+      ? state.threadLayoutLeft
+      : getRootCssPixelVar('--cerebr-thread-left-width');
+    const storedRight = state.threadLayoutCustomized && Number.isFinite(state.threadLayoutRight)
+      ? state.threadLayoutRight
+      : getRootCssPixelVar('--cerebr-thread-right-width');
+    const fallback = getDefaultThreadColumnWidth();
+    const left = Number.isFinite(storedLeft) && storedLeft > 0 ? storedLeft : fallback;
+    const right = Number.isFinite(storedRight) && storedRight > 0 ? storedRight : fallback;
+    return { left, right };
+  }
+
+  function getThreadLayoutMaxWidth() {
+    // 预留两侧基础边距，避免拖到刚好贴边导致视觉拥挤。
+    const viewportWidth = getViewportWidth();
+    if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) return Infinity;
+    return Math.max(THREAD_RESIZE_MIN_COLUMN_WIDTH * 2, viewportWidth - THREAD_RESIZE_EDGE_PADDING);
+  }
+
+  function clampThreadSplitRatio(totalWidth, ratio) {
+    if (!Number.isFinite(totalWidth) || totalWidth <= 0) return 0.5;
+    const minRatio = Math.min(0.5, THREAD_RESIZE_MIN_COLUMN_WIDTH / totalWidth);
+    const maxRatio = 1 - minRatio;
+    return clampNumber(ratio, minRatio, maxRatio);
+  }
+
+  function normalizeThreadLayoutWidths(leftWidth, rightWidth) {
+    const fallback = getDefaultThreadColumnWidth();
+    let left = Number.isFinite(leftWidth) ? leftWidth : fallback;
+    let right = Number.isFinite(rightWidth) ? rightWidth : fallback;
+    if (left <= 0) left = fallback;
+    if (right <= 0) right = fallback;
+
+    const minTotal = THREAD_RESIZE_MIN_COLUMN_WIDTH * 2;
+    const maxTotal = getThreadLayoutMaxWidth();
+    const total = clampNumber(left + right, minTotal, maxTotal);
+    let ratio = (left + right) > 0 ? left / (left + right) : 0.5;
+    if (!Number.isFinite(ratio) || ratio <= 0) ratio = 0.5;
+    ratio = clampThreadSplitRatio(total, ratio);
+
+    let safeLeft = Math.round(total * ratio);
+    let safeRight = Math.round(total - safeLeft);
+    if (safeLeft < THREAD_RESIZE_MIN_COLUMN_WIDTH) {
+      safeLeft = THREAD_RESIZE_MIN_COLUMN_WIDTH;
+      safeRight = total - safeLeft;
+    }
+    if (safeRight < THREAD_RESIZE_MIN_COLUMN_WIDTH) {
+      safeRight = THREAD_RESIZE_MIN_COLUMN_WIDTH;
+      safeLeft = total - safeRight;
+    }
+    return { left: safeLeft, right: safeRight, ratio };
+  }
+
+  function applyThreadLayoutWidths(leftWidth, rightWidth) {
+    if (!document.documentElement) return;
+    const total = leftWidth + rightWidth;
+    state.threadLayoutLeft = leftWidth;
+    state.threadLayoutRight = rightWidth;
+    state.threadLayoutRatio = total > 0 ? leftWidth / total : 0.5;
+    document.documentElement.style.setProperty('--cerebr-thread-left-width', `${leftWidth}px`);
+    document.documentElement.style.setProperty('--cerebr-thread-right-width', `${rightWidth}px`);
+    document.documentElement.style.setProperty('--cerebr-thread-total-width', `${total}px`);
+  }
+
+  function syncThreadLayoutWidths() {
+    if (!isFullscreenLayout() || !state.activeThreadId) return;
+    const { left, right } = getThreadLayoutWidths();
+    const normalized = normalizeThreadLayoutWidths(left, right);
+    state.threadLayoutRatio = normalized.ratio;
+    if (!state.threadLayoutCustomized) return;
+    applyThreadLayoutWidths(normalized.left, normalized.right);
+  }
+
+  function isThreadResizeEnabled() {
+    return !!state.activeThreadId && isFullscreenLayout();
+  }
+
+  function handleThreadResizeMove(event) {
+    // 拖动中线只改左右比例；拖动两侧边缘则等比调整总宽度并保持居中。
+    if (!threadResizeState.active) return;
+    const delta = (event?.clientX ?? 0) - threadResizeState.startX;
+    if (threadResizeState.mode === 'split') {
+      const total = threadResizeState.startTotal;
+      let left = threadResizeState.startLeft + delta;
+      left = clampNumber(left, THREAD_RESIZE_MIN_COLUMN_WIDTH, total - THREAD_RESIZE_MIN_COLUMN_WIDTH);
+      const right = total - left;
+      applyThreadLayoutWidths(left, right);
+      return;
+    }
+
+    const direction = threadResizeState.mode === 'edge-right' ? 1 : -1;
+    const minTotal = THREAD_RESIZE_MIN_COLUMN_WIDTH * 2;
+    const maxTotal = getThreadLayoutMaxWidth();
+    const total = clampNumber(threadResizeState.startTotal + delta * 2 * direction, minTotal, maxTotal);
+    const ratio = clampThreadSplitRatio(total, threadResizeState.ratio);
+    const left = Math.round(total * ratio);
+    const right = Math.round(total - left);
+    applyThreadLayoutWidths(left, right);
+  }
+
+  function stopThreadResize() {
+    if (!threadResizeState.active) return;
+    threadResizeState.active = false;
+    threadResizeState.mode = '';
+    document.body.classList.remove('thread-resize-active');
+    document.removeEventListener('mousemove', handleThreadResizeMove);
+    document.removeEventListener('mouseup', stopThreadResize);
+    window.removeEventListener('blur', stopThreadResize);
+  }
+
+  function startThreadResize(event, mode) {
+    if (!event || !isThreadResizeEnabled()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.threadLayoutCustomized = true;
+    const { left, right } = getThreadLayoutWidths();
+    const normalized = normalizeThreadLayoutWidths(left, right);
+    const total = normalized.left + normalized.right;
+    threadResizeState.active = true;
+    threadResizeState.mode = mode;
+    threadResizeState.startX = event.clientX;
+    threadResizeState.startLeft = normalized.left;
+    threadResizeState.startTotal = total;
+    threadResizeState.ratio = normalized.ratio;
+    applyThreadLayoutWidths(normalized.left, normalized.right);
+    document.body.classList.add('thread-resize-active');
+    document.addEventListener('mousemove', handleThreadResizeMove);
+    document.addEventListener('mouseup', stopThreadResize);
+    window.addEventListener('blur', stopThreadResize);
+  }
+
+  function bindThreadResizeHandles() {
+    if (!threadSplitter || !threadResizeEdgeLeft || !threadResizeEdgeRight) return;
+    threadSplitter.addEventListener('mousedown', (event) => {
+      startThreadResize(event, 'split');
+    });
+    threadResizeEdgeLeft.addEventListener('mousedown', (event) => {
+      startThreadResize(event, 'edge-left');
+    });
+    threadResizeEdgeRight.addEventListener('mousedown', (event) => {
+      startThreadResize(event, 'edge-right');
+    });
+  }
+
+  function handleThreadResizeViewportChange() {
+    if (!isThreadResizeEnabled()) return;
+    syncThreadLayoutWidths();
   }
 
   function isThreadModeActive() {
@@ -2234,6 +2434,8 @@ export function createSelectionThreadManager(appContext) {
     document.addEventListener('click', handleDocumentClick);
     document.addEventListener('mousemove', handleTopEdgeMouseMove);
     bindHighlightEvents(chatContainer);
+    bindThreadResizeHandles();
+    window.addEventListener('resize', handleThreadResizeViewportChange);
     if (threadPanel) {
       threadPanel.setAttribute('aria-hidden', 'true');
     }
