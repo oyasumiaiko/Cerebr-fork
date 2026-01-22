@@ -33,6 +33,9 @@ export function createSelectionThreadManager(appContext) {
     bubbleType: 'hidden',
     bubbleHovered: false,
     highlightHovered: false,
+    bannerHovered: false,
+    bannerTopEdgeActive: false,
+    bannerScrollAtTop: true,
     bubbleHideTimer: null,
     bubbleHideAnimationTimer: null,
     bubbleClickHandler: null,
@@ -55,6 +58,53 @@ export function createSelectionThreadManager(appContext) {
 
   let threadBannerEl = null;
   let threadBannerTextEl = null;
+  const THREAD_BANNER_TOP_EDGE_PX = 80;
+  let threadScrollListenerBound = false;
+
+  function updateThreadBannerPeek() {
+    if (!threadBannerEl) return;
+    if (!state.activeThreadId) return;
+    if (state.bannerScrollAtTop) {
+      threadBannerEl.classList.remove('thread-selection-banner--peek');
+      threadBannerEl.classList.remove('thread-selection-banner--peek-visible');
+      threadBannerEl.classList.remove('thread-selection-banner--peek-hidden');
+      return;
+    }
+    const shouldPeek = !!(state.bannerHovered || state.bannerTopEdgeActive);
+    threadBannerEl.classList.add('thread-selection-banner--peek');
+    threadBannerEl.classList.toggle('thread-selection-banner--peek-visible', shouldPeek);
+    threadBannerEl.classList.toggle('thread-selection-banner--peek-hidden', !shouldPeek);
+  }
+
+  function handleThreadBannerMouseEnter() {
+    state.bannerHovered = true;
+    updateThreadBannerPeek();
+  }
+
+  function handleThreadBannerMouseLeave() {
+    state.bannerHovered = false;
+    updateThreadBannerPeek();
+  }
+
+  function handleTopEdgeMouseMove(event) {
+    if (!state.activeThreadId || !threadBannerEl) return;
+    const nearTop = (event?.clientY ?? 9999) <= THREAD_BANNER_TOP_EDGE_PX;
+    if (nearTop === state.bannerTopEdgeActive) return;
+    state.bannerTopEdgeActive = nearTop;
+    updateThreadBannerPeek();
+  }
+
+  function updateThreadBannerScrollState() {
+    if (!threadContainer) return;
+    const atTop = (threadContainer.scrollTop || 0) <= 4;
+    if (atTop === state.bannerScrollAtTop) return;
+    state.bannerScrollAtTop = atTop;
+    updateThreadBannerPeek();
+  }
+
+  function handleThreadContainerScroll() {
+    updateThreadBannerScrollState();
+  }
 
   function ensureBubble() {
     if (bubbleEl) return;
@@ -759,26 +809,34 @@ export function createSelectionThreadManager(appContext) {
     const header = document.createElement('div');
     header.className = 'thread-selection-banner__header';
 
+    const leftActions = document.createElement('div');
+    leftActions.className = 'thread-selection-banner__actions thread-selection-banner__actions--left';
+
     const label = document.createElement('div');
     label.className = 'thread-selection-banner__label';
     label.textContent = '划词内容';
 
     const actions = document.createElement('div');
-    actions.className = 'thread-selection-banner__actions';
+    actions.className = 'thread-selection-banner__actions thread-selection-banner__actions--right';
 
     const confirmButton = document.createElement('button');
     confirmButton.className = 'thread-selection-banner__button thread-selection-banner__button--confirm';
     confirmButton.setAttribute('type', 'button');
-    confirmButton.textContent = '确认删除';
+    confirmButton.innerHTML = '<i class="fa-solid fa-check"></i>';
+    confirmButton.setAttribute('aria-label', '确认删除线程');
+    confirmButton.title = '确认删除线程';
     confirmButton.style.display = 'none';
 
     const deleteButton = document.createElement('button');
     deleteButton.className = 'thread-selection-banner__button thread-selection-banner__button--delete';
     deleteButton.setAttribute('type', 'button');
-    deleteButton.textContent = '删除';
+    deleteButton.innerHTML = '<i class="fa-solid fa-trash"></i>';
+    deleteButton.setAttribute('aria-label', '删除线程');
+    deleteButton.title = '删除线程';
     const resetDeleteConfirm = () => {
       confirmButton.style.display = 'none';
-      deleteButton.textContent = '删除';
+      deleteButton.innerHTML = '<i class="fa-solid fa-trash"></i>';
+      deleteButton.title = '删除线程';
       deleteButton.dataset.confirmArmed = 'false';
     };
     // 两段式确认：先点击“删除”露出左侧确认按钮，再移动鼠标点击确认按钮执行删除。
@@ -791,7 +849,8 @@ export function createSelectionThreadManager(appContext) {
         return;
       }
       deleteButton.dataset.confirmArmed = 'true';
-      deleteButton.textContent = '取消';
+      deleteButton.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      deleteButton.title = '取消删除';
       confirmButton.style.display = 'inline-flex';
     });
 
@@ -805,7 +864,9 @@ export function createSelectionThreadManager(appContext) {
     const exitButton = document.createElement('button');
     exitButton.className = 'thread-selection-banner__button thread-selection-banner__button--exit';
     exitButton.setAttribute('type', 'button');
-    exitButton.textContent = '退出';
+    exitButton.innerHTML = '<i class="fa-solid fa-arrow-left"></i>';
+    exitButton.setAttribute('aria-label', '退出线程');
+    exitButton.title = '退出线程';
     exitButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -813,10 +874,11 @@ export function createSelectionThreadManager(appContext) {
       exitThread();
     });
 
+    leftActions.appendChild(exitButton);
     actions.appendChild(confirmButton);
     actions.appendChild(deleteButton);
-    actions.appendChild(exitButton);
 
+    header.appendChild(leftActions);
     header.appendChild(label);
     header.appendChild(actions);
 
@@ -830,6 +892,17 @@ export function createSelectionThreadManager(appContext) {
 
     threadBannerEl = banner;
     threadBannerTextEl = text;
+    state.bannerHovered = false;
+    state.bannerTopEdgeActive = false;
+    state.bannerScrollAtTop = true;
+    banner.addEventListener('mouseenter', handleThreadBannerMouseEnter);
+    banner.addEventListener('mouseleave', handleThreadBannerMouseLeave);
+    if (!threadScrollListenerBound && threadContainer) {
+      threadContainer.addEventListener('scroll', handleThreadContainerScroll, { passive: true });
+      threadScrollListenerBound = true;
+    }
+    updateThreadBannerScrollState();
+    updateThreadBannerPeek();
   }
 
   async function renderThreadMessages(threadId, options = {}) {
@@ -2020,6 +2093,9 @@ export function createSelectionThreadManager(appContext) {
     if (!skipDraftCleanup && currentThreadId) {
       cleanupDraftThreadIfNeeded(currentThreadId);
     }
+    state.bannerHovered = false;
+    state.bannerTopEdgeActive = false;
+    state.bannerScrollAtTop = true;
     state.activeThreadId = null;
     state.activeAnchorMessageId = null;
     state.activeSelectionText = '';
@@ -2156,6 +2232,7 @@ export function createSelectionThreadManager(appContext) {
     if (!chatContainer) return;
     document.addEventListener('mouseup', handleSelectionMouseUp);
     document.addEventListener('click', handleDocumentClick);
+    document.addEventListener('mousemove', handleTopEdgeMouseMove);
     bindHighlightEvents(chatContainer);
     if (threadPanel) {
       threadPanel.setAttribute('aria-hidden', 'true');

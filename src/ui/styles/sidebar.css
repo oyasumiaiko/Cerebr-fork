@@ -511,12 +511,32 @@ body.thread-mode-active #thread-panel {
     background: color-mix(in srgb, var(--cerebr-bg-color) 90%, transparent);
     color: var(--cerebr-text-color);
     font-size: var(--cerebr-font-size);
+    max-height: 60vh;
+}
+
+.thread-selection-banner--peek {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.thread-selection-banner--peek-hidden {
+    opacity: 0;
+    transform: translateY(-16px);
+    pointer-events: none;
+}
+
+.thread-selection-banner--peek-visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
 }
 
 .thread-selection-banner__header {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
 }
 
@@ -525,6 +545,7 @@ body.thread-mode-active #thread-panel {
     font-weight: 600;
     letter-spacing: 0.2px;
     opacity: 0.8;
+    justify-self: center;
 }
 
 .thread-selection-banner__actions {
@@ -534,14 +555,18 @@ body.thread-mode-active #thread-panel {
 }
 
 .thread-selection-banner__button {
-    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
     border-radius: 8px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
     background: color-mix(in srgb, var(--cerebr-input-bg) 85%, transparent);
     color: var(--cerebr-text-color);
     cursor: pointer;
-    font-size: 0.9em;
+    font-size: 0.95em;
     min-height: 28px;
+    min-width: 28px;
 }
 
 .thread-selection-banner__button--confirm {
