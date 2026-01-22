@@ -94,7 +94,9 @@ export function createChatHistoryUI(appContext) {
     cleanupTimer: null,
     inactiveAt: 0,
     scrollTop: 0,
-    scrollRestorePending: false
+    scrollRestorePending: false,
+    selectMode: false,
+    selectedKeys: new Set()
   };
   const GALLERY_RENDER_BATCH_SIZE = 120;
   const GALLERY_META_PAGE_SIZE = 80;
@@ -136,6 +138,12 @@ export function createChatHistoryUI(appContext) {
     galleryCache.inactiveAt = 0;
     galleryCache.scrollTop = 0;
     galleryCache.scrollRestorePending = false;
+    galleryCache.selectMode = false;
+    if (galleryCache.selectedKeys instanceof Set) {
+      galleryCache.selectedKeys.clear();
+    } else {
+      galleryCache.selectedKeys = new Set();
+    }
     if (galleryThumbQueue.pending.length) {
       galleryThumbQueue.pending.length = 0;
     }
@@ -144,6 +152,7 @@ export function createChatHistoryUI(appContext) {
       if (panel) {
         const galleryContent = panel.querySelector('.history-tab-content[data-tab="gallery"]');
         if (galleryContent) {
+          clearGallerySelectionUI(galleryContent);
           if (galleryContent._galleryObserver) {
             galleryContent._galleryObserver.disconnect();
             galleryContent._galleryObserver = null;
@@ -169,6 +178,70 @@ export function createChatHistoryUI(appContext) {
       const panel = document.getElementById('chat-history-panel');
       if (panel) removeSearchSummary(panel);
     } catch (_) {}
+  }
+
+  function resetGallerySelectionState() {
+    galleryCache.selectMode = false;
+    if (galleryCache.selectedKeys instanceof Set) {
+      galleryCache.selectedKeys.clear();
+    } else {
+      galleryCache.selectedKeys = new Set();
+    }
+  }
+
+  function clearGallerySelectionUI(container) {
+    if (!container) return;
+    container.dataset.gallerySelectMode = '';
+    const domByKey = container._galleryDomByKey;
+    if (domByKey instanceof Map) {
+      domByKey.forEach((item) => {
+        if (item?.classList) item.classList.remove('is-selected');
+      });
+      return;
+    }
+    try {
+      container.querySelectorAll('.gallery-item.is-selected').forEach((item) => {
+        item.classList.remove('is-selected');
+      });
+    } catch (_) {}
+  }
+
+  function normalizeGalleryRel(p) {
+    return normalizePath(p || '').replace(/^\/+/, '').toLowerCase();
+  }
+
+  function resolveImageUrlForGallery(imageUrlObj, downloadRoot) {
+    if (!imageUrlObj) return '';
+    const rawUrl = typeof imageUrlObj.url === 'string' ? imageUrlObj.url : '';
+    const relPath = typeof imageUrlObj.path === 'string' ? imageUrlObj.path : '';
+    if (rawUrl.startsWith('file://')) return rawUrl;
+    if (relPath) {
+      const fileUrl = downloadRoot ? buildFileUrlFromRelative(relPath, downloadRoot) : null;
+      return fileUrl || relPath;
+    }
+    if (rawUrl) {
+      if (/^(https?:|data:|blob:|chrome-extension:|moz-extension:)/i.test(rawUrl)) return rawUrl;
+      const fileUrl = downloadRoot ? buildFileUrlFromRelative(rawUrl, downloadRoot) : null;
+      return fileUrl || rawUrl;
+    }
+    return '';
+  }
+
+  function buildGalleryImageKey(imageUrlObj, resolvedUrl) {
+    // 优先用相对路径做去重，避免分支对话重复图片反复出现
+    const rawPath = typeof imageUrlObj?.path === 'string' ? imageUrlObj.path.trim() : '';
+    if (rawPath) return `rel:${normalizeGalleryRel(rawPath)}`;
+    const rawUrl = typeof imageUrlObj?.url === 'string' ? imageUrlObj.url.trim() : '';
+    if (rawUrl.startsWith('file://')) {
+      const rel = fileUrlToRelative(rawUrl);
+      if (rel) return `rel:${normalizeGalleryRel(rel)}`;
+    }
+    if (resolvedUrl && resolvedUrl.startsWith('file://')) {
+      const rel = fileUrlToRelative(resolvedUrl);
+      if (rel) return `rel:${normalizeGalleryRel(rel)}`;
+    }
+    const fallback = rawUrl || resolvedUrl || '';
+    return fallback ? `url:${fallback}` : '';
   }
 
   function restoreGalleryScrollIfNeeded(container) {
@@ -224,7 +297,9 @@ export function createChatHistoryUI(appContext) {
     const galleryContent = panel?.querySelector('.history-tab-content[data-tab="gallery"]');
     if (galleryContent) {
       galleryCache.scrollTop = galleryContent.scrollTop;
+      clearGallerySelectionUI(galleryContent);
     }
+    resetGallerySelectionState();
     scheduleGalleryCleanup(panel);
   }
 
@@ -366,11 +441,13 @@ export function createChatHistoryUI(appContext) {
     trendStatsCache.promise = null;
   }
 
-  function invalidateMetadataCache() {
+  function invalidateMetadataCache(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const skipGallery = !!normalizedOptions.skipGallery;
     metaCache.data = null;
     metaCache.time = 0;
     metaCache.promise = null;
-    invalidateGalleryCache();
+    if (!skipGallery) invalidateGalleryCache();
     invalidateSearchCache();
     invalidateTrendStatsCache();
   }
@@ -3911,21 +3988,45 @@ export function createChatHistoryUI(appContext) {
 
       const images = galleryCache.items;
       if (!galleryCache.scanState) {
+        // 相册流式扫描状态：去重统计 + 删除索引，用于后续重复计数与批量删除
         galleryCache.scanState = {
           cursor: null,
           hasMore: true,
           seenKeys: new Set(),
-          scannedConversations: 0
+          scannedConversations: 0,
+          itemByKey: new Map(),
+          dupCountByKey: new Map(),
+          convIdsByKey: new Map(),
+          deletedKeys: new Set(),
+          pendingDupKeys: new Set()
         };
       }
       const scanState = galleryCache.scanState;
       const seenKeys = scanState.seenKeys instanceof Set ? scanState.seenKeys : new Set();
       scanState.seenKeys = seenKeys;
+      const itemByKey = scanState.itemByKey instanceof Map ? scanState.itemByKey : new Map();
+      scanState.itemByKey = itemByKey;
+      const dupCountByKey = scanState.dupCountByKey instanceof Map ? scanState.dupCountByKey : new Map();
+      scanState.dupCountByKey = dupCountByKey;
+      const convIdsByKey = scanState.convIdsByKey instanceof Map ? scanState.convIdsByKey : new Map();
+      scanState.convIdsByKey = convIdsByKey;
+      const deletedKeys = scanState.deletedKeys instanceof Set ? scanState.deletedKeys : new Set();
+      scanState.deletedKeys = deletedKeys;
+      const pendingDupKeys = scanState.pendingDupKeys instanceof Set ? scanState.pendingDupKeys : new Set();
+      scanState.pendingDupKeys = pendingDupKeys;
 
       if (seenKeys.size === 0 && images.length) {
         images.forEach((item) => {
           const key = item?.dedupeKey || (item?.url ? `url:${item.url}` : '');
           if (key) seenKeys.add(key);
+        });
+      }
+      if (itemByKey.size === 0 && images.length) {
+        images.forEach((item) => {
+          if (!item?.dedupeKey) return;
+          itemByKey.set(item.dedupeKey, item);
+          const current = Math.max(1, Number(item.dupCount) || 1);
+          dupCountByKey.set(item.dedupeKey, current);
         });
       }
       let downloadRoot = null;
@@ -3955,42 +4056,6 @@ export function createChatHistoryUI(appContext) {
           }
         };
       })();
-
-      // 相册专用：避免逐条 await，优先用已缓存的下载根路径拼接。
-      const resolveImageUrlForGallery = (imageUrlObj) => {
-        if (!imageUrlObj) return '';
-        const rawUrl = typeof imageUrlObj.url === 'string' ? imageUrlObj.url : '';
-        const relPath = typeof imageUrlObj.path === 'string' ? imageUrlObj.path : '';
-        if (rawUrl.startsWith('file://')) return rawUrl;
-        if (relPath) {
-          const fileUrl = downloadRoot ? buildFileUrlFromRelative(relPath, downloadRoot) : null;
-          return fileUrl || relPath;
-        }
-        if (rawUrl) {
-          if (/^(https?:|data:|blob:|chrome-extension:|moz-extension:)/i.test(rawUrl)) return rawUrl;
-          const fileUrl = downloadRoot ? buildFileUrlFromRelative(rawUrl, downloadRoot) : null;
-          return fileUrl || rawUrl;
-        }
-        return '';
-      };
-
-      const normalizeGalleryRel = (p) => normalizePath(p || '').replace(/^\/+/, '').toLowerCase();
-      const buildGalleryImageKey = (imageUrlObj, resolvedUrl) => {
-        // 优先用相对路径做去重，避免分支对话重复图片反复出现
-        const rawPath = typeof imageUrlObj?.path === 'string' ? imageUrlObj.path.trim() : '';
-        if (rawPath) return `rel:${normalizeGalleryRel(rawPath)}`;
-        const rawUrl = typeof imageUrlObj?.url === 'string' ? imageUrlObj.url.trim() : '';
-        if (rawUrl.startsWith('file://')) {
-          const rel = fileUrlToRelative(rawUrl);
-          if (rel) return `rel:${normalizeGalleryRel(rel)}`;
-        }
-        if (resolvedUrl && resolvedUrl.startsWith('file://')) {
-          const rel = fileUrlToRelative(resolvedUrl);
-          if (rel) return `rel:${normalizeGalleryRel(rel)}`;
-        }
-        const fallback = rawUrl || resolvedUrl || '';
-        return fallback ? `url:${fallback}` : '';
-      };
 
       let cursor = scanState.cursor || null;
       let hasMore = scanState.hasMore !== false;
@@ -4057,13 +4122,26 @@ export function createChatHistoryUI(appContext) {
             const records = [];
             const orderedParts = imageParts.slice().sort((a, b) => a.partIndex - b.partIndex);
             for (const part of orderedParts) {
-              const resolvedUrl = resolveImageUrlForGallery(part.imageUrl);
+              const resolvedUrl = resolveImageUrlForGallery(part.imageUrl, downloadRoot);
               if (!resolvedUrl) continue;
               if (isGifImageReference(part.imageUrl, resolvedUrl)) continue;
               const dedupeKey = buildGalleryImageKey(part.imageUrl, resolvedUrl);
-              if (!dedupeKey || seenKeys.has(dedupeKey)) continue;
+              if (!dedupeKey || deletedKeys.has(dedupeKey)) continue;
+              const convIds = convIdsByKey.get(dedupeKey) || new Set();
+              convIds.add(conv.id);
+              convIdsByKey.set(dedupeKey, convIds);
+              const nextCount = (dupCountByKey.get(dedupeKey) || 0) + 1;
+              dupCountByKey.set(dedupeKey, nextCount);
+              if (seenKeys.has(dedupeKey)) {
+                const existed = itemByKey.get(dedupeKey);
+                if (existed) {
+                  existed.dupCount = nextCount;
+                  pendingDupKeys.add(dedupeKey);
+                }
+                continue;
+              }
               seenKeys.add(dedupeKey);
-              records.push({
+              const record = {
                 conversationId: conv.id,
                 messageId: msg.id,
                 messageKey: `${conv.id || 'conv'}_${msg.id || m}`,
@@ -4072,8 +4150,11 @@ export function createChatHistoryUI(appContext) {
                 summary: conv.summary || '',
                 title: conv.title || '',
                 domain: convDomain || '未知来源',
-                dedupeKey
-              });
+                dedupeKey,
+                dupCount: nextCount
+              };
+              itemByKey.set(dedupeKey, record);
+              records.push(record);
             }
 
             if (records.length) {
@@ -4111,6 +4192,166 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
+  function applyGalleryDeletionToCache(deletedKeys) {
+    const keySet = deletedKeys instanceof Set
+      ? deletedKeys
+      : new Set(Array.isArray(deletedKeys) ? deletedKeys.filter(Boolean) : []);
+    if (!keySet.size) return;
+    if (Array.isArray(galleryCache.items)) {
+      // 保持数组引用不变，避免渲染流程持有旧引用导致追加错乱
+      const nextItems = galleryCache.items.filter(item => !keySet.has(item?.dedupeKey));
+      galleryCache.items.length = 0;
+      galleryCache.items.push(...nextItems);
+    } else {
+      galleryCache.items = [];
+    }
+    if (galleryCache.selectedKeys instanceof Set) {
+      keySet.forEach((key) => galleryCache.selectedKeys.delete(key));
+    }
+    const scanState = galleryCache.scanState;
+    if (scanState) {
+      if (scanState.deletedKeys instanceof Set) {
+        keySet.forEach((key) => scanState.deletedKeys.add(key));
+      } else {
+        scanState.deletedKeys = new Set(keySet);
+      }
+      if (scanState.itemByKey instanceof Map) {
+        keySet.forEach((key) => scanState.itemByKey.delete(key));
+      }
+      if (scanState.dupCountByKey instanceof Map) {
+        keySet.forEach((key) => scanState.dupCountByKey.delete(key));
+      }
+      if (scanState.convIdsByKey instanceof Map) {
+        keySet.forEach((key) => scanState.convIdsByKey.delete(key));
+      }
+      if (scanState.pendingDupKeys instanceof Set) {
+        keySet.forEach((key) => scanState.pendingDupKeys.delete(key));
+      }
+    }
+  }
+
+  function removeGalleryItemsFromDom(container, deletedKeys) {
+    if (!container) return 0;
+    const keySet = deletedKeys instanceof Set
+      ? deletedKeys
+      : new Set(Array.isArray(deletedKeys) ? deletedKeys.filter(Boolean) : []);
+    if (!keySet.size) return 0;
+    let removed = 0;
+    const domByKey = container._galleryDomByKey;
+    if (domByKey instanceof Map) {
+      keySet.forEach((key) => {
+        const item = domByKey.get(key);
+        if (item?.remove) {
+          item.remove();
+          removed += 1;
+        }
+        domByKey.delete(key);
+      });
+      return removed;
+    }
+    try {
+      container.querySelectorAll('.gallery-item[data-dedupe-key]').forEach((item) => {
+        if (keySet.has(item.dataset.dedupeKey)) {
+          item.remove();
+          removed += 1;
+        }
+      });
+    } catch (_) {}
+    return removed;
+  }
+
+  async function deleteGalleryImagesByKeys(rawKeys = []) {
+    const keys = Array.isArray(rawKeys) ? rawKeys.filter(Boolean) : [];
+    const uniqueKeys = Array.from(new Set(keys));
+    const deletedKeys = new Set(uniqueKeys);
+    if (!deletedKeys.size) {
+      return { deletedKeys, updatedConversations: 0, removedImages: 0, scannedConversations: 0 };
+    }
+
+    const scanState = galleryCache.scanState;
+    const convIdsByKey = scanState?.convIdsByKey instanceof Map ? scanState.convIdsByKey : new Map();
+    const targetConvIds = new Set();
+    deletedKeys.forEach((key) => {
+      const ids = convIdsByKey.get(key);
+      if (ids instanceof Set) {
+        ids.forEach((id) => targetConvIds.add(id));
+      }
+    });
+
+    if (!targetConvIds.size) {
+      return { deletedKeys, updatedConversations: 0, removedImages: 0, scannedConversations: 0 };
+    }
+
+    // 说明：这里按“去重键”删图，确保重复引用在同一次删除里一并移除。
+    const sp = utils.createStepProgress({ steps: ['定位会话', '删除图片', '完成'], type: 'warning' });
+    sp.setStep(0);
+    sp.next('删除图片');
+
+    let downloadRoot = null;
+    try {
+      downloadRoot = await loadDownloadRoot();
+    } catch (_) {}
+
+    let updatedConversations = 0;
+    let removedImages = 0;
+    let processed = 0;
+    const total = targetConvIds.size || 1;
+
+    for (const convId of targetConvIds) {
+      processed += 1;
+      const conv = await getConversationById(convId, true);
+      if (!conv || !Array.isArray(conv.messages)) {
+        try {
+          sp.updateSub(processed, total, `删除图片 (${processed}/${total})`);
+        } catch (_) {}
+        continue;
+      }
+      let convChanged = false;
+      for (const msg of conv.messages) {
+        if (!Array.isArray(msg.content)) continue;
+        let removedInMessage = 0;
+        const nextParts = [];
+        for (const part of msg.content) {
+          if (part?.type === 'image_url' && part.image_url) {
+            const resolvedUrl = resolveImageUrlForGallery(part.image_url, downloadRoot);
+            const key = buildGalleryImageKey(part.image_url, resolvedUrl);
+            if (key && deletedKeys.has(key)) {
+              removedInMessage += 1;
+              continue;
+            }
+          }
+          nextParts.push(part);
+        }
+        if (removedInMessage > 0) {
+          msg.content = normalizeStoredMessageContent(nextParts);
+          removedImages += removedInMessage;
+          convChanged = true;
+        }
+      }
+
+      if (convChanged) {
+        conv.messageCount = Array.isArray(conv.messages) ? conv.messages.length : 0;
+        await putConversation(conv);
+        updateConversationInCache(conv);
+        if (activeConversation?.id === conv.id) activeConversation = conv;
+        updatedConversations += 1;
+      }
+
+      try {
+        sp.updateSub(processed, total, `删除图片 (${processed}/${total})`);
+      } catch (_) {}
+    }
+
+    sp.complete('完成', true);
+    invalidateMetadataCache({ skipGallery: true });
+    return {
+      deletedKeys,
+      updatedConversations,
+      removedImages,
+      scannedConversations: targetConvIds.size
+    };
+  }
+
   async function renderGalleryTab(container, { forceRefresh = false } = {}) {
     if (!container) return;
     if (!forceRefresh && container.dataset.rendered === 'true') {
@@ -4138,10 +4379,41 @@ export function createChatHistoryUI(appContext) {
       }
       setupGalleryScrollTracking(container);
 
+      const selectedKeys = galleryCache.selectedKeys instanceof Set ? galleryCache.selectedKeys : new Set();
+      galleryCache.selectedKeys = selectedKeys;
+      const domByKey = new Map();
+      container._galleryDomByKey = domByKey;
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'gallery-toolbar';
+      const toolbarLeft = document.createElement('div');
+      toolbarLeft.className = 'gallery-toolbar-left';
+      const toolbarRight = document.createElement('div');
+      toolbarRight.className = 'gallery-toolbar-right';
+
+      const selectToggleBtn = document.createElement('button');
+      selectToggleBtn.className = 'gallery-toolbar-btn gallery-select-toggle';
+      selectToggleBtn.textContent = '多选删除';
+
+      const selectionCount = document.createElement('span');
+      selectionCount.className = 'gallery-select-count';
+
+      const deleteButton = document.createElement('button');
+      deleteButton.className = 'gallery-toolbar-btn gallery-delete-btn';
+      deleteButton.textContent = '删除选中';
+
+      toolbarLeft.appendChild(selectToggleBtn);
+      toolbarLeft.appendChild(selectionCount);
+      toolbarRight.appendChild(deleteButton);
+      toolbar.appendChild(toolbarLeft);
+      toolbar.appendChild(toolbarRight);
+      container.appendChild(toolbar);
+
       const status = document.createElement('div');
       status.className = 'gallery-stream-status';
       status.textContent = '正在扫描图片…';
       container.appendChild(status);
+      container._galleryStatusEl = status;
 
       const grid = document.createElement('div');
       grid.className = 'gallery-grid';
@@ -4155,19 +4427,159 @@ export function createChatHistoryUI(appContext) {
       let renderedCount = 0;
       let renderScheduled = false;
       let scanDone = false;
+      let deletionInProgress = false;
+
+      const updateSelectionCount = () => {
+        const count = selectedKeys.size;
+        selectionCount.textContent = `已选 ${count}`;
+        deleteButton.disabled = !galleryCache.selectMode || count === 0 || deletionInProgress;
+      };
+
+      const updateSelectionStyles = () => {
+        const enabled = galleryCache.selectMode;
+        domByKey.forEach((item, key) => {
+          if (!item?.classList) return;
+          if (!enabled) {
+            item.classList.remove('is-selected');
+            return;
+          }
+          item.classList.toggle('is-selected', selectedKeys.has(key));
+        });
+      };
+
+      const setSelectMode = (enabled, { clearSelection = false } = {}) => {
+        galleryCache.selectMode = !!enabled;
+        container.dataset.gallerySelectMode = galleryCache.selectMode ? 'true' : '';
+        selectToggleBtn.textContent = galleryCache.selectMode ? '退出多选' : '多选删除';
+        selectionCount.style.display = galleryCache.selectMode ? '' : 'none';
+        deleteButton.style.display = galleryCache.selectMode ? '' : 'none';
+        if (!galleryCache.selectMode && clearSelection) {
+          selectedKeys.clear();
+        }
+        updateSelectionCount();
+        updateSelectionStyles();
+      };
+
+      const updateGalleryDupBadge = (item, record) => {
+        if (!item) return;
+        const count = Math.max(1, Number(record?.dupCount) || 1);
+        let badge = item._galleryDupBadge;
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'gallery-dup-badge';
+          item._galleryDupBadge = badge;
+          item.appendChild(badge);
+        }
+        if (count > 1) {
+          badge.textContent = `x${count}`;
+          badge.style.display = 'flex';
+        } else {
+          badge.textContent = '';
+          badge.style.display = 'none';
+        }
+      };
+
+      const flushDupBadgeUpdates = () => {
+        const scanState = galleryCache.scanState;
+        if (!scanState || !(scanState.pendingDupKeys instanceof Set)) return;
+        if (!scanState.pendingDupKeys.size) return;
+        const keys = Array.from(scanState.pendingDupKeys);
+        scanState.pendingDupKeys.clear();
+        keys.forEach((key) => {
+          const item = domByKey.get(key);
+          const record = scanState.itemByKey?.get(key);
+          if (item && record) updateGalleryDupBadge(item, record);
+        });
+      };
+
+      const toggleSelectionForItem = (record, item) => {
+        if (!record?.dedupeKey) return;
+        const key = record.dedupeKey;
+        if (selectedKeys.has(key)) {
+          selectedKeys.delete(key);
+        } else {
+          selectedKeys.add(key);
+        }
+        if (item?.classList) {
+          item.classList.toggle('is-selected', selectedKeys.has(key));
+        }
+        updateSelectionCount();
+      };
 
       const updateStatus = () => {
         if (!status) return;
         if (scanDone) {
           if (images.length) {
+            status.className = 'gallery-stream-status';
             status.textContent = `已加载 ${images.length} 张图片`;
+          } else {
+            status.className = 'gallery-empty';
+            status.textContent = '暂无可展示的图片';
           }
         } else if (images.length) {
+          status.className = 'gallery-stream-status';
           status.textContent = `正在扫描图片… 已加载 ${images.length} 张`;
         } else {
+          status.className = 'gallery-stream-status';
           status.textContent = '正在扫描图片…';
         }
+        if (scanDone && images.length === 0) {
+          grid.style.display = 'none';
+        } else if (images.length > 0) {
+          grid.style.display = '';
+        }
       };
+
+      const handleDeleteSelected = async () => {
+        if (!selectedKeys.size || deletionInProgress) return;
+        const count = selectedKeys.size;
+        const confirmed = window.confirm(`确定删除已选 ${count} 张图片的所有重复项？该操作会从相关对话中移除图片引用。`);
+        if (!confirmed) return;
+        deletionInProgress = true;
+        selectToggleBtn.disabled = true;
+        deleteButton.disabled = true;
+        try {
+          const result = await deleteGalleryImagesByKeys(Array.from(selectedKeys));
+          if (result?.removedImages > 0 && result?.deletedKeys?.size) {
+            applyGalleryDeletionToCache(result.deletedKeys);
+            const removedCount = removeGalleryItemsFromDom(container, result.deletedKeys);
+            if (removedCount > 0) {
+              // 删除已渲染节点后同步修正 renderedCount，避免后续批量追加错位
+              renderedCount = Math.max(0, renderedCount - removedCount);
+            }
+            selectedKeys.clear();
+            updateSelectionCount();
+            updateSelectionStyles();
+            updateStatus();
+            try {
+              showNotification({
+                message: `已删除 ${result.removedImages} 处图片引用`,
+                duration: 2200
+              });
+            } catch (_) {}
+          } else {
+            try {
+              showNotification({ message: '未找到可删除的图片', type: 'warning', duration: 2000 });
+            } catch (_) {}
+          }
+        } catch (error) {
+          console.error('删除图片失败:', error);
+          try {
+            showNotification({ message: '删除图片失败', type: 'error', description: String(error?.message || error) });
+          } catch (_) {}
+        } finally {
+          deletionInProgress = false;
+          selectToggleBtn.disabled = false;
+          updateSelectionCount();
+        }
+      };
+
+      selectToggleBtn.addEventListener('click', () => {
+        const next = !galleryCache.selectMode;
+        setSelectMode(next, { clearSelection: !next });
+      });
+      deleteButton.addEventListener('click', handleDeleteSelected);
+      setSelectMode(!!galleryCache.selectMode, { clearSelection: !galleryCache.selectMode });
 
       const placeholderSrc = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
       const ensureThumbLoaded = (img) => {
@@ -4241,6 +4653,10 @@ export function createChatHistoryUI(appContext) {
           if (record.messageKey) {
             item.dataset.messageKey = record.messageKey;
           }
+          if (record.dedupeKey) {
+            item.dataset.dedupeKey = record.dedupeKey;
+            domByKey.set(record.dedupeKey, item);
+          }
 
           const img = document.createElement('img');
           img.loading = 'lazy';
@@ -4264,8 +4680,24 @@ export function createChatHistoryUI(appContext) {
           overlay.appendChild(overlayText);
           item.appendChild(overlay);
 
+          const selectIndicator = document.createElement('div');
+          selectIndicator.className = 'gallery-select-indicator';
+          const selectIcon = document.createElement('i');
+          selectIcon.className = 'far fa-check';
+          selectIndicator.appendChild(selectIcon);
+          item.appendChild(selectIndicator);
+
+          updateGalleryDupBadge(item, record);
+          if (galleryCache.selectMode && record.dedupeKey && selectedKeys.has(record.dedupeKey)) {
+            item.classList.add('is-selected');
+          }
+
           item.addEventListener('click', async () => {
             try {
+              if (galleryCache.selectMode) {
+                toggleSelectionForItem(record, item);
+                return;
+              }
               const conversation = await getConversationFromCacheOrLoad(record.conversationId);
               if (conversation) {
                 await loadConversationIntoChat(conversation, {
@@ -4281,6 +4713,7 @@ export function createChatHistoryUI(appContext) {
 
           item.addEventListener('contextmenu', (event) => {
             event.preventDefault();
+            if (galleryCache.selectMode) return;
             try {
               window.open(record.url, '_blank', 'noopener');
             } catch (_) {}
@@ -4289,6 +4722,9 @@ export function createChatHistoryUI(appContext) {
           grid.insertBefore(item, sentinel);
         }
         renderedCount = nextCount;
+        if (grid.style.display === 'none') {
+          grid.style.display = '';
+        }
         if (scanDone && renderedCount >= images.length) {
           if (container._galleryObserver) {
             container._galleryObserver.disconnect();
@@ -4306,6 +4742,7 @@ export function createChatHistoryUI(appContext) {
         requestAnimationFrame(() => {
           renderScheduled = false;
           appendBatch();
+          flushDupBadgeUpdates();
           restoreGalleryScrollIfNeeded(container);
           if (container.scrollHeight <= container.clientHeight && renderedCount < images.length) {
             scheduleAppend();
@@ -4335,10 +4772,12 @@ export function createChatHistoryUI(appContext) {
           if (shouldCancel()) return;
           updateStatus();
           scheduleAppend();
+          flushDupBadgeUpdates();
         },
         onProgress: () => {
           if (shouldCancel()) return;
           updateStatus();
+          flushDupBadgeUpdates();
           restoreGalleryScrollIfNeeded(container);
         }
       });
@@ -4347,11 +4786,13 @@ export function createChatHistoryUI(appContext) {
       scanDone = true;
       updateStatus();
       if (!images.length) {
-        grid.remove();
         status.textContent = '暂无可展示的图片';
         status.className = 'gallery-empty';
+        grid.style.display = 'none';
       } else {
-        status.remove();
+        status.className = 'gallery-stream-status';
+        status.textContent = `已加载 ${images.length} 张图片`;
+        grid.style.display = '';
         appendBatch();
         restoreGalleryScrollIfNeeded(container);
       }

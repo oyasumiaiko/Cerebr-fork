@@ -1954,6 +1954,51 @@ input:checked + .slider::before {
     color: color-mix(in srgb, var(--cerebr-text-color) 65%, transparent);
 }
 
+.gallery-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 4px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
+    backdrop-filter: blur(6px);
+}
+
+.gallery-toolbar-left,
+.gallery-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gallery-toolbar-btn {
+    background: color-mix(in srgb, var(--cerebr-control-bg) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
+    color: var(--cerebr-text-color);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.gallery-toolbar-btn:hover {
+    background: color-mix(in srgb, var(--cerebr-control-bg) 76%, transparent);
+}
+
+.gallery-toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.gallery-select-count {
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
 .gallery-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
@@ -1971,6 +2016,63 @@ input:checked + .slider::before {
     cursor: pointer;
     content-visibility: auto;
     contain-intrinsic-size: 96px 96px;
+}
+
+.gallery-dup-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 2;
+    min-width: 20px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: 11px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.gallery-select-indicator {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-select-mode="true"] .gallery-select-indicator {
+    opacity: 1;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-select-mode="true"] .gallery-item {
+    cursor: pointer;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-select-mode="true"] .gallery-item.is-selected {
+    outline: 2px solid var(--cerebr-highlight);
+    outline-offset: -2px;
+}
+
+.history-tab-content[data-tab="gallery"][data-gallery-select-mode="true"] .gallery-item.is-selected .gallery-select-indicator {
+    background: var(--cerebr-highlight);
+    border-color: var(--cerebr-highlight);
 }
 
 .gallery-item img {
