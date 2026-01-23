@@ -65,6 +65,15 @@ export function createChatHistoryUI(appContext) {
   let currentConversationId = null;
   // 记录上次关闭面板时的标签名，Esc 重新打开时优先恢复；首次加载为空则回退到“history”。
   let lastClosedTabName = null;
+  // 记录聊天记录列表的滚动位置，关闭面板后 1 分钟内可恢复，避免用户频繁切换丢失阅读位置。
+  const HISTORY_PANEL_SCROLL_RESTORE_TTL = 60 * 1000;
+  let historyPanelScrollSnapshot = {
+    scrollTop: 0,
+    capturedAt: 0,
+    filter: '',
+    urlMode: '',
+    branchMode: ''
+  };
   // let currentPageInfo = null; // Replaced by appContext.state.pageInfo or parameter to updatePageInfo
   
   // 内存管理设置 - 始终启用
@@ -2229,6 +2238,18 @@ export function createChatHistoryUI(appContext) {
     if (panel && panel.classList.contains('visible')) {
       const activeTabName = panel.querySelector('.history-tab.active')?.dataset?.tab;
       lastClosedTabName = activeTabName || lastClosedTabName || 'history';
+      if (activeTabName === 'history') {
+        const listContainer = panel.querySelector('#chat-history-list');
+        if (listContainer) {
+          historyPanelScrollSnapshot = {
+            scrollTop: listContainer.scrollTop,
+            capturedAt: Date.now(),
+            filter: panel.dataset.currentFilter || '',
+            urlMode: panel.dataset.urlFilterMode || '',
+            branchMode: panel.dataset.branchViewMode || ''
+          };
+        }
+      }
       // 关闭面板时一并关闭 hover 预览 tooltip，避免遗留浮层
       hideChatHistoryPreviewTooltip();
       markGalleryInactive(panel);
@@ -3079,13 +3100,17 @@ export function createChatHistoryUI(appContext) {
    * 加载聊天历史记录列表
    * @param {HTMLElement} panel - 聊天历史面板元素
    * @param {string} filterText - 过滤文本
-   * @param {{keepExistingList?: boolean}|null} [options=null] - 可选：是否在刷新时保留旧列表，等待新数据准备好后再替换
+   * @param {{keepExistingList?: boolean, restoreScrollTop?: number|null}|null} [options=null] - 可选：是否在刷新时保留旧列表，等待新数据准备好后再替换
    */
   async function loadConversationHistories(panel, filterText, options = null) {
     // 生成本次加载的 runId 并标记到面板，用于取消过期任务
     ensurePanelStylesInjected();
     const effectiveOptions = (options && typeof options === 'object') ? options : {};
     const keepExistingList = !!effectiveOptions.keepExistingList;
+    const restoreScrollTop = Number.isFinite(effectiveOptions.restoreScrollTop)
+      ? Math.max(0, Number(effectiveOptions.restoreScrollTop))
+      : null;
+    let restoreScrollPending = Number.isFinite(restoreScrollTop) && restoreScrollTop > 0;
     const previousFilter = panel.dataset.currentFilter || '';
     const runId = createRunId();
     panel.dataset.currentFilter = filterText;
@@ -3097,6 +3122,16 @@ export function createChatHistoryUI(appContext) {
 
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
+
+    const applyScrollRestore = () => {
+      if (!restoreScrollPending || restoreScrollTop == null) return;
+      const maxScroll = Math.max(0, listContainer.scrollHeight - listContainer.clientHeight);
+      const targetTop = Math.min(restoreScrollTop, maxScroll);
+      listContainer.scrollTop = targetTop;
+      if (maxScroll >= restoreScrollTop) {
+        restoreScrollPending = false;
+      }
+    };
 
     const canReuseExistingList = keepExistingList
       && previousFilter === filterText
@@ -3684,6 +3719,7 @@ export function createChatHistoryUI(appContext) {
 
     // 首次加载批次
     await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
+    applyScrollRestore();
 
     // 使用 IntersectionObserver 进行后续批次加载
     setupEndSentinelObserver(panel, listContainer, async () => {
@@ -3711,10 +3747,27 @@ export function createChatHistoryUI(appContext) {
     requestAnimationFrame(async () => {
       const panelNow = listContainer.closest('#chat-history-panel');
       if (!panelNow || panelNow.dataset.runId !== runId) return;
-      while (listContainer.scrollHeight <= listContainer.clientHeight && currentlyRenderedCount < currentDisplayItems.length) {
+      const targetBottom = restoreScrollPending && restoreScrollTop != null
+        ? restoreScrollTop + listContainer.clientHeight
+        : 0;
+      while (true) {
+        const needsFillViewport = listContainer.scrollHeight <= listContainer.clientHeight
+          && (currentlyRenderedCount < currentDisplayItems.length);
+        const needsReachRestoreTarget = restoreScrollPending
+          && listContainer.scrollHeight < targetBottom
+          && (currentlyRenderedCount < currentDisplayItems.length
+            || (panelNow._historyDataSource?.mode === 'paged' && panelNow._historyDataSource?.hasMore));
+        if (!needsFillViewport && !needsReachRestoreTarget) break;
+        const beforeCount = currentlyRenderedCount;
         await renderMoreItems(listContainer, displayPinnedIds, effectiveHighlightPlan, panel.dataset.currentFilter, runId);
         await new Promise(r => setTimeout(r, 0));
+        if (beforeCount === currentlyRenderedCount) {
+          restoreScrollPending = false;
+          break;
+        }
+        applyScrollRestore();
       }
+      applyScrollRestore();
     });
 
     if (shouldWarmupTree && treeWarmupPromise) {
@@ -6646,8 +6699,8 @@ export function createChatHistoryUI(appContext) {
         const isUrlMode = panel.dataset.urlFilterMode === 'currentUrl';
         const isTreeMode = panel.dataset.branchViewMode === 'tree';
         const base = isUrlMode
-          ? '本页会话内筛选（仍可输入文本或 >10, <5, =20...）'
-          : '筛选文本 或 >10, <5, =20...';
+          ? '本页会话搜索：空格=AND，!否定，count:>10，start:2024-01-01'
+          : '搜索（URL+消息）：空格=AND，!否定，url:xxx，count:>10，start:2024-01-01';
         filterInput.placeholder = isTreeMode ? `${base}（树状）` : base;
       }
     }
@@ -6655,7 +6708,19 @@ export function createChatHistoryUI(appContext) {
     // 使用已有的筛选值加载历史记录
     const currentFilter = filterInput ? filterInput.value : '';
     // 说明：若面板已有列表则先复用，待新数据就绪后再替换，降低打开等待感。
-    loadConversationHistories(panel, currentFilter, { keepExistingList: true });
+    const snapshot = historyPanelScrollSnapshot;
+    const canRestoreScroll = !!(snapshot
+      && snapshot.capturedAt
+      && (Date.now() - snapshot.capturedAt <= HISTORY_PANEL_SCROLL_RESTORE_TTL)
+      && (snapshot.filter || '') === (currentFilter || '')
+      && (snapshot.urlMode || '') === (panel.dataset.urlFilterMode || '')
+      && (snapshot.branchMode || '') === (panel.dataset.branchViewMode || '')
+    );
+    const restoreScrollTop = canRestoreScroll ? snapshot.scrollTop : null;
+    loadConversationHistories(panel, currentFilter, {
+      keepExistingList: true,
+      restoreScrollTop
+    });
 
     // 刷新一次“会话-标签页存在性”快照，确保右侧“已打开/跳转”标记尽快准确
     try { conversationPresence?.refreshOpenConversations?.(); } catch (_) {}
