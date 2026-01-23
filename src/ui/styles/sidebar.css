@@ -533,6 +533,15 @@ body.thread-resize-active * {
     width: 100%;
     margin-top: 8px;
     box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    flex: 0 0 auto;
+    min-height: auto;
+    height: auto;
+}
+
+#thread-panel.thread-panel-inline #thread-container {
+    flex: 0 0 auto;
+    min-height: auto;
+    max-height: none;
 }
 
 .thread-panel-header {
