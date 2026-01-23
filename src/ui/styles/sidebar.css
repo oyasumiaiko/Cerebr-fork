@@ -590,7 +590,7 @@ body.thread-resize-active * {
     min-height: 0;
     overflow-y: auto;
     padding: 12px 12px 14px 12px;
-    scrollbar-gutter: stable;
+    scrollbar-gutter: auto;
 }
 
 #thread-container.thread-container--static .message,
@@ -6049,6 +6049,7 @@ html.fullscreen-mode::before {
   padding-bottom: 15px;
   padding-left: 0;
   padding-right: 0px;
+  scrollbar-gutter: stable;
 }
 
 /* 全屏下：消息宽度跟随容器，避免被全屏宽度变量二次限制 */
