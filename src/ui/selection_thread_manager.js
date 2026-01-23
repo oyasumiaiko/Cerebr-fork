@@ -1060,7 +1060,11 @@ export function createSelectionThreadManager(appContext) {
     if (!Array.isArray(anchorNode.threadAnnotations)) return false;
     const beforeCount = anchorNode.threadAnnotations.length;
     anchorNode.threadAnnotations = anchorNode.threadAnnotations.filter(item => item?.id !== threadId);
-    return anchorNode.threadAnnotations.length !== beforeCount;
+    const changed = anchorNode.threadAnnotations.length !== beforeCount;
+    if (changed) {
+      anchorNode.updatedAt = Date.now();
+    }
+    return changed;
   }
 
   function buildThreadId() {
@@ -1172,6 +1176,7 @@ export function createSelectionThreadManager(appContext) {
       lastMessageId: null
     };
     annotations.push(payload);
+    anchorNode.updatedAt = Date.now();
     return payload;
   }
 
@@ -1190,6 +1195,8 @@ export function createSelectionThreadManager(appContext) {
     if (!info || !info.annotation) return null;
 
     const annotation = info.annotation;
+    const beforeRootId = annotation.rootMessageId;
+    const beforeLastId = annotation.lastMessageId;
     const nodes = chatHistoryManager?.chatHistory?.messages || [];
     if (!nodes.length) return annotation;
 
@@ -1249,6 +1256,13 @@ export function createSelectionThreadManager(appContext) {
         annotation.lastMessageId = latest?.id || resolvedRootId || null;
       } else {
         annotation.lastMessageId = resolvedRootId || null;
+      }
+    }
+
+    if (annotation.rootMessageId !== beforeRootId || annotation.lastMessageId !== beforeLastId) {
+      const anchorNode = nodes.find(n => n.id === info.anchorMessageId) || null;
+      if (anchorNode) {
+        anchorNode.updatedAt = Date.now();
       }
     }
 

@@ -1002,6 +1002,8 @@ export function createContextMenuManager(appContext) {
           node.content = newText;
         }
       }
+      // 记录最新更新时间，便于跨标签页合并
+      node.updatedAt = Date.now();
 
       // 更新 DOM 显示
       const textDiv = messageElement.querySelector('.text-content');

@@ -366,6 +366,8 @@ export function createMessageProcessor(appContext) {
           if (historyPatch && typeof historyPatch === 'object') {
             Object.assign(node, historyPatch);
           }
+          // 标记本条消息已被更新，供跨标签页合并判断新旧
+          node.updatedAt = Date.now();
         } else {
              console.warn(`appendMessage: History node not found for update: ${messageIdToUpdate}`);
         }
@@ -505,6 +507,8 @@ export function createMessageProcessor(appContext) {
     if (groundingMetadata !== undefined) {
       node.groundingMetadata = groundingMetadata || null;
     }
+    // 标记本条消息已被更新，供跨标签页合并判断新旧
+    node.updatedAt = Date.now();
 
     // 线程切换/面板关闭时可能找不到 DOM，仍需保证历史数据完整。
     if (!messageDiv) {

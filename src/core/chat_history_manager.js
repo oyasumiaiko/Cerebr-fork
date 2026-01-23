@@ -35,6 +35,7 @@
  * @property {Array<MessageNode>} messages - 所有消息节点列表
  * @property {string|null} root - 根节点ID
  * @property {string|null} currentNode - 当前节点ID
+ * @property {Record<string, number>} [deletedMessageMap] - 已删除消息的时间戳映射（用于跨标签页合并）
  */
 
 /**
@@ -48,13 +49,16 @@
  * console.log(node);
  */
 function createMessageNode(role, content, parentId = null) {
+  const now = Date.now();
   return {
     id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     role,
     content,
     parentId,
     children: [],
-    timestamp: Date.now(),
+    timestamp: now,
+    // 用于跨标签页合并时的“新旧判定”，默认与 timestamp 同步
+    updatedAt: now,
     thoughtsRaw: null, // 初始化思考过程文本
     // 用于“推理签名”（Gemini/OpenAI 兼容），帮助上游在多轮对话中恢复内部推理上下文
     thoughtSignature: null,
@@ -192,6 +196,7 @@ function clearChatHistory(chatHistory) {
   chatHistory.messages = [];
   chatHistory.root = null;
   chatHistory.currentNode = null;
+  chatHistory.deletedMessageMap = {};
 }
 
 /**
@@ -210,6 +215,10 @@ function deleteMessageFromHistory(chatHistory, messageId) {
   const index = chatHistory.messages.findIndex(msg => msg.id === messageId);
   if (index === -1) return false;
   const message = chatHistory.messages[index];
+  if (!chatHistory.deletedMessageMap || typeof chatHistory.deletedMessageMap !== 'object') {
+    chatHistory.deletedMessageMap = {};
+  }
+  chatHistory.deletedMessageMap[messageId] = Date.now();
 
   if (message.parentId) {
     const parent = chatHistory.messages.find(msg => msg.id === message.parentId);
@@ -351,7 +360,8 @@ export function createChatHistoryManager() {
   const chatHistory = {
     messages: [],
     root: null,
-    currentNode: null
+    currentNode: null,
+    deletedMessageMap: {}
   };
 
   return {

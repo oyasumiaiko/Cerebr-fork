@@ -153,6 +153,128 @@ export function createChatHistoryUI(appContext) {
     };
   }
   let searchCache = createEmptySearchCache();
+  const CONVERSATION_SYNC_CHANNEL_NAME = 'cerebr-conversation-sync';
+  const conversationSyncInstanceId = `conv_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const conversationSyncChannel = (typeof BroadcastChannel === 'function')
+    ? new BroadcastChannel(CONVERSATION_SYNC_CHANNEL_NAME)
+    : null;
+  const conversationSyncState = {
+    pendingId: null,
+    pendingUpdatedAt: 0,
+    timer: null,
+    attempts: 0,
+    notifiedAt: 0,
+    isSyncing: false
+  };
+
+  function broadcastConversationUpdate(conversationId, updatedAt) {
+    if (!conversationSyncChannel) return;
+    if (typeof conversationId !== 'string' || !conversationId.trim()) return;
+    try {
+      conversationSyncChannel.postMessage({
+        type: 'conversation-updated',
+        conversationId: conversationId.trim(),
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+        sender: conversationSyncInstanceId
+      });
+    } catch (_) {}
+  }
+
+  function canAutoSyncActiveConversation() {
+    if (!chatContainer) return false;
+    if (chatContainer.querySelector('.loading-message, .ai-message.updating')) return false;
+    if (chatContainer.querySelector('.message.editing, .inline-editor-wrapper')) return false;
+    return true;
+  }
+
+  async function reloadActiveConversationFromDb(reason = '') {
+    if (conversationSyncState.isSyncing) return;
+    const convId = currentConversationId;
+    if (!convId) return;
+    conversationSyncState.isSyncing = true;
+    const previousScrollTop = chatContainer ? chatContainer.scrollTop : 0;
+    try {
+      const conversation = await getConversationFromCacheOrLoad(convId, true);
+      if (!conversation) return;
+      await loadConversationIntoChat(conversation, {
+        skipMessageAnimation: true,
+        skipScrollToBottom: true
+      });
+      if (chatContainer) {
+        const maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
+        chatContainer.scrollTop = Math.max(0, Math.min(previousScrollTop, maxTop));
+      }
+    } catch (error) {
+      console.warn('同步对话失败:', error);
+    } finally {
+      conversationSyncState.isSyncing = false;
+    }
+  }
+
+  function scheduleActiveConversationSync(conversationId, updatedAt) {
+    if (!conversationId) return;
+    conversationSyncState.pendingId = conversationId;
+    conversationSyncState.pendingUpdatedAt = Number.isFinite(updatedAt) ? updatedAt : 0;
+    if (conversationSyncState.timer) return;
+
+    const trySync = async () => {
+      conversationSyncState.timer = null;
+      if (currentConversationId !== conversationId) {
+        conversationSyncState.pendingId = null;
+        conversationSyncState.pendingUpdatedAt = 0;
+        conversationSyncState.attempts = 0;
+        return;
+      }
+      if (canAutoSyncActiveConversation()) {
+        conversationSyncState.pendingId = null;
+        conversationSyncState.pendingUpdatedAt = 0;
+        conversationSyncState.attempts = 0;
+        await reloadActiveConversationFromDb('external_update');
+        return;
+      }
+      conversationSyncState.attempts += 1;
+      if (conversationSyncState.attempts <= 8) {
+        conversationSyncState.timer = setTimeout(trySync, 800);
+        return;
+      }
+      conversationSyncState.pendingId = null;
+      conversationSyncState.pendingUpdatedAt = 0;
+      conversationSyncState.attempts = 0;
+      const now = Date.now();
+      if (showNotification && now - conversationSyncState.notifiedAt > 8000) {
+        showNotification({
+          message: '该对话已在其它标签页更新，可稍后刷新聊天记录同步。',
+          type: 'info',
+          duration: 2200
+        });
+        conversationSyncState.notifiedAt = now;
+      }
+    };
+
+    conversationSyncState.timer = setTimeout(trySync, 200);
+  }
+
+  function handleExternalConversationUpdate(payload) {
+    const convId = typeof payload?.conversationId === 'string' ? payload.conversationId.trim() : '';
+    if (!convId || payload?.sender === conversationSyncInstanceId) return;
+    invalidateMetadataCache();
+    const panel = document.getElementById('chat-history-panel');
+    if (panel && panel.classList.contains('visible')) {
+      refreshChatHistory({ keepExistingList: true });
+    }
+    if (loadedConversations.has(convId)) {
+      loadedConversations.delete(convId);
+    }
+    if (currentConversationId === convId) {
+      scheduleActiveConversationSync(convId, payload?.updatedAt);
+    }
+  }
+
+  if (conversationSyncChannel) {
+    conversationSyncChannel.addEventListener('message', (event) => {
+      handleExternalConversationUpdate(event?.data);
+    });
+  }
 
   function invalidateGalleryCache() {
     if (galleryCache.cleanupTimer) {
@@ -1585,6 +1707,175 @@ export function createChatHistoryUI(appContext) {
     };
   }
 
+  // --- 跨标签页合并：消息与删除标记 ---
+  function normalizeDeletedMessageMap(input) {
+    if (!input || typeof input !== 'object') return {};
+    const normalized = {};
+    for (const [id, raw] of Object.entries(input)) {
+      if (!id) continue;
+      const ts = Number(raw);
+      if (!Number.isFinite(ts) || ts <= 0) continue;
+      normalized[id] = ts;
+    }
+    return normalized;
+  }
+
+  function mergeDeletedMessageMaps(left, right) {
+    const merged = normalizeDeletedMessageMap(left);
+    const extra = normalizeDeletedMessageMap(right);
+    for (const [id, ts] of Object.entries(extra)) {
+      const prev = merged[id];
+      if (!Number.isFinite(prev) || ts > prev) merged[id] = ts;
+    }
+    return merged;
+  }
+
+  function getMessageUpdatedAt(message) {
+    const updatedAt = Number(message?.updatedAt);
+    if (Number.isFinite(updatedAt) && updatedAt > 0) return updatedAt;
+    const timestamp = Number(message?.timestamp);
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+    return 0;
+  }
+
+  function ensureMessageUpdatedAt(message) {
+    if (!message || typeof message !== 'object') return message;
+    const updatedAt = Number(message.updatedAt);
+    if (Number.isFinite(updatedAt) && updatedAt > 0) return message;
+    const fallback = getMessageUpdatedAt(message);
+    if (!fallback) return message;
+    return { ...message, updatedAt: fallback };
+  }
+
+  function pickLatestMessage(localMessage, remoteMessage) {
+    if (!localMessage) return ensureMessageUpdatedAt(remoteMessage);
+    if (!remoteMessage) return ensureMessageUpdatedAt(localMessage);
+    const localUpdatedAt = getMessageUpdatedAt(localMessage);
+    const remoteUpdatedAt = getMessageUpdatedAt(remoteMessage);
+    return ensureMessageUpdatedAt(remoteUpdatedAt >= localUpdatedAt ? remoteMessage : localMessage);
+  }
+
+  function mergeConversationMessages(localMessages, remoteMessages, deletedMessageMap) {
+    const localList = Array.isArray(localMessages) ? localMessages : [];
+    const remoteList = Array.isArray(remoteMessages) ? remoteMessages : [];
+    const remoteMap = new Map();
+    for (const msg of remoteList) {
+      if (msg?.id) remoteMap.set(msg.id, msg);
+    }
+
+    const mergedLocal = [];
+    const localIndexMap = new Map();
+    for (const msg of localList) {
+      if (!msg?.id) continue;
+      const chosen = pickLatestMessage(msg, remoteMap.get(msg.id));
+      mergedLocal.push(chosen);
+      localIndexMap.set(chosen.id, mergedLocal.length - 1);
+    }
+
+    const insertions = Array.from({ length: mergedLocal.length + 1 }, () => []);
+    let anchorIndex = -1;
+    for (const msg of remoteList) {
+      const id = msg?.id;
+      if (!id) continue;
+      const localIndex = localIndexMap.get(id);
+      if (localIndex != null) {
+        anchorIndex = localIndex;
+        continue;
+      }
+      insertions[anchorIndex + 1].push(ensureMessageUpdatedAt(msg));
+    }
+
+    const merged = [];
+    for (let i = 0; i < mergedLocal.length; i += 1) {
+      if (insertions[i].length) merged.push(...insertions[i]);
+      merged.push(mergedLocal[i]);
+    }
+    if (insertions[mergedLocal.length].length) {
+      merged.push(...insertions[mergedLocal.length]);
+    }
+
+    const resolvedDeleted = normalizeDeletedMessageMap(deletedMessageMap);
+    const filtered = [];
+    for (const msg of merged) {
+      if (!msg?.id) continue;
+      const updatedAt = getMessageUpdatedAt(msg);
+      const deletedAt = resolvedDeleted[msg.id];
+      if (deletedAt && deletedAt >= updatedAt) {
+        continue;
+      }
+      if (deletedAt && deletedAt < updatedAt) {
+        delete resolvedDeleted[msg.id];
+      }
+      filtered.push(msg);
+    }
+
+    return { messages: filtered, deletedMessageMap: resolvedDeleted };
+  }
+
+  function mergeConversationRecords(localConversation, remoteConversation) {
+    if (!remoteConversation) {
+      return { conversation: localConversation, hasExternalChanges: false };
+    }
+    const localMessages = Array.isArray(localConversation?.messages) ? localConversation.messages : [];
+    const remoteMessages = Array.isArray(remoteConversation?.messages) ? remoteConversation.messages : [];
+    const mergedDeletedMap = mergeDeletedMessageMaps(
+      localConversation?.deletedMessageMap,
+      remoteConversation?.deletedMessageMap
+    );
+    const mergeResult = mergeConversationMessages(localMessages, remoteMessages, mergedDeletedMap);
+    const mergedMessages = mergeResult.messages;
+
+    const mergedConversation = {
+      ...remoteConversation,
+      ...localConversation,
+      messages: mergedMessages,
+      deletedMessageMap: mergeResult.deletedMessageMap
+    };
+
+    const timestamps = mergedMessages
+      .map(msg => Number(msg?.timestamp) || 0)
+      .filter(ts => Number.isFinite(ts) && ts > 0);
+    const fallbackStart = Number(localConversation?.startTime) || Number(remoteConversation?.startTime) || 0;
+    const fallbackEnd = Number(localConversation?.endTime) || Number(remoteConversation?.endTime) || 0;
+    mergedConversation.startTime = timestamps.length ? Math.min(...timestamps) : (fallbackStart || Date.now());
+    mergedConversation.endTime = timestamps.length ? Math.max(...timestamps) : (fallbackEnd || mergedConversation.startTime);
+    mergedConversation.messageCount = mergedMessages.length;
+    mergedConversation.updatedAt = Date.now();
+
+    const localIds = new Set(localMessages.map(msg => msg?.id).filter(Boolean));
+    const mergedIds = new Set(mergedMessages.map(msg => msg?.id).filter(Boolean));
+    let hasExternalChanges = false;
+    for (const id of mergedIds) {
+      if (!localIds.has(id)) {
+        hasExternalChanges = true;
+        break;
+      }
+    }
+    if (!hasExternalChanges) {
+      for (const id of localIds) {
+        if (!mergedIds.has(id)) {
+          hasExternalChanges = true;
+          break;
+        }
+      }
+    }
+    if (!hasExternalChanges) {
+      const localUpdatedMap = new Map();
+      for (const msg of localMessages) {
+        if (msg?.id) localUpdatedMap.set(msg.id, getMessageUpdatedAt(msg));
+      }
+      for (const msg of mergedMessages) {
+        const localUpdatedAt = localUpdatedMap.get(msg.id);
+        if (localUpdatedAt != null && getMessageUpdatedAt(msg) > localUpdatedAt) {
+          hasExternalChanges = true;
+          break;
+        }
+      }
+    }
+
+    return { conversation: mergedConversation, hasExternalChanges };
+  }
+
   /**
    * 保存或更新当前对话至持久存储
    * @param {boolean} [isUpdate=false] - 是否为更新操作
@@ -1609,6 +1900,16 @@ export function createChatHistoryUI(appContext) {
       }
     };
     const messagesCopy = rawMessages.map(cloneMessageSafely);
+    for (const msg of messagesCopy) {
+      const updatedAt = Number(msg?.updatedAt);
+      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+        const timestamp = Number(msg?.timestamp);
+        if (Number.isFinite(timestamp) && timestamp > 0) {
+          msg.updatedAt = timestamp;
+        }
+      }
+    }
+    const deletedMessageMap = normalizeDeletedMessageMap(chatHistory.deletedMessageMap);
 
     // 保存前确保 <think> 段落已转为 thoughtsRaw，避免思考内容混入正文
     messagesCopy.forEach(normalizeThinkingForMessage);
@@ -1700,12 +2001,13 @@ export function createChatHistoryUI(appContext) {
     // 默认使用“会话起始页”的页面元数据（首条用户消息冻结的 pageMeta）
     urlToSave = startPageMeta.url || '';
     titleToSave = startPageMeta.title || '';
+    let existingConversation = null;
 
     // 如果是更新操作并且已存在记录，则固定使用首次保存的 url 和 title
     if (isUpdate && currentConversationId) {
       try {
-        // 使用false参数，不加载完整内容，只获取元数据
-        const existingConversation = await getConversationById(currentConversationId, false);
+        // 使用 false 参数，仅避免解引用 contentRef（旧数据兼容），仍保留消息列表用于合并
+        existingConversation = await getConversationById(currentConversationId, false);
         if (existingConversation) {
           urlToSave = existingConversation.url || '';
           titleToSave = existingConversation.title || '';
@@ -1749,7 +2051,9 @@ export function createChatHistoryUI(appContext) {
       endTime,
       messages: messagesCopy,
       summary: summaryToSave,
-      messageCount: messagesCopy.length
+      messageCount: messagesCopy.length,
+      deletedMessageMap,
+      updatedAt: Date.now()
     };
     if (parentConversationIdToSave) {
       conversation.parentConversationId = parentConversationIdToSave;
@@ -1758,18 +2062,34 @@ export function createChatHistoryUI(appContext) {
       conversation.forkedFromMessageId = forkedFromMessageIdToSave;
     }
 
+    let conversationToSave = conversation;
+    let hasExternalChanges = false;
+    if (isUpdate && existingConversation && existingConversation.id === conversation.id) {
+      const mergeResult = mergeConversationRecords(conversation, existingConversation);
+      conversationToSave = mergeResult.conversation;
+      hasExternalChanges = mergeResult.hasExternalChanges;
+    } else {
+      conversationToSave.updatedAt = Date.now();
+    }
+
     // 使用 IndexedDB 存储对话记录
-    await putConversation(conversation);
+    await putConversation(conversationToSave);
     invalidateMetadataCache();
     
     // 更新当前会话ID和活动会话
-    currentConversationId = conversation.id;
-    activeConversation = conversation;
+    currentConversationId = conversationToSave.id;
+    activeConversation = conversationToSave;
     
     // 更新内存缓存
-    updateConversationInCache(conversation);
+    updateConversationInCache(conversationToSave);
+    chatHistory.deletedMessageMap = normalizeDeletedMessageMap(conversationToSave.deletedMessageMap);
+
+    broadcastConversationUpdate(conversationToSave.id, conversationToSave.updatedAt);
+    if (hasExternalChanges && currentConversationId === conversationToSave.id) {
+      scheduleActiveConversationSync(conversationToSave.id, conversationToSave.updatedAt);
+    }
     
-    console.log(`已${isUpdate ? '更新' : '保存'}对话记录:`, conversation);
+    console.log(`已${isUpdate ? '更新' : '保存'}对话记录:`, conversationToSave);
   }
 
   /**
@@ -1982,6 +2302,7 @@ export function createChatHistoryUI(appContext) {
     // 恢复加载的对话历史到聊天管理器
     // 修改: 使用 services.chatHistoryManager.chatHistory 访问数据对象
     services.chatHistoryManager.chatHistory.messages = fullConversation.messages.slice();
+    services.chatHistoryManager.chatHistory.deletedMessageMap = normalizeDeletedMessageMap(fullConversation.deletedMessageMap);
     services.chatHistoryManager.chatHistory.root = fullConversation.messages.length > 0 ? fullConversation.messages[0].id : null;
     const lastMainMessage = [...fullConversation.messages].reverse().find(m => !m?.threadId && !m?.threadHiddenSelection) || null;
     services.chatHistoryManager.chatHistory.currentNode = lastMainMessage
