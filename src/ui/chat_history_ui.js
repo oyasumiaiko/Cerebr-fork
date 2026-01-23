@@ -1217,6 +1217,14 @@ export function createChatHistoryUI(appContext) {
    */
   async function deleteConversationRecord(conversationId) {
     if (!conversationId) return;
+    let restoreScrollTop = null;
+    const panel = document.getElementById('chat-history-panel');
+    if (panel && panel.classList.contains('visible')) {
+      const listContainer = panel.querySelector('#chat-history-list');
+      if (listContainer) {
+        restoreScrollTop = listContainer.scrollTop;
+      }
+    }
     try {
       await deleteConversation(conversationId);
     } catch (error) {
@@ -1244,7 +1252,10 @@ export function createChatHistoryUI(appContext) {
     }
 
     invalidateMetadataCache();
-    refreshChatHistory();
+    refreshChatHistory({
+      keepExistingList: true,
+      restoreScrollTop
+    });
   }
 
   /**
@@ -6760,12 +6771,19 @@ export function createChatHistoryUI(appContext) {
   /**
    * 刷新聊天记录面板
    */
-  function refreshChatHistory() {
+  function refreshChatHistory(options = null) {
     invalidateGalleryCache();
     const panel = document.getElementById('chat-history-panel');
     if (panel && panel.classList.contains('visible')) { // 仅当面板可见时刷新
       const filterInput = panel.querySelector('input[type="text"]');
-      loadConversationHistories(panel, filterInput ? filterInput.value : '');
+      const effectiveOptions = (options && typeof options === 'object') ? options : {};
+      const restoreScrollTop = Number.isFinite(effectiveOptions.restoreScrollTop)
+        ? Math.max(0, Number(effectiveOptions.restoreScrollTop))
+        : null;
+      loadConversationHistories(panel, filterInput ? filterInput.value : '', {
+        keepExistingList: !!effectiveOptions.keepExistingList,
+        restoreScrollTop
+      });
       try { conversationPresence?.refreshOpenConversations?.(); } catch (_) {}
       const galleryContent = panel.querySelector('.history-tab-content[data-tab="gallery"]');
       const activeTabName = panel.querySelector('.history-tab.active')?.dataset.tab;
