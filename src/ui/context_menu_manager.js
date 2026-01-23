@@ -44,9 +44,9 @@ export function createContextMenuManager(appContext) {
   const forkConversationButton = dom.forkConversationButton;
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
   const editMessageButton = document.getElementById('edit-message');
-  // Shift+右键才显示的隐藏菜单项
-  const insertAiMessageButton = document.getElementById('insert-ai-message');
-  const insertUserMessageButton = document.getElementById('insert-user-message');
+  const insertMessageMenu = document.getElementById('insert-message-menu');
+  const insertMessageSubmenu = insertMessageMenu?.querySelector('.context-menu-submenu');
+  const insertMessageSubmenuList = insertMessageSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateSubmenu = regenerateButton?.querySelector('.context-menu-submenu');
   const regenerateSubmenuList = regenerateSubmenu?.querySelector('.context-menu-submenu-list');
 
@@ -291,15 +291,15 @@ export function createContextMenuManager(appContext) {
     });
   }
 
-  function updateRegenerateSubmenuDirection() {
-    if (!regenerateButton || !regenerateSubmenu) return;
-    regenerateButton.classList.remove('context-menu-item--submenu-left');
-    const buttonRect = regenerateButton.getBoundingClientRect();
-    const submenuWidth = regenerateSubmenu.offsetWidth || 180;
+  function updateSubmenuDirection(menuItem, submenu) {
+    if (!menuItem || !submenu) return;
+    menuItem.classList.remove('context-menu-item--submenu-left');
+    const buttonRect = menuItem.getBoundingClientRect();
+    const submenuWidth = submenu.offsetWidth || 180;
     const spaceRight = window.innerWidth - buttonRect.right;
     const spaceLeft = buttonRect.left;
     if (spaceRight < submenuWidth && spaceLeft >= submenuWidth) {
-      regenerateButton.classList.add('context-menu-item--submenu-left');
+      menuItem.classList.add('context-menu-item--submenu-left');
     }
   }
 
@@ -363,20 +363,25 @@ export function createContextMenuManager(appContext) {
     regenerateButton.style.display = regenTarget ? 'flex' : 'none';
     if (regenTarget) {
       renderRegenerateSubmenu();
-      updateRegenerateSubmenuDirection();
+      updateSubmenuDirection(regenerateButton, regenerateSubmenu);
     } else {
       regenerateButton.classList.remove('context-menu-item--submenu-left');
     }
 
-    // Shift+右键：显示“插入消息”隐藏选项（仅对有 messageId 的正式消息生效）
+    // “在此处插入”仅对有 messageId 的正式消息生效
     const canShowInsertOptions = !!(
-      e?.shiftKey &&
       messageElement &&
       messageElement.getAttribute('data-message-id') &&
       !messageElement.classList.contains('loading-message')
     );
-    if (insertAiMessageButton) insertAiMessageButton.style.display = canShowInsertOptions ? 'flex' : 'none';
-    if (insertUserMessageButton) insertUserMessageButton.style.display = canShowInsertOptions ? 'flex' : 'none';
+    if (insertMessageMenu) {
+      insertMessageMenu.style.display = canShowInsertOptions ? 'flex' : 'none';
+      if (canShowInsertOptions) {
+        updateSubmenuDirection(insertMessageMenu, insertMessageSubmenu);
+      } else {
+        insertMessageMenu.classList.remove('context-menu-item--submenu-left');
+      }
+    }
     // 始终显示创建分支对话按钮，但只有在有足够消息时才可用
     if (forkConversationButton) {
       if (activeContainer === threadContainer) {
@@ -494,32 +499,35 @@ export function createContextMenuManager(appContext) {
   }
 
   /**
-   * 在“当前右键选中的消息”下方插入一条空白消息（Shift+右键的隐藏功能）。
+   * 在指定消息下方插入一条空白消息。
    *
    * 设计说明：
-   * - UI 插入位置以 DOM 为准：插入到 currentMessageElement 的下方（也就是其后第一条 .message 之前）；
+   * - UI 插入位置以 DOM 为准：插入到基准消息的下方（也就是其后第一条 .message 之前）；
    * - 历史插入以 messageId 为准：使用 chatHistoryManager.insertMessageAfter() 同步维护 parentId/children，
    *   并把新节点插入到 messages 数组的正确位置，保证保存/重载后顺序一致。
    *
    * @param {'ai'|'user'} sender
+   * @param {HTMLElement} baseElement
+   * @param {{ openEditor?: boolean, skipSave?: boolean }} [options]
+   * @returns {Promise<HTMLElement|null>}
    */
-  async function insertBlankMessageBelow(sender) {
+  async function insertBlankMessageAfter(sender, baseElement, options = {}) {
     let newMessageDiv = null;
     try {
-      if (!currentMessageElement) return;
-      const targetContainer = currentMessageContainer || resolveMessageContainer(currentMessageElement) || chatContainer;
-      const afterMessageId = currentMessageElement.getAttribute('data-message-id') || '';
-      if (!afterMessageId) return;
+      if (!baseElement) return null;
+      const targetContainer = currentMessageContainer || resolveMessageContainer(baseElement) || chatContainer;
+      const afterMessageId = baseElement.getAttribute('data-message-id') || '';
+      if (!afterMessageId) return null;
       if (!chatHistoryManager || typeof chatHistoryManager.insertMessageAfter !== 'function') {
         console.warn('insertMessageAfter 不存在，无法插入消息');
-        return;
+        return null;
       }
       if (!messageProcessor || typeof messageProcessor.appendMessage !== 'function') {
         console.warn('messageProcessor.appendMessage 不存在，无法插入消息');
-        return;
+        return null;
       }
 
-      // 找到“当前消息下方”的那条消息（如果存在），用于精确插入位置
+      // 找到“基准消息下方”的那条消息（如果存在），用于精确插入位置
       const findNextMessageElement = (el) => {
         let next = el ? el.nextElementSibling : null;
         while (next && !(next.classList && next.classList.contains('message'))) {
@@ -528,7 +536,7 @@ export function createContextMenuManager(appContext) {
         return next;
       };
 
-      const nextMessageElement = findNextMessageElement(currentMessageElement);
+      const nextMessageElement = findNextMessageElement(baseElement);
       const nextMessageId = nextMessageElement
         ? (nextMessageElement.getAttribute('data-message-id') || null)
         : null;
@@ -541,13 +549,13 @@ export function createContextMenuManager(appContext) {
         '',
         { nextMessageId }
       );
-      if (!newNode || !newNode.id) return;
+      if (!newNode || !newNode.id) return null;
 
       // 2) 构建消息 DOM（跳过历史写入），再移动到目标位置
       newMessageDiv = messageProcessor.appendMessage('', sender, true, null, null, null, null, null, {
         container: targetContainer
       });
-      if (!newMessageDiv) return;
+      if (!newMessageDiv) return null;
       newMessageDiv.setAttribute('data-message-id', newNode.id);
 
       // AI 消息：补一个空的 api-footer，保证样式稳定（与普通 AI 消息一致）
@@ -560,7 +568,7 @@ export function createContextMenuManager(appContext) {
         }
       }
 
-      // 将新消息插到“当前消息的下方”
+      // 将新消息插到“基准消息的下方”
       if (nextMessageElement && nextMessageElement.parentNode === targetContainer) {
         targetContainer.insertBefore(newMessageDiv, nextMessageElement);
       } else {
@@ -570,15 +578,56 @@ export function createContextMenuManager(appContext) {
         }
       }
 
-      // 体验优化：插入成功后直接进入编辑模式（无需再次点“重新编辑”），方便立刻补写内容。
-      // 注意：若用户当前已经在编辑其他消息，则这里不强行打断，避免出现多个 editor 并存导致状态错乱。
-      hideContextMenu();
-      if (!isEditing) {
+      const shouldOpenEditor = options.openEditor === true;
+      if (shouldOpenEditor && !isEditing) {
         try { startInlineEdit(newMessageDiv); } catch (e) { console.error('打开新插入消息的编辑器失败:', e); }
+      }
+      if (!options.skipSave) {
+        await chatHistoryUI.saveCurrentConversation(true);
+      }
+      return newMessageDiv;
+    } catch (e) {
+      console.error('插入空白消息失败:', e);
+      return null;
+    }
+  }
+
+  /**
+   * 在“当前右键选中的消息”下方插入一条空白消息。
+   * @param {'ai'|'user'} sender
+   */
+  async function insertBlankMessageBelow(sender) {
+    const baseElement = currentMessageElement;
+    try {
+      if (!baseElement) return;
+      hideContextMenu();
+      await insertBlankMessageAfter(sender, baseElement, { openEditor: true });
+    } finally {
+      hideContextMenu();
+    }
+  }
+
+  /**
+   * 在“当前右键选中的消息”下方依次插入用户消息与 AI 消息，并打开用户消息编辑。
+   */
+  async function insertCombinedMessagesBelow() {
+    let userMessageDiv = null;
+    const baseElement = currentMessageElement;
+    try {
+      if (!baseElement) return;
+      hideContextMenu();
+      userMessageDiv = await insertBlankMessageAfter('user', baseElement, {
+        openEditor: false,
+        skipSave: true
+      });
+      if (!userMessageDiv) return;
+      await insertBlankMessageAfter('ai', userMessageDiv, { openEditor: false, skipSave: true });
+      if (!isEditing) {
+        try { startInlineEdit(userMessageDiv); } catch (e) { console.error('打开新插入用户消息的编辑器失败:', e); }
       }
       await chatHistoryUI.saveCurrentConversation(true);
     } catch (e) {
-      console.error('插入空白消息失败:', e);
+      console.error('同时插入消息失败:', e);
     } finally {
       hideContextMenu();
     }
@@ -756,8 +805,7 @@ export function createContextMenuManager(appContext) {
         
         // 说明：
         // - 有选中文本时，优先保留浏览器默认菜单（复制/查找等）；
-        // - Ctrl/Alt 作为“强制默认菜单”的快捷方式；
-        // - Shift 则被用作“高级右键菜单”（显示隐藏选项）。
+        // - Ctrl/Alt 作为“强制默认菜单”的快捷方式。
         if (selectedText || e.ctrlKey || e.altKey) {
           return;
         }
@@ -817,12 +865,26 @@ export function createContextMenuManager(appContext) {
       });
     }
 
-    // Shift+右键显示的隐藏菜单项：在此处插入消息（AI / 用户）
-    if (insertAiMessageButton) {
-      insertAiMessageButton.addEventListener('click', () => insertBlankMessageBelow('ai'));
-    }
-    if (insertUserMessageButton) {
-      insertUserMessageButton.addEventListener('click', () => insertBlankMessageBelow('user'));
+    if (insertMessageSubmenuList) {
+      insertMessageSubmenuList.addEventListener('click', (event) => {
+        const target = event?.target instanceof Element ? event.target : null;
+        const item = target ? target.closest('.context-menu-submenu-item') : null;
+        if (!item) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const insertType = item.dataset.insertType;
+        if (insertType === 'both') {
+          insertCombinedMessagesBelow();
+          return;
+        }
+        if (insertType === 'user') {
+          insertBlankMessageBelow('user');
+          return;
+        }
+        if (insertType === 'ai') {
+          insertBlankMessageBelow('ai');
+        }
+      });
     }
     clearChatContextButton.addEventListener('click', async () => {
       await clearChatHistory();

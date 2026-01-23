@@ -106,14 +106,19 @@
                 <div class="context-menu-submenu-list"></div>
             </div>
         </div>
-        <!-- Shift+右键显示的隐藏选项（高级功能） -->
-        <div class="context-menu-item" id="insert-ai-message" style="display: none;">
-            <i class="far fa-square-plus"></i>
-            在此处插入 AI 消息
-        </div>
-        <div class="context-menu-item" id="insert-user-message" style="display: none;">
-            <i class="far fa-square-plus"></i>
-            在此处插入用户消息
+        <div class="context-menu-item context-menu-item--has-submenu" id="insert-message-menu" style="display: none;">
+            <div class="context-menu-item__label">
+                <i class="far fa-square-plus"></i>
+                <span>在此处插入</span>
+            </div>
+            <i class="far fa-chevron-right context-menu-item__arrow"></i>
+            <div class="context-menu-submenu">
+                <div class="context-menu-submenu-list">
+                    <div class="context-menu-submenu-item" data-insert-type="both">同时插入</div>
+                    <div class="context-menu-submenu-item" data-insert-type="user">用户消息</div>
+                    <div class="context-menu-submenu-item" data-insert-type="ai">AI 消息</div>
+                </div>
+            </div>
         </div>
         <div class="context-menu-item" id="delete-message">
             <i class="far fa-trash-alt"></i>
