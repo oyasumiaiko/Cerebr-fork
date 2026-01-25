@@ -41,6 +41,7 @@ export function createSelectionThreadManager(appContext) {
     bannerScrollAtTop: true,
     bubbleHideTimer: null,
     bubbleHideAnimationTimer: null,
+    selectionCollapseTimer: null,
     bubbleClickHandler: null,
     bubbleActionHandlers: new Map(),
     threadLayoutLeft: null,
@@ -227,11 +228,15 @@ export function createSelectionThreadManager(appContext) {
   function handleBubbleMouseEnter() {
     state.bubbleHovered = true;
     clearBubbleHideTimer();
+    clearSelectionCollapseTimer();
   }
 
   function handleBubbleMouseLeave() {
     state.bubbleHovered = false;
     scheduleBubbleHide();
+    if (state.bubbleType === 'selection') {
+      scheduleSelectionCollapseHide();
+    }
   }
 
   function handleBubbleClick(event) {
@@ -266,6 +271,12 @@ export function createSelectionThreadManager(appContext) {
     state.bubbleHideAnimationTimer = null;
   }
 
+  function clearSelectionCollapseTimer() {
+    if (!state.selectionCollapseTimer) return;
+    clearTimeout(state.selectionCollapseTimer);
+    state.selectionCollapseTimer = null;
+  }
+
   function scheduleBubbleHide(delay = 220) {
     if (!bubbleEl || bubbleEl.style.display === 'none') return;
     if (state.bubblePinned) return;
@@ -274,6 +285,20 @@ export function createSelectionThreadManager(appContext) {
     state.bubbleHideTimer = window.setTimeout(() => {
       if (state.bubblePinned || state.bubbleHovered || state.highlightHovered) return;
       hideBubble();
+    }, delay);
+  }
+
+  function scheduleSelectionCollapseHide(delay = 160) {
+    if (!bubbleEl || bubbleEl.style.display === 'none') return;
+    if (state.bubbleType !== 'selection') return;
+    clearSelectionCollapseTimer();
+    // 取消选中后延迟关闭，避免鼠标转移到气泡时被立即隐藏。
+    state.selectionCollapseTimer = window.setTimeout(() => {
+      state.selectionCollapseTimer = null;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      if (state.bubbleHovered || state.highlightHovered) return;
+      hideBubble(true);
     }, delay);
   }
 
@@ -510,6 +535,7 @@ export function createSelectionThreadManager(appContext) {
   function hideBubble(force = false) {
     if (!bubbleEl) return;
     if (!force && state.bubblePinned) return;
+    clearSelectionCollapseTimer();
     clearBubbleHideTimer();
     clearBubbleHideAnimationTimer();
     bubbleEl.dataset.visible = 'false';
@@ -2552,7 +2578,11 @@ export function createSelectionThreadManager(appContext) {
     }
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) {
-      if (!state.bubblePinned) hideBubble();
+      if (state.bubbleType === 'selection') {
+        scheduleSelectionCollapseHide();
+      } else if (!state.bubblePinned) {
+        hideBubble();
+      }
       return;
     }
 
@@ -2586,6 +2616,18 @@ export function createSelectionThreadManager(appContext) {
     }
 
     showSelectionBubble(selectionInfo, startMessage, range);
+  }
+
+  function handleSelectionChange() {
+    if (!bubbleEl || bubbleEl.style.display === 'none') return;
+    if (state.bubbleType !== 'selection') return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      clearSelectionCollapseTimer();
+      return;
+    }
+    if (state.bubbleHovered || state.highlightHovered) return;
+    scheduleSelectionCollapseHide();
   }
 
   function handleHighlightMouseOver(event) {
@@ -2646,6 +2688,7 @@ export function createSelectionThreadManager(appContext) {
   function init() {
     if (!chatContainer) return;
     document.addEventListener('mouseup', handleSelectionMouseUp);
+    document.addEventListener('selectionchange', handleSelectionChange);
     document.addEventListener('click', handleDocumentClick);
     document.addEventListener('mousemove', handleTopEdgeMouseMove);
     bindHighlightEvents(chatContainer);
