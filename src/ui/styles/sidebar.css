@@ -494,7 +494,7 @@ body.thread-mode-active #thread-panel {
     left: 50%;
     width: 2px;
     border-radius: 2px;
-    background: color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+    background: transparent;
     transform: translateX(-50%);
 }
 
