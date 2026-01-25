@@ -67,6 +67,7 @@ export function createSelectionThreadManager(appContext) {
   let threadBannerTextEl = null;
   const THREAD_BANNER_TOP_EDGE_PX = 80;
   let threadScrollListenerBound = false;
+  let threadBannerPeekTimer = null;
   const THREAD_RESIZE_MIN_COLUMN_WIDTH = 240;
   const THREAD_RESIZE_EDGE_PADDING = 30;
   const THREAD_LAYOUT_STORAGE_KEY = 'thread_layout_prefs';
@@ -89,9 +90,16 @@ export function createSelectionThreadManager(appContext) {
     ratio: 0.5
   };
 
+  function clearThreadBannerPeekTimer() {
+    if (!threadBannerPeekTimer) return;
+    clearTimeout(threadBannerPeekTimer);
+    threadBannerPeekTimer = null;
+  }
+
   function updateThreadBannerPeek() {
     if (!threadBannerEl) return;
     if (!state.activeThreadId) return;
+    clearThreadBannerPeekTimer();
     if (state.bannerScrollAtTop) {
       threadBannerEl.classList.remove('thread-selection-banner--peek');
       threadBannerEl.classList.remove('thread-selection-banner--peek-visible');
@@ -99,9 +107,38 @@ export function createSelectionThreadManager(appContext) {
       return;
     }
     const shouldPeek = !!(state.bannerHovered || state.bannerTopEdgeActive);
-    threadBannerEl.classList.add('thread-selection-banner--peek');
-    threadBannerEl.classList.toggle('thread-selection-banner--peek-visible', shouldPeek);
-    threadBannerEl.classList.toggle('thread-selection-banner--peek-hidden', !shouldPeek);
+    if (shouldPeek) {
+      if (!threadBannerEl.classList.contains('thread-selection-banner--peek')) {
+        threadBannerEl.classList.add('thread-selection-banner--peek');
+        threadBannerEl.classList.add('thread-selection-banner--peek-hidden');
+        threadBannerEl.classList.remove('thread-selection-banner--peek-visible');
+        requestAnimationFrame(() => {
+          if (!threadBannerEl || !state.activeThreadId) return;
+          if (state.bannerScrollAtTop) return;
+          if (!(state.bannerHovered || state.bannerTopEdgeActive)) return;
+          threadBannerEl.classList.add('thread-selection-banner--peek-visible');
+          threadBannerEl.classList.remove('thread-selection-banner--peek-hidden');
+        });
+        return;
+      }
+      threadBannerEl.classList.add('thread-selection-banner--peek-visible');
+      threadBannerEl.classList.remove('thread-selection-banner--peek-hidden');
+      return;
+    }
+    if (threadBannerEl.classList.contains('thread-selection-banner--peek')) {
+      threadBannerEl.classList.remove('thread-selection-banner--peek-visible');
+      threadBannerEl.classList.add('thread-selection-banner--peek-hidden');
+      threadBannerPeekTimer = window.setTimeout(() => {
+        threadBannerPeekTimer = null;
+        if (!threadBannerEl) return;
+        threadBannerEl.classList.remove('thread-selection-banner--peek');
+        threadBannerEl.classList.remove('thread-selection-banner--peek-hidden');
+      }, 180);
+      return;
+    }
+    threadBannerEl.classList.remove('thread-selection-banner--peek');
+    threadBannerEl.classList.remove('thread-selection-banner--peek-visible');
+    threadBannerEl.classList.remove('thread-selection-banner--peek-hidden');
   }
 
   function handleThreadBannerMouseEnter() {
@@ -114,9 +151,26 @@ export function createSelectionThreadManager(appContext) {
     updateThreadBannerPeek();
   }
 
+  function getThreadBannerTopEdgeThreshold() {
+    let extra = 0;
+    if (threadBannerEl) {
+      const bannerStyle = window.getComputedStyle(threadBannerEl);
+      const marginTop = parseFloat(bannerStyle.marginTop) || 0;
+      extra += marginTop;
+    }
+    if (threadContainer) {
+      const containerStyle = window.getComputedStyle(threadContainer);
+      const paddingTop = parseFloat(containerStyle.paddingTop) || 0;
+      const gap = parseFloat(containerStyle.rowGap || containerStyle.gap) || 0;
+      extra += paddingTop + gap;
+    }
+    return THREAD_BANNER_TOP_EDGE_PX + extra;
+  }
+
   function handleTopEdgeMouseMove(event) {
     if (!state.activeThreadId || !threadBannerEl) return;
-    const nearTop = (event?.clientY ?? 9999) <= THREAD_BANNER_TOP_EDGE_PX;
+    const threshold = getThreadBannerTopEdgeThreshold();
+    const nearTop = (event?.clientY ?? 9999) <= threshold;
     if (nearTop === state.bannerTopEdgeActive) return;
     state.bannerTopEdgeActive = nearTop;
     updateThreadBannerPeek();
@@ -2119,6 +2173,7 @@ export function createSelectionThreadManager(appContext) {
   function exitThread(options = {}) {
     const { skipDraftCleanup = false } = options || {};
     stopThreadResize();
+    clearThreadBannerPeekTimer();
     const currentThreadId = state.activeThreadId;
     if (!skipDraftCleanup && currentThreadId) {
       cleanupDraftThreadIfNeeded(currentThreadId);

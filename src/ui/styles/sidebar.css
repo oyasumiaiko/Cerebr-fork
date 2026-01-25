@@ -622,7 +622,7 @@ body.thread-resize-active * {
     position: sticky;
     top: 0;
     z-index: 4;
-    transition: transform 0.16s ease, opacity 0.16s ease;
+    transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
 .thread-selection-banner--peek-hidden {
