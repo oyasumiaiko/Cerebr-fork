@@ -4611,6 +4611,51 @@ body.hide-references .reference-number.superscript {
     color: var(--cerebr-text-color);
 }
 
+.chat-history-item .info .info-content {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.chat-history-item .info .info-separator {
+    opacity: 0.75;
+}
+
+.chat-history-item .conversation-stats {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.chat-history-item .conversation-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.chat-history-item .conversation-stat i {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1em;
+    height: 1em;
+    font-size: 0.95em;
+    line-height: 1;
+    opacity: 0.85;
+}
+
+.chat-history-item .conversation-stat-count {
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.chat-history-item .conversation-stat-thread {
+    gap: 8px;
+}
+
 /* URL 快速筛选：匹配等级徽标 */
 #chat-history-panel .url-match-badge {
     display: inline-flex;

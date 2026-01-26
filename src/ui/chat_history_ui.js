@@ -4860,7 +4860,87 @@ export function createChatHistoryUI(appContext) {
       ? Number(conv.threadMessageCount)
       : Math.max(0, totalCount - mainCount);
     const threadCount = Number.isFinite(Number(conv?.threadCount)) ? Number(conv.threadCount) : 0;
-    const displayInfos = `${chatTimeSpan} · 消息 总${totalCount} 主${mainCount} 线程${threadCount} 线程消息${threadMessageCount} · ${domain}`;
+    const hasThreads = threadCount !== 0 || threadMessageCount !== 0;
+    const statsMetaParts = [`消息 ${totalCount}`];
+    if (hasThreads && mainCount !== 0) {
+      statsMetaParts.push(`主要 ${mainCount}`);
+    }
+    if (hasThreads) {
+      const threadMetaParts = [];
+      if (threadCount !== 0) {
+        threadMetaParts.push(`线程 ${threadCount}`);
+      }
+      if (threadMessageCount !== 0) {
+        threadMetaParts.push(`消息${threadMessageCount}`);
+      }
+      statsMetaParts.push(threadMetaParts.join(' '));
+    }
+    const displayInfos = `${chatTimeSpan} · ${statsMetaParts.join(' ')} · ${domain}`;
+    const infoContent = document.createElement('span');
+    infoContent.className = 'info-content';
+    const statsWrap = document.createElement('span');
+    statsWrap.className = 'conversation-stats';
+    const appendStat = (iconClass, value, label) => {
+      const stat = document.createElement('span');
+      stat.className = 'conversation-stat';
+      stat.title = label;
+      const icon = document.createElement('i');
+      icon.className = `fa-solid ${iconClass}`;
+      icon.setAttribute('aria-hidden', 'true');
+      const count = document.createElement('span');
+      count.className = 'conversation-stat-count';
+      count.textContent = String(value);
+      stat.appendChild(icon);
+      stat.appendChild(count);
+      statsWrap.appendChild(stat);
+    };
+    appendStat('fa-comments', totalCount, `消息 ${totalCount}`);
+    if (hasThreads && mainCount !== 0) {
+      appendStat('fa-comment', mainCount, `主要 ${mainCount}`);
+    }
+    if (hasThreads) {
+      const threadStat = document.createElement('span');
+      threadStat.className = 'conversation-stat conversation-stat-thread';
+      const threadTitleParts = [];
+      if (threadCount !== 0) {
+        const icon = document.createElement('i');
+        icon.className = 'fa-solid fa-layer-group';
+        icon.setAttribute('aria-hidden', 'true');
+        const count = document.createElement('span');
+        count.className = 'conversation-stat-count';
+        count.textContent = String(threadCount);
+        threadStat.appendChild(icon);
+        threadStat.appendChild(count);
+        threadTitleParts.push(`线程 ${threadCount}`);
+      }
+      if (threadMessageCount !== 0) {
+        const icon = document.createElement('i');
+        icon.className = 'fa-solid fa-comment-dots';
+        icon.setAttribute('aria-hidden', 'true');
+        const count = document.createElement('span');
+        count.className = 'conversation-stat-count';
+        count.textContent = String(threadMessageCount);
+        threadStat.appendChild(icon);
+        threadStat.appendChild(count);
+        threadTitleParts.push(`消息${threadMessageCount}`);
+      }
+      threadStat.title = threadTitleParts.join(' ');
+      statsWrap.appendChild(threadStat);
+    }
+    const createInfoSpan = (className, text) => {
+      const span = document.createElement('span');
+      if (className) {
+        span.className = className;
+      }
+      span.textContent = text;
+      return span;
+    };
+    const createSeparator = () => createInfoSpan('info-separator', '·');
+    infoContent.appendChild(createInfoSpan('info-time', chatTimeSpan));
+    infoContent.appendChild(createSeparator());
+    infoContent.appendChild(statsWrap);
+    infoContent.appendChild(createSeparator());
+    infoContent.appendChild(createInfoSpan('info-domain', domain));
     // URL 快速筛选模式下，为每条会话标注“匹配等级”，便于用户理解来源范围
     // - 等级越小越严格（越接近当前页面 URL）
     // - 鼠标悬停可查看匹配前缀
@@ -4875,9 +4955,9 @@ export function createChatHistoryUI(appContext) {
         ? `URL 匹配等级 L${level}（越小越精确）\n匹配前缀: ${prefix}`
         : `URL 匹配等级 L${level}（越小越精确）`;
       infoDiv.appendChild(badge);
-      infoDiv.appendChild(document.createTextNode(displayInfos));
+      infoDiv.appendChild(infoContent);
     } else {
-      infoDiv.textContent = displayInfos;
+      infoDiv.appendChild(infoContent);
     }
     // 说明：
     // - 过去通过 item.title 触发浏览器原生 tooltip（展示时间/URL 等）；
