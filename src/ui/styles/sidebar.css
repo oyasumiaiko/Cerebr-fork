@@ -4706,6 +4706,15 @@ body.hide-references .reference-number.superscript {
     /* 滚动条样式统一至全局 */
 }
 
+#chat-history-list.pinned-collapsed .chat-history-item.pinned {
+    display: none;
+}
+
+#chat-history-list .chat-history-group-header.pinned-header {
+    cursor: pointer;
+    user-select: none;
+}
+
 /* 滚动条样式统一至全局 */
 
 /* 调整聊天记录面板标题栏关闭按钮的样式，使其与整体风格一致 */

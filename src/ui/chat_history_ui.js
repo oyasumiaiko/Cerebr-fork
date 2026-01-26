@@ -3845,7 +3845,33 @@ export function createChatHistoryUI(appContext) {
       const pinnedHeader = document.createElement('div');
       pinnedHeader.className = 'chat-history-group-header pinned-header';
       pinnedHeader.textContent = '已置顶';
+      pinnedHeader.setAttribute('role', 'button');
+      pinnedHeader.setAttribute('tabindex', '0');
+      // 置顶区默认折叠，点击标题切换展开状态（状态保存在面板 dataset 中）
+      const applyPinnedCollapseState = (collapsed) => {
+        listContainer.classList.toggle('pinned-collapsed', collapsed);
+        pinnedHeader.dataset.collapsed = collapsed ? 'true' : 'false';
+        pinnedHeader.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        pinnedHeader.title = collapsed ? '点击展开置顶聊天' : '点击折叠置顶聊天';
+      };
+      const initialPinnedCollapsed = panel.dataset.pinnedCollapsed !== 'false';
+      panel.dataset.pinnedCollapsed = initialPinnedCollapsed ? 'true' : 'false';
+      applyPinnedCollapseState(initialPinnedCollapsed);
+      const togglePinnedCollapse = () => {
+        const nextCollapsed = !listContainer.classList.contains('pinned-collapsed');
+        panel.dataset.pinnedCollapsed = nextCollapsed ? 'true' : 'false';
+        applyPinnedCollapseState(nextCollapsed);
+      };
+      pinnedHeader.addEventListener('click', togglePinnedCollapse);
+      pinnedHeader.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        togglePinnedCollapse();
+      });
       listContainer.appendChild(pinnedHeader);
+    } else {
+      listContainer.classList.remove('pinned-collapsed');
+      delete panel.dataset.pinnedCollapsed;
     }
 
     // 首次加载批次
