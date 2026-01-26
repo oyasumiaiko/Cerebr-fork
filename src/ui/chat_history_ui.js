@@ -1288,6 +1288,7 @@ export function createChatHistoryUI(appContext) {
     if (currentConversationId === conversationId) {
       currentConversationId = null;
       services.messageSender.setCurrentConversationId(null);
+      services.selectionThreadManager?.resetForClearChat?.();
       services.chatHistoryManager.clearHistory();
       chatContainer.innerHTML = '';
     }
@@ -1979,6 +1980,8 @@ export function createChatHistoryUI(appContext) {
     const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const skipMessageAnimation = !!normalizedOptions.skipMessageAnimation;
     const skipScrollToBottom = !!normalizedOptions.skipScrollToBottom;
+    // 切换/打开会话时确保线程状态同步关闭，避免残留线程面板。
+    services.selectionThreadManager?.resetForClearChat?.();
     // 如果传入的是简化版会话对象（可能只有id），则加载完整版
     let fullConversation = conversation;
     if (!conversation.messages || conversation.messages.length === 0) {
