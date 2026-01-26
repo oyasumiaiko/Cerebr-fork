@@ -198,7 +198,6 @@ export function createUIManager(appContext) {
           // - 否则打开聊天记录面板并跳转到对应标签页。
           if (isPanelOpen && activeTab === targetTab) {
             closeExclusivePanels();
-            toggleSettingsMenu(false);
             return;
           }
 
@@ -209,7 +208,6 @@ export function createUIManager(appContext) {
             await chatHistoryUI?.activateTab?.(targetTab);
           }
 
-          toggleSettingsMenu(false);
         });
 
         const scheduleCloseSettingsMenu = () => {

@@ -1011,17 +1011,23 @@ function setupChatActionButtons(appContext) {
   appContext.dom.sendButton.addEventListener('click', () => appContext.services.messageSender.sendMessage());
 
   if (appContext.dom.chatHistoryMenuItem) {
-    appContext.dom.chatHistoryMenuItem.addEventListener('click', () => {
-      const chatPanel = document.getElementById('chat-history-panel');
-      const isInsidePanel = !!(chatPanel && chatPanel.contains(appContext.dom.chatHistoryMenuItem));
-      if (isInsidePanel) {
-        appContext.services.chatHistoryUI.activateTab?.('history');
+    appContext.dom.chatHistoryMenuItem.addEventListener('click', async () => {
+      const chatHistoryUI = appContext.services.chatHistoryUI;
+      const targetTab = 'history';
+      const isPanelOpen = !!chatHistoryUI?.isChatHistoryPanelOpen?.();
+      const activeTab = chatHistoryUI?.getActiveTabName?.();
+
+      // 行为对齐提示词/API：同一标签再点一次关闭，否则切换到目标标签。
+      if (isPanelOpen && activeTab === targetTab) {
+        appContext.services.uiManager.closeExclusivePanels();
         return;
       }
-      const isOpen = appContext.services.chatHistoryUI.isChatHistoryPanelOpen();
-      appContext.services.uiManager.closeExclusivePanels();
-      if (!isOpen) {
-        appContext.services.chatHistoryUI.showChatHistoryPanel();
+
+      if (!isPanelOpen) {
+        appContext.services.uiManager.closeExclusivePanels();
+        await chatHistoryUI?.showChatHistoryPanel?.(targetTab);
+      } else {
+        await chatHistoryUI?.activateTab?.(targetTab);
       }
     });
   }

@@ -441,6 +441,42 @@ export function createSettingsManager(appContext) {
     const panelContainer = ensureEscSettingsMenu();
     if (!quickContainer && !panelContainer) return;
 
+    const getElementId = (def) => def.id || `setting-${def.key}`;
+    // 避免 Esc 设置容器未挂载时重复渲染导致控件重复
+    const normalizeExistingElement = (elementId, preferredContainer) => {
+      if (!elementId) return null;
+      const candidates = [];
+      if (quickContainer) candidates.push(...quickContainer.querySelectorAll(`#${elementId}`));
+      if (panelContainer) candidates.push(...panelContainer.querySelectorAll(`#${elementId}`));
+      if (!candidates.length) {
+        const docEl = document.getElementById(elementId);
+        if (docEl) candidates.push(docEl);
+      }
+      if (!candidates.length) return null;
+      let keep = null;
+      if (preferredContainer) {
+        keep = preferredContainer.querySelector(`#${elementId}`);
+      }
+      if (!keep) keep = candidates[0];
+      for (const el of candidates) {
+        if (el === keep) continue;
+        const item = el.closest('.menu-item');
+        if (item && item.parentElement) {
+          item.parentElement.removeChild(item);
+        } else if (el.parentElement) {
+          el.parentElement.removeChild(el);
+        }
+      }
+      return keep;
+    };
+
+    if (quickContainer && panelContainer) {
+      const themeSelector = panelContainer.querySelector('#theme-selector');
+      if (themeSelector && !quickContainer.contains(themeSelector)) {
+        quickContainer.insertBefore(themeSelector, quickContainer.firstChild);
+      }
+    }
+
     const ensureAutoSection = (container, scope) => {
       if (!container) return null;
       const selector = `.settings-auto-section[data-scope="${scope}"]`;
@@ -477,10 +513,12 @@ export function createSettingsManager(appContext) {
 
     // 为每个注册项生成控件（若页面已存在同ID控件则跳过；uiHidden=true 时不渲染控件）
     for (const def of getActiveRegistry()) {
+      const elementId = getElementId(def);
+      const preferredContainer = (def.menu === 'quick' && quickContainer) ? quickContainer : panelContainer;
+      const existing = normalizeExistingElement(elementId, preferredContainer);
       if (def.uiHidden === true) {
-        const existingHidden = document.getElementById(def.id || `setting-${def.key}`);
-        if (existingHidden) {
-          dynamicElements.set(def.key, existingHidden);
+        if (existing) {
+          dynamicElements.set(def.key, existing);
         }
         // 不渲染 UI，但该设置仍会被加载/保存/应用（通过 applyAllSettings）
         continue;
@@ -488,7 +526,6 @@ export function createSettingsManager(appContext) {
       const { container, scope } = resolveContainer(def);
       const autoSection = ensureAutoSection(container, scope);
       const targetSection = autoSection;
-      const existing = document.getElementById(def.id || `setting-${def.key}`);
       if (existing) {
         dynamicElements.set(def.key, existing);
         const existingItem = existing.closest('.menu-item');

@@ -1909,7 +1909,6 @@ export function createApiManager(appContext) {
       // 行为对齐旧交互：已在该标签页时再次点击则关闭面板，否则跳转到该标签页。
       if (isPanelOpen && activeTab === targetTab) {
         uiManager?.closeExclusivePanels?.();
-        uiManager?.toggleSettingsMenu?.(false);
         return;
       }
 
@@ -1920,7 +1919,6 @@ export function createApiManager(appContext) {
         await chatHistoryUI?.activateTab?.(targetTab);
       }
 
-      uiManager?.toggleSettingsMenu?.(false);
     });
 
     // 返回聊天界面
