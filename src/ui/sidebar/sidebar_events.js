@@ -339,6 +339,119 @@ function setupEmptyStateHandlers(appContext) {
     if (button.dataset.randomBackgroundBound === 'true') return;
     button.dataset.randomBackgroundBound = 'true';
 
+    const showNotification = appContext.utils?.showNotification;
+
+    const resolveBackgroundImageUrl = (messages = {}) => {
+      const {
+        emptyMessage = '当前没有背景图片可用',
+        invalidMessage = '无法解析当前背景图片地址'
+      } = messages || {};
+      const style = getComputedStyle(document.documentElement);
+      const cssValue = (style.getPropertyValue('--cerebr-background-image') || '').trim();
+      if (!cssValue || cssValue === 'none') {
+        showNotification?.({
+          message: emptyMessage,
+          type: 'warning',
+          duration: 2000
+        });
+        return '';
+      }
+      const match = cssValue.match(/url\(\s*(['"]?)(.*?)\1\s*\)/i);
+      const imageUrl = match && match[2] ? match[2] : '';
+      if (!imageUrl) {
+        showNotification?.({
+          message: invalidMessage,
+          type: 'warning',
+          duration: 2400
+        });
+        return '';
+      }
+      return imageUrl;
+    };
+
+    const fetchBackgroundBlob = async (imageUrl, failMessage) => {
+      try {
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error('请求失败: ' + response.status);
+        }
+        return await response.blob();
+      } catch (error) {
+        console.error('获取背景图片失败:', error);
+        showNotification?.({
+          message: failMessage,
+          type: 'error',
+          duration: 2600
+        });
+        return null;
+      }
+    };
+
+    const ensurePngBlob = (inputBlob) => {
+      if (inputBlob.type === 'image/png') return Promise.resolve(inputBlob);
+
+      return new Promise((resolve, reject) => {
+        try {
+          const img = new Image();
+          const objectUrl = URL.createObjectURL(inputBlob);
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              URL.revokeObjectURL(objectUrl);
+
+              canvas.toBlob((pngBlob) => {
+                if (pngBlob) {
+                  resolve(pngBlob);
+                } else {
+                  reject(new Error('PNG 转码失败'));
+                }
+              }, 'image/png');
+            } catch (e) {
+              URL.revokeObjectURL(objectUrl);
+              reject(e);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('图片加载失败，无法转为 PNG'));
+          };
+          // 尝试避免跨域污染画布
+          img.crossOrigin = 'anonymous';
+          img.src = objectUrl;
+        } catch (e) {
+          reject(e);
+        }
+      });
+    };
+
+    const resolveDownloadExtension = (blob, imageUrl) => {
+      const type = (blob?.type || '').toLowerCase();
+      const typeMap = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'image/bmp': 'bmp'
+      };
+      if (typeMap[type]) return typeMap[type];
+      const urlMatch = typeof imageUrl === 'string'
+        ? imageUrl.match(/\.([a-z0-9]+)(?:$|[?#])/i)
+        : null;
+      const urlExt = urlMatch && urlMatch[1] ? urlMatch[1].toLowerCase() : '';
+      if (urlExt && urlExt.length <= 5) return urlExt;
+      return 'png';
+    };
+
+    const buildDownloadFilename = (extension) => {
+      const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+      return `cerebr-background-${stamp}.${extension || 'png'}`;
+    };
+
     // 左键：刷新随机背景图片
     button.addEventListener('click', () => {
       const settingsManager = appContext.services.settingsManager;
@@ -349,11 +462,46 @@ function setupEmptyStateHandlers(appContext) {
       settingsManager.refreshBackgroundImage();
     });
 
+    // 中键：直接下载当前背景图片
+    button.addEventListener('auxclick', async (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      const imageUrl = resolveBackgroundImageUrl({
+        emptyMessage: '当前没有背景图片可下载',
+        invalidMessage: '无法解析当前背景图片地址'
+      });
+      if (!imageUrl) return;
+      const blob = await fetchBackgroundBlob(imageUrl, '获取背景图片失败，无法下载');
+      if (!blob) return;
+      try {
+        const extension = resolveDownloadExtension(blob, imageUrl);
+        const filename = buildDownloadFilename(extension);
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        showNotification?.({
+          message: '已开始下载背景图片',
+          type: 'success',
+          duration: 2000
+        });
+      } catch (error) {
+        console.error('下载背景图片失败:', error);
+        showNotification?.({
+          message: '下载背景图片失败',
+          type: 'error',
+          duration: 2600
+        });
+      }
+    });
+
     // 右键：复制当前背景图片到剪贴板
     button.addEventListener('contextmenu', async (event) => {
       event.preventDefault();
-
-      const showNotification = appContext.utils?.showNotification;
 
       // 检查 Clipboard API 支持
       if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
@@ -365,50 +513,15 @@ function setupEmptyStateHandlers(appContext) {
         return;
       }
 
-      let imageUrl = '';
+      const imageUrl = resolveBackgroundImageUrl({
+        emptyMessage: '当前没有背景图片可以复制',
+        invalidMessage: '无法解析当前背景图片地址'
+      });
+      if (!imageUrl) return;
 
       try {
-        // 从 CSS 变量中解析当前背景图片 URL
-        const style = getComputedStyle(document.documentElement);
-        const cssValue = (style.getPropertyValue('--cerebr-background-image') || '').trim();
-        if (!cssValue || cssValue === 'none') {
-          showNotification?.({
-            message: '当前没有背景图片可以复制',
-            type: 'warning',
-            duration: 2000
-          });
-          return;
-        }
-
-        const match = cssValue.match(/url\(\s*(['"]?)(.*?)\1\s*\)/i);
-        imageUrl = match && match[2] ? match[2] : '';
-        if (!imageUrl) {
-          showNotification?.({
-            message: '无法解析当前背景图片地址',
-            type: 'warning',
-            duration: 2400
-          });
-          return;
-        }
-
-        // 先拉取原始图片二进制
-        let blob;
-        try {
-          const response = await fetch(imageUrl);
-          if (!response.ok) {
-            throw new Error('请求失败: ' + response.status);
-          }
-          blob = await response.blob();
-        } catch (error) {
-          console.error('获取背景图片失败:', error);
-          showNotification?.({
-            message: '获取背景图片失败，无法复制到剪贴板',
-            type: 'error',
-            duration: 2600
-          });
-          return;
-        }
-
+        const blob = await fetchBackgroundBlob(imageUrl, '获取背景图片失败，无法复制到剪贴板');
+        if (!blob) return;
         if (typeof ClipboardItem === 'undefined') {
           showNotification?.({
             message: '当前环境不支持图片剪贴板写入',
@@ -417,48 +530,6 @@ function setupEmptyStateHandlers(appContext) {
           });
           return;
         }
-
-        // 若不是 PNG，则通过 Canvas 转换为 PNG，保证最终写入的是 PNG 图片
-        const ensurePngBlob = (inputBlob) => {
-          if (inputBlob.type === 'image/png') return Promise.resolve(inputBlob);
-
-          return new Promise((resolve, reject) => {
-            try {
-              const img = new Image();
-              const objectUrl = URL.createObjectURL(inputBlob);
-              img.onload = () => {
-                try {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = img.width;
-                  canvas.height = img.height;
-                  const ctx = canvas.getContext('2d');
-                  ctx.drawImage(img, 0, 0);
-                  URL.revokeObjectURL(objectUrl);
-
-                  canvas.toBlob((pngBlob) => {
-                    if (pngBlob) {
-                      resolve(pngBlob);
-                    } else {
-                      reject(new Error('PNG 转码失败'));
-                    }
-                  }, 'image/png');
-                } catch (e) {
-                  URL.revokeObjectURL(objectUrl);
-                  reject(e);
-                }
-              };
-              img.onerror = () => {
-                URL.revokeObjectURL(objectUrl);
-                reject(new Error('图片加载失败，无法转为 PNG'));
-              };
-              // 尝试避免跨域污染画布
-              img.crossOrigin = 'anonymous';
-              img.src = objectUrl;
-            } catch (e) {
-              reject(e);
-            }
-          });
-        };
 
         const pngBlob = await ensurePngBlob(blob);
         const item = new ClipboardItem({ 'image/png': pngBlob });

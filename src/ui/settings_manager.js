@@ -486,15 +486,23 @@ export function createSettingsManager(appContext) {
         autoSection.className = 'settings-auto-section';
         autoSection.dataset.scope = scope;
         if (scope === 'quick') {
-          // 插入到主题选择器之后，保持下拉菜单中的视觉层级
-          const themeSelector = container.querySelector('#theme-selector');
-          if (themeSelector?.nextSibling) {
-            container.insertBefore(autoSection, themeSelector.nextSibling);
+          // 让“随机背景”紧贴主题选择，快捷项放在其后，避免把按钮挤到列表下方。
+          const anchor = container.querySelector('#settings-random-background')
+            || container.querySelector('#theme-selector');
+          if (anchor?.nextSibling) {
+            container.insertBefore(autoSection, anchor.nextSibling);
           } else {
             container.appendChild(autoSection);
           }
         } else {
           container.appendChild(autoSection);
+        }
+      }
+      if (scope === 'quick') {
+        const anchor = container.querySelector('#settings-random-background')
+          || container.querySelector('#theme-selector');
+        if (anchor && anchor.nextSibling !== autoSection) {
+          container.insertBefore(autoSection, anchor.nextSibling);
         }
       }
       return autoSection;
