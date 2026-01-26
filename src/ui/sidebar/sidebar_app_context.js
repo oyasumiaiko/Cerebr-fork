@@ -34,6 +34,7 @@ export function createSidebarAppContext(isStandalone) {
     escSettingsMenu: document.getElementById('esc-settings-menu'),
     themeSwitch: document.getElementById('theme-switch'),
     themeSelect: document.getElementById('theme-select'),
+    settingsRandomBackground: document.getElementById('settings-random-background'),
     sidebarWidth: document.getElementById('sidebar-width'),
     fontSize: document.getElementById('font-size'),
     widthValue: document.getElementById('width-value'),

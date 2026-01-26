@@ -249,11 +249,13 @@ function setupEmptyStateHandlers(appContext) {
     });
   }
 
-  if (appContext.dom.emptyStateRandomBackground) {
-    const randomBgButton = appContext.dom.emptyStateRandomBackground;
+  const bindRandomBackgroundButton = (button) => {
+    if (!button) return;
+    if (button.dataset.randomBackgroundBound === 'true') return;
+    button.dataset.randomBackgroundBound = 'true';
 
     // 左键：刷新随机背景图片
-    randomBgButton.addEventListener('click', () => {
+    button.addEventListener('click', () => {
       const settingsManager = appContext.services.settingsManager;
       if (!settingsManager?.refreshBackgroundImage) {
         console.warn('随机背景图片按钮点击时缺少 refreshBackgroundImage 方法');
@@ -263,7 +265,7 @@ function setupEmptyStateHandlers(appContext) {
     });
 
     // 右键：复制当前背景图片到剪贴板
-    randomBgButton.addEventListener('contextmenu', async (event) => {
+    button.addEventListener('contextmenu', async (event) => {
       event.preventDefault();
 
       const showNotification = appContext.utils?.showNotification;
@@ -360,7 +362,7 @@ function setupEmptyStateHandlers(appContext) {
                   reject(e);
                 }
               };
-              img.onerror = (e) => {
+              img.onerror = () => {
                 URL.revokeObjectURL(objectUrl);
                 reject(new Error('图片加载失败，无法转为 PNG'));
               };
@@ -391,7 +393,10 @@ function setupEmptyStateHandlers(appContext) {
         });
       }
     });
-  }
+  };
+
+  bindRandomBackgroundButton(appContext.dom.emptyStateRandomBackground);
+  bindRandomBackgroundButton(appContext.dom.settingsRandomBackground);
 }
 
 /**
