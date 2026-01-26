@@ -1419,6 +1419,17 @@ export function createChatHistoryUI(appContext) {
     const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
     const hasNegative = !!textPlan?.hasNegative;
 
+    const appendMessageExcerpts = (plainText, messageId) => {
+      if (!highlightTerms.length || matchInfo.excerpts.length >= MAX_EXCERPTS) return;
+      const excerpts = buildExcerptSegments(plainText, highlightTerms, 24, 2);
+      if (!Array.isArray(excerpts) || excerpts.length === 0) return;
+      for (const excerpt of excerpts) {
+        if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
+        excerpt.messageId = messageId || null;
+        matchInfo.excerpts.push(excerpt);
+      }
+    };
+
     const scope = resolveSearchScope(textPlan);
     if (scope === 'message') {
       const positiveTerms = Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : [];
@@ -1455,13 +1466,7 @@ export function createChatHistoryUI(appContext) {
               if (!matchInfo.messageId && message.id) {
                 matchInfo.messageId = message.id;
               }
-              if (highlightTerms.length && matchInfo.excerpts.length < MAX_EXCERPTS) {
-                const excerpt = buildExcerptSegments(plainText, highlightTerms);
-                if (excerpt) {
-                  excerpt.messageId = message.id || null;
-                  matchInfo.excerpts.push(excerpt);
-                }
-              }
+              appendMessageExcerpts(plainText, message.id || '');
               if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
             }
           }
@@ -1521,11 +1526,7 @@ export function createChatHistoryUI(appContext) {
         if (highlightTerms.length && matchInfo.excerpts.length < MAX_EXCERPTS) {
           const hasHighlightTerm = highlightTerms.some(term => term && lowerText.includes(term));
           if (hasHighlightTerm) {
-            const excerpt = buildExcerptSegments(plainText, highlightTerms);
-            if (excerpt) {
-              excerpt.messageId = message.id || null;
-              matchInfo.excerpts.push(excerpt);
-            }
+            appendMessageExcerpts(plainText, message.id || '');
           }
         }
 
@@ -1631,26 +1632,80 @@ export function createChatHistoryUI(appContext) {
     return segments;
   }
 
-  function buildExcerptSegments(sourceText, highlightTerms, contextLength = 32) {
-    if (!sourceText) return null;
-    const regex = buildHighlightRegex(highlightTerms);
-    if (!regex) return null;
-    const firstMatch = regex.exec(sourceText);
-    if (!firstMatch) return null;
+  function buildExcerptSegments(sourceText, highlightTerms, contextLength = 24, maxLines = 2) {
+    if (!sourceText) return [];
+    const terms = (Array.isArray(highlightTerms) ? highlightTerms : [])
+      .map(term => (typeof term === 'string' ? term.trim() : ''))
+      .filter(Boolean);
+    if (!terms.length) return [];
 
-    const matchIndex = firstMatch.index;
-    const matchLength = Math.max(1, firstMatch[0].length);
-    const start = Math.max(0, matchIndex - contextLength);
-    const end = Math.min(sourceText.length, matchIndex + matchLength + contextLength);
-    const snippet = sourceText.slice(start, end);
-    const segments = buildHighlightSegments(snippet, highlightTerms);
-    if (!segments) return null;
+    const lowerText = sourceText.toLowerCase();
+    const ranges = [];
+    const seen = new Set();
 
-    return {
-      segments,
-      prefixEllipsis: start > 0,
-      suffixEllipsis: end < sourceText.length
-    };
+    terms.forEach((rawTerm) => {
+      const termLower = rawTerm.toLowerCase();
+      if (seen.has(termLower)) return;
+      seen.add(termLower);
+      const index = lowerText.indexOf(termLower);
+      if (index === -1) return;
+      const start = Math.max(0, index - contextLength);
+      const end = Math.min(sourceText.length, index + termLower.length + contextLength);
+      ranges.push({ start, end });
+    });
+
+    if (!ranges.length) return [];
+
+    ranges.sort((a, b) => a.start - b.start);
+    const mergeGap = Math.max(6, Math.floor(contextLength / 2));
+    const collapsed = [];
+    for (const range of ranges) {
+      if (!collapsed.length) {
+        collapsed.push({ start: range.start, end: range.end });
+        continue;
+      }
+      const last = collapsed[collapsed.length - 1];
+      if (range.start <= last.end + mergeGap) {
+        last.end = Math.max(last.end, range.end);
+      } else {
+        collapsed.push({ start: range.start, end: range.end });
+      }
+    }
+
+    let groups = collapsed.map(range => ({ parts: [range] }));
+    while (groups.length > maxLines) {
+      let bestIndex = 0;
+      let bestGap = Infinity;
+      for (let i = 0; i < groups.length - 1; i += 1) {
+        const current = groups[i].parts[groups[i].parts.length - 1];
+        const next = groups[i + 1].parts[0];
+        const gap = next.start - current.end;
+        if (gap < bestGap) {
+          bestGap = gap;
+          bestIndex = i;
+        }
+      }
+      const merged = {
+        parts: groups[bestIndex].parts.concat(groups[bestIndex + 1].parts)
+      };
+      groups.splice(bestIndex, 2, merged);
+    }
+
+    return groups.map((group) => {
+      const parts = group.parts.slice().sort((a, b) => a.start - b.start);
+      const snippetParts = parts
+        .map(part => sourceText.slice(part.start, part.end).trim())
+        .filter(Boolean);
+      if (!snippetParts.length) return null;
+      const snippet = snippetParts.join(' … ');
+      const segments = buildHighlightSegments(snippet, highlightTerms);
+      if (!segments) return null;
+      return {
+        segments,
+        prefixEllipsis: parts[0].start > 0,
+        suffixEllipsis: parts[parts.length - 1].end < sourceText.length
+      };
+    }).filter(Boolean);
   }
 
   function appendHighlightSegments(container, segments) {
@@ -4801,13 +4856,18 @@ export function createChatHistoryUI(appContext) {
     if (hasHighlightTerms && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
       const snippetDiv = document.createElement('div');
       snippetDiv.className = 'highlight-snippet';
+      const perMessageLineCount = new Map();
       searchMatchInfo.excerpts.forEach(excerpt => {
+        const messageId = excerpt.messageId || '';
+        const usedCount = perMessageLineCount.get(messageId) || 0;
+        if (usedCount >= 2) return;
+        perMessageLineCount.set(messageId, usedCount + 1);
         const line = document.createElement('div');
         line.className = 'highlight-snippet-line';
         if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
         appendHighlightSegments(line, excerpt.segments);
         if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
-        bindSearchSnippetLineJump(line, conv.id, excerpt.messageId || '');
+        bindSearchSnippetLineJump(line, conv.id, messageId);
         snippetDiv.appendChild(line);
       });
       mainDiv.appendChild(snippetDiv);
@@ -4834,15 +4894,18 @@ export function createChatHistoryUI(appContext) {
         totalMatches += matchCount;
 
         if (snippets.length < 8) {
-          const excerpt = buildExcerptSegments(plainText, highlightTerms);
-          if (!excerpt) continue;
-          const line = document.createElement('div');
-          line.className = 'highlight-snippet-line';
-          if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
-          appendHighlightSegments(line, excerpt.segments);
-          if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
-          bindSearchSnippetLineJump(line, conv.id, msg.id || '');
-          snippets.push(line);
+          const excerpts = buildExcerptSegments(plainText, highlightTerms);
+          if (!Array.isArray(excerpts) || excerpts.length === 0) continue;
+          for (const excerpt of excerpts) {
+            if (snippets.length >= 8) break;
+            const line = document.createElement('div');
+            line.className = 'highlight-snippet-line';
+            if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
+            appendHighlightSegments(line, excerpt.segments);
+            if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
+            bindSearchSnippetLineJump(line, conv.id, msg.id || '');
+            snippets.push(line);
+          }
         }
       }
 
