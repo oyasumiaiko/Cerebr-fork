@@ -6727,7 +6727,7 @@ export function createChatHistoryUI(appContext) {
 
       const settingsTab = document.createElement('div');
       settingsTab.className = 'history-tab';
-      settingsTab.textContent = '设置';
+      settingsTab.textContent = '偏好设置';
       settingsTab.dataset.tab = 'settings';
 
       const promptTab = document.createElement('div');
