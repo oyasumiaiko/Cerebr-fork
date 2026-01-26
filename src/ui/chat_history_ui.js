@@ -4882,7 +4882,7 @@ export function createChatHistoryUI(appContext) {
       stat.className = 'conversation-stat';
       stat.title = label;
       const icon = document.createElement('i');
-      icon.className = `fa-solid ${iconClass}`;
+      icon.className = `fa-solid fa-fw ${iconClass}`;
       icon.setAttribute('aria-hidden', 'true');
       const count = document.createElement('span');
       count.className = 'conversation-stat-count';
@@ -4898,7 +4898,7 @@ export function createChatHistoryUI(appContext) {
       const threadTitleParts = [];
       if (threadCount !== 0) {
         const icon = document.createElement('i');
-        icon.className = 'fa-solid fa-layer-group';
+        icon.className = 'fa-solid fa-fw fa-layer-group';
         icon.setAttribute('aria-hidden', 'true');
         const count = document.createElement('span');
         count.className = 'conversation-stat-count';
@@ -4909,7 +4909,7 @@ export function createChatHistoryUI(appContext) {
       }
       if (threadMessageCount !== 0) {
         const icon = document.createElement('i');
-        icon.className = 'fa-solid fa-comment-dots';
+        icon.className = 'fa-solid fa-fw fa-comment-dots';
         icon.setAttribute('aria-hidden', 'true');
         const count = document.createElement('span');
         count.className = 'conversation-stat-count';
