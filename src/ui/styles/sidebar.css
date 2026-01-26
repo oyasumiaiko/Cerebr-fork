@@ -4631,7 +4631,7 @@ body.hide-references .reference-number.superscript {
 .chat-history-item .conversation-stat {
     display: inline-flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 5px;
     white-space: nowrap;
     line-height: inherit;
 }
@@ -4652,7 +4652,7 @@ body.hide-references .reference-number.superscript {
 }
 
 .chat-history-item .conversation-stat-thread {
-    gap: 8px;
+    gap: 3px;
 }
 
 /* URL 快速筛选：匹配等级徽标 */
