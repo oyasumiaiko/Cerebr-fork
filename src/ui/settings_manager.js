@@ -24,7 +24,8 @@ import { createThemeManager } from './theme_manager.js';
  * @param {HTMLElement} appContext.dom.stopAtTopSwitch - 滚动到顶部时停止开关元素
  * @param {HTMLElement} appContext.dom.showThoughtProcessSwitch - 显示思考过程开关元素
  * @param {HTMLElement} appContext.dom.resetSettingsButton - 重置设置按钮元素
- * @param {HTMLElement} appContext.dom.settingsPanel - 设置面板元素
+ * @param {HTMLElement} appContext.dom.settingsMenu - 侧栏“...”下拉菜单容器
+ * @param {HTMLElement} appContext.dom.escSettingsMenu - Esc 面板内的设置容器
  * @param {HTMLElement} appContext.dom.settingsToggle - 设置面板切换按钮元素
  * @param {HTMLElement} appContext.dom.settingsBackButton - 设置面板返回按钮元素
  * @param {Function} appContext.services.messageSender.setSendChatHistory - 设置消息发送器的聊天历史开关状态
@@ -57,9 +58,19 @@ export function createSettingsManager(appContext) {
   const stopAtTopSwitch = dom.stopAtTopSwitch;
   const showThoughtProcessSwitch = dom.showThoughtProcessSwitch;
   const resetSettingsButton = dom.resetSettingsButton;
-  const settingsPanel = dom.settingsMenu;
+  const settingsMenu = dom.settingsMenu;
   const settingsToggle = dom.settingsButton;
   const settingsBackButton = dom.settingsBackButton;
+  const getEscSettingsMenu = () => dom.escSettingsMenu || document.getElementById('esc-settings-menu');
+  const ensureEscSettingsMenu = () => {
+    const existing = getEscSettingsMenu();
+    if (existing) return existing;
+    const container = document.createElement('div');
+    container.id = 'esc-settings-menu';
+    container.className = 'esc-settings-menu';
+    dom.escSettingsMenu = container;
+    return container;
+  };
 
   // Services from appContext.services
   const messageSender = services.messageSender;
@@ -214,10 +225,12 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.autoRetry,
       apply: (v) => applyAutoRetry(v)
     },
+    // 快捷设置：保留在“...”菜单中便于快速调整
     // 数学公式：是否使用 $ / $$ 作为分隔符
     {
       key: 'enableDollarMath',
       type: 'toggle',
+      menu: 'quick',
       label: '使用 $ / $$ 作为公式分隔符',
       defaultValue: DEFAULT_SETTINGS.enableDollarMath
     },
@@ -234,6 +247,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'sidebarPosition',
       type: 'toggle',
+      menu: 'quick',
       id: 'sidebar-position-switch',
       label: '侧栏在右侧显示',
       defaultValue: DEFAULT_SETTINGS.sidebarPosition,
@@ -246,6 +260,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'sidebarWidth',
       type: 'range',
+      menu: 'quick',
       id: 'sidebar-width',
       label: '侧栏宽度',
       min: 500,
@@ -272,6 +287,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'fontSize',
       type: 'range',
+      menu: 'quick',
       id: 'font-size',
       label: '字体大小',
       min: 12,
@@ -285,6 +301,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'scaleFactor',
       type: 'range',
+      menu: 'quick',
       id: 'scale-factor',
       label: '缩放比例',
       min: 0.5,
@@ -414,22 +431,44 @@ export function createSettingsManager(appContext) {
 
   // 渲染注册表定义到设置菜单
   function renderSettingsFromRegistry() {
-    const container = settingsPanel || document.getElementById('settings-menu');
-    if (!container) return;
+    const quickContainer = settingsMenu || document.getElementById('settings-menu');
+    const panelContainer = ensureEscSettingsMenu();
+    if (!quickContainer && !panelContainer) return;
 
-    // 创建或获取动态区块容器
-    let autoSection = container.querySelector('.settings-auto-section');
-    if (!autoSection) {
-      autoSection = document.createElement('div');
-      autoSection.className = 'settings-auto-section';
-      // 插入到主题选择器之后
-      const themeSelector = container.querySelector('#theme-selector');
-      if (themeSelector?.nextSibling) {
-        container.insertBefore(autoSection, themeSelector.nextSibling);
-      } else {
-        container.appendChild(autoSection);
+    const ensureAutoSection = (container, scope) => {
+      if (!container) return null;
+      const selector = `.settings-auto-section[data-scope="${scope}"]`;
+      let autoSection = container.querySelector(selector);
+      if (!autoSection) {
+        autoSection = document.createElement('div');
+        autoSection.className = 'settings-auto-section';
+        autoSection.dataset.scope = scope;
+        if (scope === 'quick') {
+          // 插入到主题选择器之后，保持下拉菜单中的视觉层级
+          const themeSelector = container.querySelector('#theme-selector');
+          if (themeSelector?.nextSibling) {
+            container.insertBefore(autoSection, themeSelector.nextSibling);
+          } else {
+            container.appendChild(autoSection);
+          }
+        } else {
+          container.appendChild(autoSection);
+        }
       }
-    }
+      return autoSection;
+    };
+
+    const resolveContainer = (def) => {
+      const wantsQuick = def.menu === 'quick';
+      if (wantsQuick) {
+        const target = quickContainer || panelContainer;
+        if (!target) return { container: null, scope: null };
+        const scope = target === quickContainer ? 'quick' : 'panel';
+        return { container: target, scope };
+      }
+      if (!panelContainer) return { container: null, scope: null };
+      return { container: panelContainer, scope: 'panel' };
+    };
 
     // 为每个注册项生成控件（若页面已存在同ID控件则跳过；uiHidden=true 时不渲染控件）
     for (const def of getActiveRegistry()) {
@@ -437,11 +476,18 @@ export function createSettingsManager(appContext) {
         // 不渲染、不绑定 UI，但该设置仍会被加载/保存/应用（通过 applyAllSettings）
         continue;
       }
+      const { container, scope } = resolveContainer(def);
+      const autoSection = ensureAutoSection(container, scope);
       const existing = document.getElementById(def.id || `setting-${def.key}`);
       if (existing) {
         dynamicElements.set(def.key, existing);
+        const existingItem = existing.closest('.menu-item');
+        if (autoSection && existingItem && existingItem.parentElement !== autoSection) {
+          autoSection.appendChild(existingItem);
+        }
         continue;
       }
+      if (!autoSection) continue;
 
       const item = document.createElement('div');
       item.className = 'menu-item';
@@ -1489,10 +1535,16 @@ export function createSettingsManager(appContext) {
     }
     return initSettings();
   }
+
+  // Esc 面板初始化后同步设置项位置（保持菜单分区一致）
+  function refreshSettingsContainers() {
+    renderSettingsFromRegistry();
+  }
   
   // 公开的API
   return {
     init,
+    refreshSettingsContainers,
     getSettings,
     getSetting,
     subscribe,

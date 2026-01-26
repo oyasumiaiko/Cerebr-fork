@@ -5009,6 +5009,22 @@ body.hide-references .reference-number.superscript {
     gap: 16px;
 }
 
+#chat-history-panel .settings-tab-content {
+    padding: 12px;
+    gap: 8px;
+}
+
+#chat-history-panel .settings-tab-content .esc-settings-menu,
+#chat-history-panel .settings-tab-content .settings-auto-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#chat-history-panel .settings-tab-content .menu-item {
+    width: 100%;
+}
+
 /* 滚动条样式统一至全局 */
 
 /* 聊天记录面板内嵌：提示词设置 / API 设置（作为标签页内容而非独立遮罩层） */

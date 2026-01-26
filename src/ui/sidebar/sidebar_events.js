@@ -1012,6 +1012,12 @@ function setupChatActionButtons(appContext) {
 
   if (appContext.dom.chatHistoryMenuItem) {
     appContext.dom.chatHistoryMenuItem.addEventListener('click', () => {
+      const chatPanel = document.getElementById('chat-history-panel');
+      const isInsidePanel = !!(chatPanel && chatPanel.contains(appContext.dom.chatHistoryMenuItem));
+      if (isInsidePanel) {
+        appContext.services.chatHistoryUI.activateTab?.('history');
+        return;
+      }
       const isOpen = appContext.services.chatHistoryUI.isChatHistoryPanelOpen();
       appContext.services.uiManager.closeExclusivePanels();
       if (!isOpen) {

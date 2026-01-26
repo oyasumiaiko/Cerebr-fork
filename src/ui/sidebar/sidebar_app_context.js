@@ -31,6 +31,7 @@ export function createSidebarAppContext(isStandalone) {
     clearChatContextButton: document.getElementById('clear-chat-context'),
     settingsButton: document.getElementById('settings-button'),
     settingsMenu: document.getElementById('settings-menu'),
+    escSettingsMenu: document.getElementById('esc-settings-menu'),
     themeSwitch: document.getElementById('theme-switch'),
     themeSelect: document.getElementById('theme-select'),
     sidebarWidth: document.getElementById('sidebar-width'),

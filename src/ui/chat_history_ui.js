@@ -6725,6 +6725,11 @@ export function createChatHistoryUI(appContext) {
       historyTab.textContent = '聊天记录';
       historyTab.dataset.tab = 'history';
 
+      const settingsTab = document.createElement('div');
+      settingsTab.className = 'history-tab';
+      settingsTab.textContent = '设置';
+      settingsTab.dataset.tab = 'settings';
+
       const promptTab = document.createElement('div');
       promptTab.className = 'history-tab';
       promptTab.textContent = '提示词设置';
@@ -6751,6 +6756,7 @@ export function createChatHistoryUI(appContext) {
       backupTab.dataset.tab = 'backup-settings';
       
       tabBar.appendChild(historyTab);
+      tabBar.appendChild(settingsTab);
       tabBar.appendChild(promptTab);
       tabBar.appendChild(apiTab);
       tabBar.appendChild(galleryTab);
@@ -6889,6 +6895,38 @@ export function createChatHistoryUI(appContext) {
       listContainer.id = 'chat-history-list';
       historyContent.appendChild(listContainer);
 
+      // 设置标签内容（承载更多开关/设置项）
+      const settingsContent = document.createElement('div');
+      settingsContent.className = 'history-tab-content settings-tab-content';
+      settingsContent.dataset.tab = 'settings';
+      const escSettingsMenu = dom.escSettingsMenu || document.createElement('div');
+      escSettingsMenu.id = 'esc-settings-menu';
+      escSettingsMenu.classList.add('esc-settings-menu');
+      settingsContent.appendChild(escSettingsMenu);
+      dom.escSettingsMenu = escSettingsMenu;
+      // 将主菜单中的设置项迁移到 Esc 面板（主题选择/收藏 API 保留在原菜单）
+      const moveSettingsMenuItems = (targetMenu) => {
+        const settingsMenu = dom.settingsMenu || document.getElementById('settings-menu');
+        if (!settingsMenu || !targetMenu) return;
+        const moveIds = [
+          'clear-chat',
+          'quick-summary',
+          'debug-chat-tree-btn',
+          'prompt-settings-toggle',
+          'api-settings-toggle',
+          'fullscreen-toggle',
+          'open-standalone-page',
+          'chat-history-menu'
+        ];
+        moveIds.forEach((id) => {
+          const item = settingsMenu.querySelector(`#${id}`);
+          if (!item) return;
+          targetMenu.appendChild(item);
+        });
+      };
+      services.settingsManager?.refreshSettingsContainers?.();
+      moveSettingsMenuItems(escSettingsMenu);
+
       // 提示词设置标签内容（复用 sidebar.html 中的 DOM）
       const promptSettingsContent = dom.promptSettingsPanel;
       if (promptSettingsContent) {
@@ -6928,6 +6966,7 @@ export function createChatHistoryUI(appContext) {
 
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
+      tabContents.appendChild(settingsContent);
       if (promptSettingsContent) tabContents.appendChild(promptSettingsContent);
       if (apiSettingsContent) tabContents.appendChild(apiSettingsContent);
       tabContents.appendChild(galleryContent);
@@ -6952,6 +6991,11 @@ export function createChatHistoryUI(appContext) {
 
       // 如果面板已存在，获取 filterInput 引用
       filterInput = panel.querySelector('.filter-container input[type="text"]');
+      const existingEscSettingsMenu = panel.querySelector('#esc-settings-menu');
+      if (existingEscSettingsMenu) {
+        dom.escSettingsMenu = existingEscSettingsMenu;
+        services.settingsManager?.refreshSettingsContainers?.();
+      }
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
       const branchTreeButton = panel.querySelector('.filter-container .branch-tree-btn');
       if (urlFilterButton) {
