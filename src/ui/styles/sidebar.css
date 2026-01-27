@@ -4373,7 +4373,7 @@ body.hide-references .reference-number.superscript {
 }
 
 .filter-container {
-    margin-bottom: 12px;
+    margin-bottom: 4px;
 }
 
 .filter-container input {
@@ -4389,11 +4389,12 @@ body.hide-references .reference-number.superscript {
 /* 添加聊天记录分组标题样式 */
 .chat-history-group-header {
     font-weight: bold;
-    padding: 8px;
+    padding: 5px;
+    padding-inline: 0.5em;
     background: var(--cerebr-hover-color);
     border-radius: 4px;
-    margin-top: 12px;
-    margin-bottom: 6px;
+    margin-top: 6px;
+    margin-bottom: 0;
     color: var(--cerebr-text-color);
 }
 
@@ -4920,7 +4921,7 @@ body.hide-references .reference-number.superscript {
     position: sticky;
     top: 0;
     z-index: 2;
-    height: 3px;
+    height: 0;
     padding: 0;
     margin: 0;
     opacity: 0;
@@ -4933,13 +4934,18 @@ body.hide-references .reference-number.superscript {
 }
 
 .search-progress {
+    position: relative;
     padding: 0;
-    height: 3px;
+    height: 0;
 }
 .search-progress-text {
     display: none;
 }
 .search-progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     width: 100%;
     height: 3px;
     background: color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
