@@ -1036,13 +1036,14 @@ export function createChatHistoryUI(appContext) {
   border-bottom: 1px solid var(--cerebr-border-color);
   animation: skeletonPulse 1.2s ease-in-out infinite;
 }
-.skeleton-title, .skeleton-sub {
+.skeleton-title, .skeleton-sub, .skeleton-group-label {
   background: linear-gradient(90deg, rgba(180,180,180,0.08) 25%, rgba(255,255,255,0.18) 37%, rgba(180,180,180,0.08) 63%);
   background-size: 400% 100%;
   border-radius: 6px;
 }
-.skeleton-title { height: 12px; width: 62%; margin-bottom: 6px; }
-.skeleton-sub { height: 9px; width: 38%; }
+.skeleton-title { height: 14px; width: 72%; margin-bottom: 8px; }
+.skeleton-sub { height: 11px; width: 52%; }
+.skeleton-group-label { height: 12px; width: 120px; margin: 10px 0 6px; opacity: 0.85; }
 @keyframes skeletonPulse {
   0% { opacity: .7 }
   50% { opacity: 1 }
@@ -1111,9 +1112,16 @@ export function createChatHistoryUI(appContext) {
     historyStylesInjected = true;
   }
 
-  function renderSkeleton(container, count = 8) {
+  function renderSkeleton(container, count = 10) {
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < count; i++) {
+    // 根据可视高度估算骨架条数，让占位更接近真实列表长度
+    const approxItemHeight = 44;
+    const viewHeight = container?.clientHeight || 0;
+    const targetCount = Math.max(count, viewHeight ? Math.ceil(viewHeight / approxItemHeight) : count);
+    const label = document.createElement('div');
+    label.className = 'skeleton-group-label';
+    frag.appendChild(label);
+    for (let i = 0; i < targetCount; i++) {
       const sk = document.createElement('div');
       sk.className = 'skeleton-item';
       sk.innerHTML = '<div class="skeleton-title"></div><div class="skeleton-sub"></div>';
@@ -1123,7 +1131,7 @@ export function createChatHistoryUI(appContext) {
   }
 
   function removeSkeleton(container) {
-    container.querySelectorAll('.skeleton-item').forEach(n => n.remove());
+    container.querySelectorAll('.skeleton-item, .skeleton-group-label').forEach(n => n.remove());
   }
 
   function ensureEndSentinel(container) {
