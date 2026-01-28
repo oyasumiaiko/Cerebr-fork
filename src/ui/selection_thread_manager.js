@@ -1495,12 +1495,23 @@ export function createSelectionThreadManager(appContext) {
     }
     // 多节点/复杂结构 fallback：逐个文本节点包裹，避免 <strong>/<em> 等分割导致 surroundContents 失败。
     try {
+      // 跳过表格/列表容器中的空白文本节点，避免插入无效节点导致布局错乱。
+      const HIGHLIGHT_SKIP_PARENTS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP', 'COL', 'UL', 'OL', 'DL']);
+      const shouldSkipNode = (node) => {
+        if (!node || !node.nodeValue) return true;
+        const parent = node.parentElement;
+        if (!parent) return true;
+        if (HIGHLIGHT_SKIP_PARENTS.has(parent.tagName)) return true;
+        const trimmed = stripZeroWidth(node.nodeValue).trim();
+        return !trimmed;
+      };
       const textNodes = [];
       const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
           if (!node || !node.nodeValue) return NodeFilter.FILTER_REJECT;
           if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
           if (node.parentElement?.closest('.thread-highlight')) return NodeFilter.FILTER_REJECT;
+          if (shouldSkipNode(node)) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       });
@@ -1520,7 +1531,7 @@ export function createSelectionThreadManager(appContext) {
         const middle = document.createTextNode(text.slice(safeStart, safeEnd));
         const after = document.createTextNode(text.slice(safeEnd));
         const parent = targetNode.parentNode;
-        if (!parent) return false;
+        if (!parent || (parent.tagName && HIGHLIGHT_SKIP_PARENTS.has(parent.tagName))) return false;
         template.appendChild(middle);
         parent.insertBefore(before, targetNode);
         parent.insertBefore(template, targetNode);
