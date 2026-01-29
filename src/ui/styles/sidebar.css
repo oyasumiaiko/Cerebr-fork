@@ -4081,6 +4081,7 @@ body.hide-references .reference-number.superscript {
     padding: 6px 12px;
     border-radius: 6px;
     font-size: 13px;
+    min-height: 0;
     cursor: pointer;
     transition: all 0.2s ease;
 }
@@ -5103,6 +5104,7 @@ body.hide-references .reference-number.superscript {
 .history-tab {
     padding: 8px 16px;
     font-size: 14px;
+    font-weight: 500;
     cursor: pointer;
     border-bottom: 2px solid transparent;
     transition: all 0.2s ease;
@@ -5118,7 +5120,6 @@ body.hide-references .reference-number.superscript {
 .history-tab.active {
     border-bottom-color: var(--cerebr-highlight);
     opacity: 1;
-    font-weight: 500;
 }
 
 .history-tab-contents {
@@ -5211,11 +5212,13 @@ body.hide-references .reference-number.superscript {
 }
 
 #chat-history-panel #prompt-settings {
-    padding: 10px 12px 12px;
+    padding: 10px 12px 0;
 }
 
 #chat-history-panel #prompt-settings .prompt-settings-content {
     gap: 8px;
+    flex: 1;
+    min-height: 0;
 }
 
 #chat-history-panel #prompt-settings .prompt-section {
@@ -5243,7 +5246,7 @@ body.hide-references .reference-number.superscript {
 }
 
 #chat-history-panel #prompt-settings .prompt-actions {
-    margin-top: 6px;
+    margin-top: auto;
 }
 
 /* 旧遮罩层淡入动画会把卡片设为 opacity:0，这里需要恢复为可见 */
