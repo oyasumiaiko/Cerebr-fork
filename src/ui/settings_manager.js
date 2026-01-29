@@ -120,7 +120,9 @@ export function createSettingsManager(appContext) {
     backgroundImageIntensity: 0.6,
     backgroundOverallOpacity: 1,
     // 是否启用 $ / $$ 作为数学公式分隔符（默认开启以保持兼容）
-    enableDollarMath: true
+    enableDollarMath: true,
+    // 是否在输入框 placeholder 中显示当前模型名
+    showModelNameInPlaceholder: true
   };
 
   // 当前设置
@@ -317,6 +319,13 @@ export function createSettingsManager(appContext) {
       label: '自动重试',
       defaultValue: DEFAULT_SETTINGS.autoRetry,
       apply: (v) => applyAutoRetry(v)
+    },
+    {
+      key: 'showModelNameInPlaceholder',
+      type: 'toggle',
+      label: '输入框占位符显示模型名',
+      defaultValue: DEFAULT_SETTINGS.showModelNameInPlaceholder,
+      apply: (v) => applyShowModelNameInPlaceholder(v)
     },
     // 快捷设置：保留在“...”菜单中便于快速调整
     // 数学公式：是否使用 $ / $$ 作为分隔符
@@ -1393,6 +1402,14 @@ export function createSettingsManager(appContext) {
     // 更新UI元素
     if (showReferenceSwitch) {
       showReferenceSwitch.checked = enabled;
+    }
+  }
+
+  // 应用“输入框占位符显示模型名”设置
+  function applyShowModelNameInPlaceholder(enabled) {
+    // 这里主要用于立即刷新占位符文案
+    if (utils?.updateMessageInputPlaceholder) {
+      utils.updateMessageInputPlaceholder();
     }
   }
   

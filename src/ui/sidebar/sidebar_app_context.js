@@ -143,11 +143,27 @@ export function registerSidebarUtilities(appContext) {
   appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
     const rawName = currentConfig?.displayName || currentConfig?.modelName || currentConfig?.baseUrl || '';
     const apiName = (typeof rawName === 'string') ? rawName.trim() : '';
-    const baseText = apiName ? `给${apiName}发送消息...` : '输入消息...';
+    // 偏好设置开关：是否在 placeholder 中显示模型名（默认开启）。
+    const showModelName = appContext.services.settingsManager?.getSetting?.('showModelNameInPlaceholder') !== false;
+    const baseText = (showModelName && apiName)
+      ? `给 ${apiName} 发送消息...`
+      : '输入消息...';
     if (options?.isTemporaryMode) {
       return `纯对话模式，${baseText}`;
     }
     return baseText;
+  };
+
+  // 统一更新输入框 placeholder，供设置/模式切换等场景复用。
+  appContext.utils.updateMessageInputPlaceholder = () => {
+    const input = appContext.dom?.messageInput;
+    if (!input) return;
+    const currentConfig = appContext.services.apiManager?.getSelectedConfig?.() || null;
+    const isTemporaryMode = appContext.services.messageSender?.getTemporaryModeState?.() === true;
+    const placeholder = appContext.utils.buildMessageInputPlaceholder
+      ? appContext.utils.buildMessageInputPlaceholder(currentConfig, { isTemporaryMode })
+      : (isTemporaryMode ? '纯对话模式，输入消息...' : '输入消息...');
+    input.setAttribute('placeholder', placeholder);
   };
 
   appContext.utils.scrollToBottom = (targetContainer = null) => {
