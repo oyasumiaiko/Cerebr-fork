@@ -19,6 +19,8 @@ jobs:
         env:
           FORK_REPO: oyasumiaiko/Cerebr-fork
           FORK_TOKEN: ${{ secrets.CEREBR_FORK_TOKEN }}
+          # 显式注入 GITHUB_TOKEN，避免 bash -u 报未定义变量。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
