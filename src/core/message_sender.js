@@ -458,10 +458,17 @@ export function createMessageSender(appContext) {
   }
 
   async function requestConversationTitle({ apiConfig, prompt, userText, assistantText }) {
+    // 将指令 + 用户/AI 内容合并为单条 user 消息，并在开头包含指令，避免模型把 assistant 内容当作续写上下文。
+    const combinedUserMessage = [
+      prompt,
+      '用户消息：',
+      userText,
+      'AI回复：',
+      assistantText
+    ].join('\n\n').trim();
     const messages = [
       { role: 'system', content: prompt },
-      { role: 'user', content: userText },
-      { role: 'assistant', content: assistantText }
+      { role: 'user', content: combinedUserMessage }
     ];
     const configForTitle = { ...apiConfig, useStreaming: false };
     const requestBody = await apiManager.buildRequest({
