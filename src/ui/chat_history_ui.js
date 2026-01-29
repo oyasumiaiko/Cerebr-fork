@@ -2053,54 +2053,6 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
-   * 纯函数：根据会话内容恢复“默认摘要”（与首次保存/分支创建规则保持一致）。
-   * @param {Object} conversation
-   * @param {Object|null} promptsConfig
-   * @returns {string}
-   */
-  function resolveConversationDefaultSummary(conversation, promptsConfig) {
-    if (!conversation || !Array.isArray(conversation.messages)) return '';
-    const pageTitle = (typeof conversation.title === 'string') ? conversation.title : '';
-    const baseSummary = buildConversationSummaryFromMessages(conversation.messages, {
-      promptsConfig,
-      pageTitle,
-      maxLength: 160
-    });
-    const hasParent = typeof conversation.parentConversationId === 'string'
-      && conversation.parentConversationId.trim();
-    if (hasParent) {
-      return baseSummary ? `${baseSummary} (分支)` : '分支对话';
-    }
-    return baseSummary;
-  }
-
-  /**
-   * 纯函数：判断会话摘要是否“手动改名”（用于批量生成时跳过）。
-   *
-   * 判定规则：
-   * - summarySource === 'manual' -> 手动改名；
-   * - summarySource === 'auto' / 'default' -> 非手动；
-   * - 其他情况：对比当前摘要与“默认摘要”，不一致视为手动。
-   *
-   * @param {Object} conversation
-   * @param {Object|null} promptsConfig
-   * @returns {boolean}
-   */
-  function isConversationSummaryManuallyEdited(conversation, promptsConfig) {
-    if (!conversation) return false;
-    const source = (typeof conversation.summarySource === 'string')
-      ? conversation.summarySource.trim()
-      : '';
-    if (source === 'manual') return true;
-    if (source === 'auto' || source === 'default') return false;
-    const currentSummary = (typeof conversation.summary === 'string') ? conversation.summary.trim() : '';
-    if (!currentSummary) return false;
-    const expectedSummary = resolveConversationDefaultSummary(conversation, promptsConfig).trim();
-    if (!expectedSummary) return false;
-    return currentSummary !== expectedSummary;
-  }
-
-  /**
    * 自动生成指定会话的标题（不处理分支）。
    * @param {string} conversationId
    */
@@ -2117,12 +2069,6 @@ export function createChatHistoryUI(appContext) {
     const conversation = await getConversationById(targetId, true);
     if (!conversation) {
       showNotification?.({ message: '未找到该对话', type: 'warning', duration: 2000 });
-      return;
-    }
-
-    const promptsConfig = promptSettingsManager.getPrompts();
-    if (isConversationSummaryManuallyEdited(conversation, promptsConfig)) {
-      showNotification?.({ message: '该对话已手动重命名，已跳过', duration: 2000 });
       return;
     }
 
@@ -2156,8 +2102,7 @@ export function createChatHistoryUI(appContext) {
 
     const updateResult = await updateConversationSummary(conversation.id, result.title, {
       expectedSummary,
-      summarySource: 'auto',
-      skipIfManual: true
+      summarySource: 'auto'
     });
     if (updateResult.ok) {
       showNotification?.({ message: '标题已更新', duration: 1800 });
@@ -2756,7 +2701,30 @@ export function createChatHistoryUI(appContext) {
         if (conversation) {
           const newName = window.prompt('请输入新的对话名称:', conversation.summary || '');
           if (newName !== null && newName.trim() !== '') { // 确保用户输入了内容且没有取消
-            const result = await updateConversationSummary(conversation.id, newName.trim(), {
+            // 保留 summary/selection 对话的方括号前缀：即便用户删掉，也会在保存时补回。
+            const trimmedName = newName.trim();
+            const firstUser = Array.isArray(conversation.messages)
+              ? conversation.messages.find(msg => (msg?.role || '').toLowerCase() === 'user')
+              : null;
+            const promptType = typeof firstUser?.promptType === 'string' ? firstUser.promptType : '';
+            let prefixTag = '';
+            if (promptType === 'summary') prefixTag = '[总结]';
+            else if (promptType === 'selection' || promptType === 'query') prefixTag = '[划词解释]';
+            if (!prefixTag && typeof conversation.summary === 'string') {
+              const summaryTrimmed = conversation.summary.trim();
+              if (summaryTrimmed.startsWith('[总结]')) prefixTag = '[总结]';
+              else if (summaryTrimmed.startsWith('[划词解释]')) prefixTag = '[划词解释]';
+            }
+            let finalName = trimmedName;
+            if (prefixTag) {
+              if (trimmedName.startsWith(prefixTag)) {
+                const rest = trimmedName.slice(prefixTag.length).trim();
+                finalName = rest ? `${prefixTag} ${rest}` : prefixTag;
+              } else {
+                finalName = `${prefixTag} ${trimmedName}`.trim();
+              }
+            }
+            const result = await updateConversationSummary(conversation.id, finalName, {
               summarySource: 'manual'
             });
             if (result.ok) {
