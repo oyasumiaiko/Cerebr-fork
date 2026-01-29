@@ -4336,6 +4336,14 @@ body.hide-references .reference-number.superscript {
 }
 
 /* 聊天记录面板样式 */
+#chat-history-panel,
+#chat-history-panel *,
+#chat-history-panel *::before,
+#chat-history-panel *::after {
+    /* 仅对聊天记录弹窗启用 border-box，避免 padding/border 造成尺寸外溢 */
+    box-sizing: border-box;
+}
+
 #chat-history-panel {
     font-size: 1.2em;
     position: fixed;
