@@ -3936,7 +3936,8 @@ body.hide-references .reference-number.superscript {
     background: var(--cerebr-bg-color);
     display: flex;
     flex-direction: column;
-    padding: 20px;
+    gap: 10px;
+    padding: 16px 18px 12px;
     overflow-y: auto;
     backdrop-filter: blur(var(--cerebr-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -3956,47 +3957,48 @@ body.hide-references .reference-number.superscript {
     user-select: auto;
 }
 
+#prompt-settings,
+#prompt-settings *,
+#prompt-settings *::before,
+#prompt-settings *::after {
+    box-sizing: border-box;
+}
+
 /* 提示词设置：现代化紧凑布局，减少分栏与嵌套层级 */
 .prompt-settings-content {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
 }
 
-/* 使用 display: contents 打平外层分组结构，避免多层嵌套盒子 */
-.settings-section {
-    display: contents;
+.prompt-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-.section-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0;
-    padding: 8px 0 6px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+.prompt-section + .prompt-section {
+    padding-top: 6px;
     border-top: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
 }
 
-.settings-section:first-of-type .section-title {
-    padding-top: 0;
-    border-top: none;
+.prompt-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
-.section-title i {
-    opacity: 0.45;
-    font-size: 12px;
+.prompt-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
 }
 
-/* 取消分栏容器，只保留提示词卡片 */
-.prompt-grid {
-    display: contents;
-}
-
-.prompt-grid.one-column {
-    display: contents;
+.prompt-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .prompt-group {
@@ -4005,28 +4007,28 @@ body.hide-references .reference-number.superscript {
     grid-template-rows: auto auto;
     gap: 6px 10px;
     padding: 10px 12px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 80%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 82%, transparent);
     border: 1px solid var(--cerebr-border-color);
     transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
 .prompt-group:hover {
-    border-color: color-mix(in srgb, var(--cerebr-border-color) 80%, var(--cerebr-text-color) 20%);
+    border-color: color-mix(in srgb, var(--cerebr-border-color) 78%, var(--cerebr-text-color) 22%);
 }
 
 .prompt-group:focus-within {
     border-color: rgba(0, 122, 255, 0.5);
-    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 86%, transparent);
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 88%, transparent);
 }
 
 .prompt-group > label {
     display: none;
 }
 
-.prompt-group textarea {
+.prompt-group > textarea:not(.prompt-storage) {
     grid-column: 1 / -1;
-    min-height: 92px;
+    min-height: 90px;
     max-width: -webkit-fill-available;
     padding: 8px 10px;
     border-radius: 6px;
@@ -4040,27 +4042,33 @@ body.hide-references .reference-number.superscript {
     /* 滚动条样式统一至全局 */
 }
 
-.prompt-group .url-rules-container {
+.prompt-group .url-rules-panel {
     grid-column: 1 / -1;
+}
+
+.prompt-storage {
+    display: none;
 }
 
 /* 滚动条样式统一至全局 */
 
-.prompt-group textarea:focus {
+.prompt-group > textarea:not(.prompt-storage):focus {
     outline: none;
     border-color: rgba(0, 122, 255, 0.5);
     box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
 }
 
 .prompt-actions {
+    position: sticky;
+    bottom: 0;
     display: flex;
     gap: 8px;
     align-items: center;
     justify-content: flex-end;
-    margin-top: 8px;
-    padding-top: 6px;
+    margin-top: 6px;
+    padding: 8px 0 6px;
     border-top: 1px solid var(--cerebr-border-color);
-    background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 94%, transparent);
     z-index: 2;
 }
 /* 保存状态提示 */
@@ -4102,7 +4110,7 @@ body.hide-references .reference-number.superscript {
 }
 
 /* 深色模式适配 */
-:root.dark-theme .prompt-group textarea {
+:root.dark-theme .prompt-group > textarea:not(.prompt-storage) {
     background: var(--cerebr-input-bg);
     border-color: var(--cerebr-border-color);
 }
@@ -4211,49 +4219,74 @@ body.hide-references .reference-number.superscript {
     background: var(--cerebr-input-bg);
 }
 
-/* URL 规则列表美化 */
-.url-rules-container {
-    padding: 6px;
-    background: var(--cerebr-message-user-bg);
-    border: 1px dashed var(--cerebr-border-color);
-    border-radius: 6px;
+/* URL 规则列表 */
+.url-rules-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
-.url-rules-list {
+
+.url-rules-composer {
+    padding: 8px;
+    border: 1px dashed var(--cerebr-border-color);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--cerebr-message-user-bg) 80%, transparent);
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
-.url-rule-item {
-    padding: 6px;
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 6px;
-    background: var(--cerebr-message-ai-bg);
-}
-.url-rule-item.new-rule {
-    border-style: dashed;
-    opacity: 0.9;
-}
-.url-rule-header {
+
+.url-rules-list {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
     gap: 8px;
 }
+
+.url-rule-item {
+    padding: 8px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 8px;
+    background: var(--cerebr-message-ai-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.url-rule-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(140px, 220px) auto;
+    gap: 6px;
+    align-items: center;
+}
+
 .url-rule-pattern-input {
-    flex: 1;
-    padding: 4px 8px;
+    width: 100%;
+    padding: 6px 8px;
     border: 1px solid var(--cerebr-border-color);
     border-radius: 6px;
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-input-bg);
     color: var(--cerebr-text-color);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
+
+.url-rule-type-select {
+    padding: 6px 8px;
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 6px;
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+    font-size: 12px;
+}
+
 .url-rule-actions {
     display: flex;
     gap: 6px;
 }
+
 .url-rule-action-btn {
-    width: 24px;
-    height: 24px;
+    height: 28px;
+    padding: 0 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -4262,26 +4295,46 @@ body.hide-references .reference-number.superscript {
     color: var(--cerebr-text-color);
     border-radius: 6px;
     cursor: pointer;
+    font-size: 12px;
 }
-.url-rule-content {
-    margin-top: 6px;
-    display: grid;
-    grid-template-columns: minmax(120px, 200px) 1fr;
-    gap: 6px;
+
+.url-rule-action-btn:hover {
+    border-color: color-mix(in srgb, var(--cerebr-text-color) 25%, var(--cerebr-border-color));
+    background: color-mix(in srgb, var(--cerebr-message-user-bg) 92%, var(--cerebr-text-color));
 }
-.url-rule-content textarea.url-rule-prompt {
-    min-height: 72px;
+
+.url-rule-action-btn.confirm-rule {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 40%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 18%, var(--cerebr-message-user-bg));
+    color: var(--cerebr-highlight);
+}
+
+.url-rule-action-btn.confirm-rule:hover {
+    background: color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-message-user-bg));
+}
+
+.url-rule-action-btn.delete-rule {
+    width: 28px;
+    padding: 0;
+}
+
+.url-rule-prompt {
+    min-height: 68px;
+    padding: 8px 10px;
+    border: 1px solid var(--cerebr-border-color);
     border-radius: 6px;
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+    resize: vertical;
+    font-size: 12px;
+    line-height: 1.45;
 }
 
-/* 两列网格容器对齐 */
-.prompt-settings-content .one-column {
-    grid-template-columns: 1fr;
-}
-
-/* 移除旧的样式 */
-.prompt-label-container {
-    display: none;
+.url-rule-pattern-input:focus,
+.url-rule-type-select:focus,
+.url-rule-prompt:focus {
+    border-color: rgba(0, 122, 255, 0.5);
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.18);
 }
 
 /* 发送按钮样式 */
@@ -5167,16 +5220,23 @@ body.hide-references .reference-number.superscript {
     gap: 8px;
 }
 
-#chat-history-panel #prompt-settings .section-title {
-    padding: 6px 0 4px;
-    font-size: 11px;
+#chat-history-panel #prompt-settings .prompt-section {
+    gap: 6px;
+}
+
+#chat-history-panel #prompt-settings .prompt-section + .prompt-section {
+    padding-top: 4px;
+}
+
+#chat-history-panel #prompt-settings .prompt-section-title {
+    font-size: 10px;
 }
 
 #chat-history-panel #prompt-settings .prompt-group {
     padding: 8px 10px;
 }
 
-#chat-history-panel #prompt-settings .prompt-group textarea {
+#chat-history-panel #prompt-settings .prompt-group > textarea:not(.prompt-storage) {
     min-height: 80px;
 }
 
@@ -5835,134 +5895,6 @@ body.hide-references .reference-number.superscript {
 #collapse-button.position-left {
     left: auto;
     right: 5px;
-}
-
-/* URL规则预设样式 */
-.url-rules-container {
-    background: var(--cerebr-input-bg);
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    padding: 8px;
-    margin-top: 4px;
-}
-
-.url-rules-header {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 8px;
-}
-
-.add-url-rule-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    background: var(--cerebr-button-bg);
-    color: var(--cerebr-text-color);
-    cursor: pointer;
-    font-size: 12px;
-}
-
-.add-url-rule-btn:hover {
-    background: var(--cerebr-button-hover-bg);
-}
-
-.url-rules-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.url-rule-item {
-    background: var(--cerebr-bg-light);
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    padding: 8px;
-}
-
-.url-rule-item.new-rule {
-    border-style: dashed;
-    background: var(--cerebr-bg);
-}
-
-.url-rule-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-.url-rule-pattern {
-    font-family: monospace;
-    font-size: 12px;
-    color: var(--cerebr-text-color-light);
-}
-
-.url-rule-pattern-input {
-    flex: 1;
-    font-family: monospace;
-    font-size: 12px;
-    padding: 4px;
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    background: var(--cerebr-input-bg);
-    color: var(--cerebr-text-color);
-}
-
-.url-rule-actions {
-    display: flex;
-    gap: 4px;
-}
-
-.url-rule-action-btn {
-    padding: 2px;
-    border: none;
-    background: none;
-    color: var(--cerebr-text-color-light);
-    cursor: pointer;
-    opacity: 0.7;
-}
-
-.url-rule-action-btn:hover {
-    opacity: 1;
-}
-
-.url-rule-action-btn.confirm-rule {
-    color: var(--cerebr-success-color);
-}
-
-.url-rule-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.url-rule-type {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.url-rule-type select {
-    padding: 4px;
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    background: var(--cerebr-input-bg);
-    color: var(--cerebr-text-color);
-}
-
-.url-rule-prompt {
-    width: 100%;
-    min-height: 60px;
-    padding: 4px;
-    border: 1px solid var(--cerebr-border-color);
-    border-radius: 4px;
-    background: var(--cerebr-input-bg);
-    color: var(--cerebr-text-color);
-    resize: vertical;
-    font-size: 12px;
 }
 
 /* 通知样式 */

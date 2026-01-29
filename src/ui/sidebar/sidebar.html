@@ -336,9 +336,11 @@
             <span class="settings-title">提示词设置</span>
         </div>
         <div class="prompt-settings-content">
-            <div class="settings-section">
-                <h4 class="section-title"><i class="far fa-sliders" aria-hidden="true"></i><span>基础设置</span></h4>
-                <div class="prompt-grid">
+            <section class="prompt-section" data-section="base">
+                <div class="prompt-section-header">
+                    <span class="prompt-section-title">基础设置</span>
+                </div>
+                <div class="prompt-section-body">
                     <div class="prompt-group">
                         <label>系统提示词</label>
                         <textarea id="system-prompt" placeholder="输入系统提示词..."></textarea>
@@ -348,11 +350,13 @@
                         <textarea id="summary-prompt" placeholder="输入页面总结时使用的提示词..."></textarea>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="settings-section">
-                <h4 class="section-title"><i class="far fa-magnifying-glass" aria-hidden="true"></i><span>搜索相关</span></h4>
-                <div class="prompt-grid">
+            <section class="prompt-section" data-section="search">
+                <div class="prompt-section-header">
+                    <span class="prompt-section-title">搜索相关</span>
+                </div>
+                <div class="prompt-section-body">
                     <div class="prompt-group">
                         <label>划词方式1</label>
                         <textarea id="query-prompt" placeholder="输入划词方式1使用的提示词..."></textarea>
@@ -362,11 +366,13 @@
                         <textarea id="selection-prompt" placeholder="输入划词方式2使用的提示词..."></textarea>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="settings-section" style="display: none;">
-                <h4 class="section-title"><i class="far fa-diagram-project" aria-hidden="true"></i><span>内容分析</span></h4>
-                <div class="prompt-grid">
+            <section class="prompt-section" data-section="analysis" hidden>
+                <div class="prompt-section-header">
+                    <span class="prompt-section-title">内容分析</span>
+                </div>
+                <div class="prompt-section-body">
                     <div class="prompt-group">
                         <label>PDF快速总结提示词</label>
                         <textarea id="pdf-prompt" placeholder="输入PDF文档分析时使用的提示词..."></textarea>
@@ -384,24 +390,35 @@
                         <textarea id="extract-prompt" placeholder="输入提取关键信息时使用的提示词..."></textarea>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="settings-section">
-                <h4 class="section-title"><i class="far fa-link" aria-hidden="true"></i><span>URL 规则预设</span></h4>
-                <div class="prompt-grid one-column">
-                    <div class="prompt-group">
+            <section class="prompt-section" data-section="url-rules">
+                <div class="prompt-section-header">
+                    <span class="prompt-section-title">URL 规则预设</span>
+                </div>
+                <div class="prompt-section-body">
+                    <div class="prompt-group prompt-group--url-rules">
                         <label>URL规则预设</label>
-                        <div class="url-rules-container">
-                            <div id="url-rules-list" class="url-rules-list">
-                                <!-- 规则列表将动态生成 -->
+                        <div class="url-rules-panel">
+                            <div class="url-rules-composer">
+                                <div class="url-rule-row">
+                                    <input type="text" class="url-rule-pattern-input" placeholder="匹配 URL（支持 * 通配符）" aria-label="URL 匹配模式">
+                                    <select class="url-rule-type-select" aria-label="规则类型">
+                                        <option value="system">系统提示词</option>
+                                        <option value="summary">快速总结提示词</option>
+                                    </select>
+                                    <button class="url-rule-action-btn confirm-rule" title="添加规则" type="button">添加</button>
+                                </div>
+                                <textarea class="url-rule-prompt" placeholder="输入提示词内容..." aria-label="规则提示词"></textarea>
                             </div>
+                            <div id="url-rules-list" class="url-rules-list"></div>
                         </div>
-                        <textarea id="url-rules-prompt" style="display: none;"></textarea>
+                        <textarea id="urlRules-prompt" class="prompt-storage" aria-hidden="true"></textarea>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="prompt-actions" style="position: sticky; bottom: 0;">
+            <div class="prompt-actions">
                 <span id="save-status" class="save-status">所有更改已保存</span>
                 <button id="reset-prompts" style="display: none;">恢复默认</button>
                 <button id="save-prompts">保存并关闭</button>

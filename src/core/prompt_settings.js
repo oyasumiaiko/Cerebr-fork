@@ -189,10 +189,12 @@ class PromptSettings {
         this.loadPromptSettings();
 
         // URL规则相关元素
-        this.urlRulesList = document.getElementById('url-rules-list');
-        
-        // 初始化URL规则列表
-    this.renderUrlRules();
+        this.urlRulesList = this.promptSettings?.querySelector('#url-rules-list');
+        this.urlRulesComposer = this.promptSettings?.querySelector('.url-rules-composer');
+        this.urlRulesComposerBound = false;
+
+        this.bindUrlRulesComposer();
+        this.renderUrlRules();
 
     // 跨标签页同步：监听提示词键的变更并增量刷新 UI
     try {
@@ -627,65 +629,62 @@ class PromptSettings {
         }
     }
 
+    bindUrlRulesComposer() {
+        if (this.urlRulesComposerBound || !this.urlRulesComposer || !this.urlRulesPrompt) return;
+
+        const patternInput = this.urlRulesComposer.querySelector('.url-rule-pattern-input');
+        const typeSelect = this.urlRulesComposer.querySelector('.url-rule-type-select');
+        const promptTextarea = this.urlRulesComposer.querySelector('.url-rule-prompt');
+        const confirmBtn = this.urlRulesComposer.querySelector('.confirm-rule');
+
+        if (!patternInput || !typeSelect || !promptTextarea || !confirmBtn) return;
+
+        const tryAddRule = () => {
+            const pattern = patternInput.value.trim();
+            const type = typeSelect.value;
+            const prompt = promptTextarea.value.trim();
+
+            if (!pattern || !prompt) return;
+
+            this.addUrlRule({
+                pattern,
+                type,
+                prompt
+            });
+
+            patternInput.value = '';
+            promptTextarea.value = '';
+            typeSelect.value = 'system';
+        };
+
+        confirmBtn.addEventListener('click', tryAddRule);
+        patternInput.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                tryAddRule();
+            }
+        });
+        promptTextarea.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                tryAddRule();
+            }
+        });
+
+        this.urlRulesComposerBound = true;
+    }
+
     /**
      * 渲染URL规则列表
      */
     renderUrlRules() {
         if (!this.urlRulesList || !this.urlRulesPrompt) return;
 
+        this.bindUrlRulesComposer();
+
         try {
             const rules = JSON.parse(this.urlRulesPrompt.value || '[]');
             this.urlRulesList.innerHTML = '';
-
-            // 添加新规则的输入区域
-            const newRuleElement = document.createElement('div');
-            newRuleElement.className = 'url-rule-item new-rule';
-            newRuleElement.innerHTML = `
-                <div class="url-rule-header">
-                    <input type="text" class="url-rule-pattern-input" placeholder="输入URL匹配模式 (支持*通配符)">
-                    <div class="url-rule-actions">
-                        <button class="url-rule-action-btn confirm-rule" title="确认">
-                            <i class="far fa-check"></i>
-                        </button>
-                    </div>
-                </div>
-                <div class="url-rule-content">
-                    <div class="url-rule-type">
-                        <select>
-                            <option value="system">系统提示词</option>
-                            <option value="summary">快速总结提示词</option>
-                        </select>
-                    </div>
-                    <textarea class="url-rule-prompt" placeholder="输入提示词内容..."></textarea>
-                </div>
-            `;
-
-            // 绑定新规则的确认事件
-            const confirmBtn = newRuleElement.querySelector('.confirm-rule');
-            const patternInput = newRuleElement.querySelector('.url-rule-pattern-input');
-            const typeSelect = newRuleElement.querySelector('select');
-            const promptTextarea = newRuleElement.querySelector('.url-rule-prompt');
-
-            confirmBtn.addEventListener('click', () => {
-                const pattern = patternInput.value.trim();
-                const type = typeSelect.value;
-                const prompt = promptTextarea.value.trim();
-
-                if (pattern && prompt) {
-                    this.addUrlRule({
-                        pattern,
-                        type,
-                        prompt
-                    });
-                    // 清空输入
-                    patternInput.value = '';
-                    promptTextarea.value = '';
-                    typeSelect.value = 'system';
-                }
-            });
-
-            // 添加新规则输入区域
-            this.urlRulesList.appendChild(newRuleElement);
 
             // 渲染现有规则
             rules.forEach((rule, index) => {
@@ -722,55 +721,85 @@ class PromptSettings {
     createUrlRuleElement(rule, index) {
         const ruleElement = document.createElement('div');
         ruleElement.className = 'url-rule-item';
-        ruleElement.innerHTML = `
-            <div class="url-rule-header">
-                <div class="url-rule-pattern">${rule.pattern}</div>
-                <div class="url-rule-actions">
-                    <button class="url-rule-action-btn edit-rule" title="编辑">
-                        <i class="far fa-edit"></i>
-                    </button>
-                    <button class="url-rule-action-btn delete-rule" title="删除">
-                        <i class="far fa-trash-alt"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="url-rule-content">
-                <div class="url-rule-type">
-                    <select>
-                        <option value="system" ${rule.type === 'system' ? 'selected' : ''}>系统提示词</option>
-                        <option value="summary" ${rule.type === 'summary' ? 'selected' : ''}>快速总结提示词</option>
-                    </select>
-                </div>
-                <textarea class="url-rule-prompt">${rule.prompt}</textarea>
-            </div>
-        `;
 
-        // 绑定事件
-        const deleteBtn = ruleElement.querySelector('.delete-rule');
-        const editBtn = ruleElement.querySelector('.edit-rule');
-        const typeSelect = ruleElement.querySelector('select');
-        const promptTextarea = ruleElement.querySelector('.url-rule-prompt');
+        const row = document.createElement('div');
+        row.className = 'url-rule-row';
+
+        const patternInput = document.createElement('input');
+        patternInput.type = 'text';
+        patternInput.className = 'url-rule-pattern-input';
+        patternInput.placeholder = '匹配 URL（支持 * 通配符）';
+        patternInput.value = rule.pattern || '';
+        patternInput.setAttribute('aria-label', 'URL 匹配模式');
+
+        const typeSelect = document.createElement('select');
+        typeSelect.className = 'url-rule-type-select';
+        typeSelect.setAttribute('aria-label', '规则类型');
+
+        const systemOption = document.createElement('option');
+        systemOption.value = 'system';
+        systemOption.textContent = '系统提示词';
+
+        const summaryOption = document.createElement('option');
+        summaryOption.value = 'summary';
+        summaryOption.textContent = '快速总结提示词';
+
+        typeSelect.appendChild(systemOption);
+        typeSelect.appendChild(summaryOption);
+        typeSelect.value = rule.type === 'summary' ? 'summary' : 'system';
+
+        const actions = document.createElement('div');
+        actions.className = 'url-rule-actions';
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'url-rule-action-btn delete-rule';
+        deleteBtn.title = '删除';
+        deleteBtn.type = 'button';
+        deleteBtn.innerHTML = '<i class="far fa-trash-alt"></i>';
+
+        actions.appendChild(deleteBtn);
+
+        row.appendChild(patternInput);
+        row.appendChild(typeSelect);
+        row.appendChild(actions);
+
+        const promptTextarea = document.createElement('textarea');
+        promptTextarea.className = 'url-rule-prompt';
+        promptTextarea.placeholder = '输入提示词内容...';
+        promptTextarea.value = rule.prompt || '';
+        promptTextarea.setAttribute('aria-label', '规则提示词');
+
+        ruleElement.appendChild(row);
+        ruleElement.appendChild(promptTextarea);
+
+        let currentRule = {
+            pattern: patternInput.value,
+            type: typeSelect.value,
+            prompt: promptTextarea.value
+        };
 
         deleteBtn.addEventListener('click', () => {
             this.deleteUrlRule(index);
         });
 
-        editBtn.addEventListener('click', () => {
-            this.editUrlRule(index);
+        patternInput.addEventListener('change', () => {
+            const nextPattern = patternInput.value.trim();
+            if (!nextPattern) {
+                patternInput.value = currentRule.pattern || '';
+                return;
+            }
+            currentRule = { ...currentRule, pattern: nextPattern };
+            this.updateUrlRule(index, currentRule);
         });
 
         typeSelect.addEventListener('change', () => {
-            this.updateUrlRule(index, {
-                ...rule,
-                type: typeSelect.value
-            });
+            currentRule = { ...currentRule, type: typeSelect.value };
+            this.updateUrlRule(index, currentRule);
         });
 
         promptTextarea.addEventListener('change', () => {
-            this.updateUrlRule(index, {
-                ...rule,
-                prompt: promptTextarea.value
-            });
+            currentRule = { ...currentRule, prompt: promptTextarea.value };
+            this.updateUrlRule(index, currentRule);
         });
 
         return ruleElement;

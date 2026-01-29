@@ -95,7 +95,7 @@ export function createSidebarAppContext(isStandalone) {
     imagePrompt: document.getElementById('image-prompt'),
     screenshotPrompt: document.getElementById('screenshot-prompt'),
     extractPrompt: document.getElementById('extract-prompt'),
-    urlRulesPrompt: document.getElementById('url-rules-prompt'),
+    urlRulesPrompt: document.getElementById('urlRules-prompt'),
     urlRulesList: document.getElementById('url-rules-list'),
     showThoughtProcessSwitch: document.getElementById('show-thought-process-switch'),
     resetSettingsButton: document.getElementById('reset-settings-button'),
