@@ -38,6 +38,7 @@ export function registerSidebarEventHandlers(appContext) {
   setupSlashFocusShortcut(appContext);
   setupClickAwayHandler(appContext);
   setupFullscreenToggle(appContext);
+  setupDockModeToggle(appContext);
   setupScreenshotButton(appContext);
   setupWindowMessageHandlers(appContext);
   setupTempModeIndicator(appContext);
@@ -803,6 +804,14 @@ function requestToggleFullscreen(appContext) {
   window.parent.postMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' }, '*');
 }
 
+function requestToggleDockMode(appContext) {
+  if (appContext.state.isStandalone) {
+    appContext.utils.showNotification('独立聊天页面不支持停靠模式');
+    return;
+  }
+  window.parent.postMessage({ type: 'TOGGLE_DOCK_MODE_FROM_IFRAME' }, '*');
+}
+
 function setupFullscreenToggle(appContext) {
   // 初始化时用 DOM class 做一次兜底同步，避免 iframe 刷新导致提示文案与实际布局不一致
   if (!appContext.state.isStandalone) {
@@ -831,6 +840,11 @@ function setupFullscreenToggle(appContext) {
       requestToggleFullscreen(appContext);
     });
   }
+}
+
+function setupDockModeToggle(appContext) {
+  if (!appContext.dom.dockModeToggle) return;
+  appContext.dom.dockModeToggle.addEventListener('click', () => requestToggleDockMode(appContext));
 }
 
 function setupScreenshotButton(appContext) {

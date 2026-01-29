@@ -223,7 +223,7 @@ class CerebrSidebar {
     this.applyDockLayout();
   }
 
-  setDockMode(isDocked, options = {}) {
+  setDockMode(isDocked) {
     const next = !!isDocked;
     if (this.isDocked === next) {
       this.updateDockLayout();
@@ -237,9 +237,6 @@ class CerebrSidebar {
       this.applyDockLayout();
     } else {
       this.clearDockLayout();
-    }
-    if (!options.skipStorage) {
-      chrome.storage.sync.set({ sidebarDocked: this.isDocked });
     }
     if (!this.isFullscreen) {
       this.updatePosition(this.sidebarPosition);
@@ -314,11 +311,10 @@ class CerebrSidebar {
       // console.log('开始初始化侧边栏');
 
       // 从存储中加载宽度、缩放因子和位置
-      const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor', 'sidebarPosition', 'sidebarDocked']);
+      const result = await chrome.storage.sync.get(['sidebarWidth', 'scaleFactor', 'sidebarPosition']);
       this.sidebarWidth = result.sidebarWidth || 800; // 确保默认值一致
       this.scaleFactor = result.scaleFactor || 1.0;
       this.sidebarPosition = result.sidebarPosition || 'right';
-      this.isDocked = result.sidebarDocked === true;
       
       // console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
@@ -623,8 +619,8 @@ class CerebrSidebar {
         case 'SIDEBAR_POSITION_CHANGE':
           this.updatePosition(event.data.position);
           break;
-        case 'SIDEBAR_DOCK_MODE_CHANGE':
-          this.setDockMode(event.data.docked);
+        case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
+          this.setDockMode(!this.isDocked);
           break;
 
         case 'CLOSE_SIDEBAR':

@@ -41,6 +41,7 @@ export function createSidebarAppContext(isStandalone) {
     fontSizeValue: document.getElementById('font-size-value'),
     collapseButton: document.getElementById('collapse-button'),
     fullscreenToggle: document.getElementById('fullscreen-toggle'),
+    dockModeToggle: document.getElementById('dock-mode-toggle'),
     sendButton: document.getElementById('send-button'),
     sendChatHistorySwitch: document.getElementById('send-chat-history-switch'),
     showReferenceSwitch: document.getElementById('show-reference-switch'),
