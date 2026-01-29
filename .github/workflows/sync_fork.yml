@@ -1,0 +1,41 @@
+name: Sync to fork
+
+# 该工作流会在每次推送后将本仓库完整镜像到指定 fork。
+# 需要在当前仓库的 Secrets 中配置 CEREBR_FORK_TOKEN（目标仓库写权限的 PAT）。
+# 注意：镜像同步会覆盖 fork 上的分支/标签，使其与本仓库保持一致。
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步到 fork 仓库
+        env:
+          FORK_REPO: oyasumiaiko/Cerebr-fork
+          FORK_TOKEN: ${{ secrets.CEREBR_FORK_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FORK_TOKEN:-}" ]; then
+            echo "CEREBR_FORK_TOKEN 未配置"
+            exit 1
+          fi
+
+          # 使用裸仓库拉取分支与标签，避免同步到无关的 refs/pull。
+          SOURCE_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git init --bare repo-mirror
+          cd repo-mirror
+          git remote add origin "$SOURCE_REPO"
+          git fetch --prune origin "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+
+          # 将本仓库的全部引用完整推送到 fork。
+          FORK_REPO_URL="https://x-access-token:${FORK_TOKEN}@github.com/${FORK_REPO}.git"
+          git remote add fork "$FORK_REPO_URL"
+          git push --mirror fork
