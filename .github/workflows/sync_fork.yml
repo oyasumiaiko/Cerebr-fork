@@ -1,8 +1,8 @@
 name: Sync to fork
 
-# 该工作流会在每次推送后将本仓库完整镜像到指定 fork。
+# 该工作流会在每次推送后同步同名分支与标签到指定 fork。
 # 需要在当前仓库的 Secrets 中配置 CEREBR_FORK_TOKEN（目标仓库写权限的 PAT）。
-# 注意：镜像同步会覆盖 fork 上的分支/标签，使其与本仓库保持一致。
+# 注意：同名分支会以源仓库为准强制更新，但不会删除 fork 上的其他分支。
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
           git remote add origin "$SOURCE_REPO"
           git fetch --prune origin "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
 
-          # 将本仓库的全部引用完整推送到 fork。
+          # 仅同步同名分支与标签，不删除 fork 上的其他分支。
           FORK_REPO_URL="https://x-access-token:${FORK_TOKEN}@github.com/${FORK_REPO}.git"
           git remote add fork "$FORK_REPO_URL"
-          git push --mirror fork
+          git push --force fork "refs/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
