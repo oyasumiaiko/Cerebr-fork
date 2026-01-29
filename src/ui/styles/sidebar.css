@@ -6151,6 +6151,7 @@ body.hide-references .reference-number.superscript {
     visibility: hidden;
     user-select: none;
     -webkit-user-select: none;
+    max-width: var(--cerebr-fullscreen-width);
 }
 
 /* 当聊天容器为空时显示空状态 */
