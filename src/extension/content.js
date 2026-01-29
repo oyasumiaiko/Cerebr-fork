@@ -93,6 +93,158 @@ function monitorNewFrames() {
   });
 }
 
+/**
+ * 规范化 pathname，避免“尾部斜杠差异”导致的同页误判。
+ * @param {string} pathname
+ * @returns {string}
+ */
+function normalizePathname(pathname) {
+  if (typeof pathname !== 'string' || !pathname) return '/';
+  if (pathname.length > 1 && pathname.endsWith('/')) {
+    return pathname.slice(0, -1);
+  }
+  return pathname;
+}
+
+/**
+ * 从 text fragment 中提取用于定位的文本（取 text= 的第一个主片段）。
+ * 只覆盖最常见的形态：#:~:text=片段
+ * @param {string} fragment - URL hash（包含 #）
+ * @returns {string}
+ */
+function extractTextFragmentTarget(fragment) {
+  if (typeof fragment !== 'string' || !fragment.includes(':~:text=')) return '';
+  const match = fragment.match(/:~:text=([^&]+)/i);
+  if (!match || !match[1]) return '';
+  const raw = match[1].replace(/\+/g, '%20');
+  let decoded = '';
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch (_) {
+    decoded = raw;
+  }
+  const parts = decoded.split(',');
+  for (const part of parts) {
+    const trimmed = (part || '').trim();
+    if (!trimmed) continue;
+    const isPrefix = trimmed.endsWith('-');
+    const isSuffix = trimmed.startsWith('-');
+    if (!isPrefix && !isSuffix) {
+      return trimmed;
+    }
+  }
+  return (decoded || '').trim();
+}
+
+/**
+ * 尝试在页面内定位 text fragment。
+ * @param {string} fragment - URL hash（包含 #）
+ * @returns {boolean} 是否找到并定位到目标文本
+ */
+function scrollToTextFragment(fragment) {
+  const targetText = extractTextFragmentTarget(fragment);
+  if (!targetText) return false;
+
+  try {
+    window.getSelection?.()?.removeAllRanges?.();
+  } catch (_) {}
+
+  try {
+    window.scrollTo(0, 0);
+  } catch (_) {}
+
+  let found = false;
+  try {
+    found = window.find(targetText, false, false, true, false, false, false);
+  } catch (_) {
+    found = false;
+  }
+  return !!found;
+}
+
+/**
+ * 尝试根据 hash 定位到页面内锚点。
+ * @param {string} hash - URL hash（包含 #）
+ * @returns {boolean} 是否找到并定位到锚点
+ */
+function scrollToHashAnchor(hash) {
+  if (typeof hash !== 'string') return false;
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!raw) return false;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch (_) {}
+
+  let target = document.getElementById(decoded);
+  if (!target) {
+    const safe = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+      ? CSS.escape(decoded)
+      : decoded.replace(/["\\]/g, '\\$&');
+    target = document.querySelector(`[name="${safe}"]`);
+  }
+
+  if (!target) return false;
+  try {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (_) {
+    target.scrollIntoView(true);
+  }
+  return true;
+}
+
+/**
+ * 处理来自侧栏的“同页 Markdown 链接”打开请求。
+ * @param {string} url
+ */
+function openMarkdownLinkInPage(url) {
+  if (typeof url !== 'string' || !url.trim()) return;
+  let resolved = null;
+  let current = null;
+  try {
+    resolved = new URL(url, window.location.href);
+    current = new URL(window.location.href);
+  } catch (_) {
+    return;
+  }
+
+  const sameOrigin = resolved.origin === current.origin;
+  const samePath = normalizePathname(resolved.pathname) === normalizePathname(current.pathname);
+
+  if (!sameOrigin || !samePath) {
+    window.location.href = resolved.href;
+    return;
+  }
+
+  const hash = resolved.hash || '';
+  const hasTextFragment = hash.includes(':~:text=');
+
+  if (hasTextFragment) {
+    const handled = scrollToTextFragment(hash);
+    try {
+      history.replaceState(null, '', resolved.href);
+    } catch (_) {}
+    if (handled) return;
+    // 若未命中，强制一次顶层导航，触发浏览器原生 text fragment 解析
+    window.location.href = resolved.href;
+    return;
+  }
+
+  if (hash) {
+    const handled = scrollToHashAnchor(hash);
+    try {
+      history.replaceState(null, '', resolved.href);
+    } catch (_) {}
+    if (!handled) {
+      return;
+    }
+    return;
+  }
+
+  // 无 hash 的同页链接（如 ?t= 这种时间跳转），交给浏览器正常导航
+  window.location.href = resolved.href;
+}
+
 class CerebrSidebar {
   constructor() {
     this.isVisible = false;
@@ -633,6 +785,9 @@ class CerebrSidebar {
           break;
         case 'CAPTURE_SCREENSHOT':
           captureAndDropScreenshot();
+          break;
+        case 'OPEN_MARKDOWN_LINK':
+          openMarkdownLinkInPage(event.data.url);
           break;
         case 'REQUEST_PAGE_INFO':
           // console.log('收到请求页面信息消息');

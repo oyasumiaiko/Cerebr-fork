@@ -189,9 +189,16 @@ export function createMessageProcessor(appContext) {
 
         const rawHref = link.getAttribute('href') || '';
         const policy = getMarkdownLinkPolicy(rawHref, linkContext);
+        const isSamePage = policy.target === '_top';
+        const rawTextFragment = typeof rawHref === 'string' && rawHref.includes(':~:text=');
+        const resolvedTextFragment = typeof policy.resolvedUrl === 'string' && policy.resolvedUrl.includes('#:~:text=');
+        const hasTextFragment = rawTextFragment || resolvedTextFragment;
 
         if (policy.resolvedUrl) {
           link.setAttribute('href', policy.resolvedUrl);
+          link.dataset.cerebrResolvedUrl = policy.resolvedUrl;
+        } else {
+          delete link.dataset.cerebrResolvedUrl;
         }
 
         link.target = policy.target;
@@ -200,8 +207,49 @@ export function createMessageProcessor(appContext) {
         } else {
           link.removeAttribute('rel');
         }
+        link.dataset.cerebrSamePage = isSamePage ? 'true' : 'false';
+        link.dataset.cerebrTextFragment = hasTextFragment ? 'true' : 'false';
       });
     });
+  }
+
+  let markdownLinkInterceptorInstalled = false;
+
+  /**
+   * 在侧栏内拦截“同页跳转”链接，交由父页面执行跳转/定位。
+   * 目的：解决 text fragment 在 iframe 内点击无效的问题。
+   */
+  function installMarkdownLinkInterceptor() {
+    if (markdownLinkInterceptorInstalled) return;
+    const handler = (event) => {
+      if (!event || event.defaultPrevented) return;
+      if (event.button !== 0) return; // 仅处理左键点击
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const target = event.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const link = target.closest('a');
+      if (!link) return;
+      if (link.classList.contains('reference-number') || link.closest('.reference-tooltip')) return;
+      if (link.dataset.cerebrSamePage !== 'true') return;
+      if (link.dataset.cerebrTextFragment !== 'true') return;
+
+      const url = link.dataset.cerebrResolvedUrl || link.getAttribute('href') || '';
+      if (!url) return;
+      if (!window.parent || window.parent === window) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      window.parent.postMessage({ type: 'OPEN_MARKDOWN_LINK', url }, '*');
+    };
+
+    if (chatContainer) {
+      chatContainer.addEventListener('click', handler);
+    }
+    if (dom?.threadContainer && dom.threadContainer !== chatContainer) {
+      dom.threadContainer.addEventListener('click', handler);
+    }
+    markdownLinkInterceptorInstalled = true;
   }
 
   function resolveMessageElement(messageId) {
@@ -1142,6 +1190,9 @@ export function createMessageProcessor(appContext) {
   } catch (error) {
     console.warn('订阅 enableDollarMath 设置变化失败:', error);
   }
+
+  // 在创建消息处理器时安装一次全局链接拦截器
+  installMarkdownLinkInterceptor();
 
   /**
    * 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
