@@ -505,6 +505,26 @@ export function createMessageSender(appContext) {
     return normalizeConversationTitleText(rawTitle);
   }
 
+  // 复用“自动重试”设置，对标题生成做指数退避重试。
+  async function requestConversationTitleWithRetry(params) {
+    const maxAttempts = autoRetryEnabled ? MAX_AUTO_RETRY_ATTEMPTS : 1;
+    let attemptIndex = 0;
+    let lastError = null;
+    while (attemptIndex < maxAttempts) {
+      try {
+        return await requestConversationTitle(params);
+      } catch (error) {
+        lastError = error;
+        const canRetry = autoRetryEnabled && attemptIndex < (maxAttempts - 1);
+        if (!canRetry) throw error;
+        const delayMs = getAutoRetryDelayMs(attemptIndex);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        attemptIndex += 1;
+      }
+    }
+    throw lastError || new Error('生成对话标题失败');
+  }
+
   // 触发条件：
   // - 仅首条 AI 回复完成后触发（避免多轮对话重复生成）；
   // - 跳过划词线程与重新生成场景；
@@ -552,7 +572,7 @@ export function createMessageSender(appContext) {
     const expectedSummary = chatHistoryUI?.getActiveConversationSummary?.() || '';
     conversationTitleRequests.add(conversationId);
     try {
-      const title = await requestConversationTitle({
+      const title = await requestConversationTitleWithRetry({
         apiConfig: resolvedApi,
         prompt,
         conversationText
