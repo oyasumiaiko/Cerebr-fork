@@ -457,14 +457,26 @@ export function createMessageSender(appContext) {
     return '';
   }
 
-  async function requestConversationTitle({ apiConfig, prompt, userText, assistantText }) {
-    // 将指令 + 用户/AI 内容合并为单条 user 消息，并在开头包含指令，避免模型把 assistant 内容当作续写上下文。
+  function formatMessageForTitle(message) {
+    if (!message || typeof message.role !== 'string') return '';
+    const roleRaw = String(message.role || '').trim().toLowerCase();
+    let roleLabel = '消息';
+    if (roleRaw === 'user') roleLabel = '用户消息';
+    else if (roleRaw === 'assistant' || roleRaw === 'ai' || roleRaw === 'model') roleLabel = 'AI回复';
+    else if (roleRaw === 'system') roleLabel = '系统消息';
+    else roleLabel = `${message.role}消息`;
+    const text = extractPlainTextFromContent(message.content, { imagePlaceholder: '[图片]' });
+    const trimmed = (text || '').trim();
+    if (!trimmed) return '';
+    return `${roleLabel}：\n${trimmed}`;
+  }
+
+  async function requestConversationTitle({ apiConfig, prompt, conversationText }) {
+    // 将指令 + 全部消息合并为单条 user 消息，并在开头包含指令，避免模型把 assistant 内容当作续写上下文。
     const combinedUserMessage = [
       prompt,
-      '用户消息：',
-      userText,
-      'AI回复：',
-      assistantText
+      '对话内容：',
+      conversationText
     ].join('\n\n').trim();
     const messages = [
       { role: 'system', content: prompt },
@@ -516,14 +528,21 @@ export function createMessageSender(appContext) {
       : apiManager.getSelectedConfig();
     if (!resolvedApi?.baseUrl || !resolvedApi?.apiKey) return;
 
+    const chain = (typeof chatHistoryManager?.getCurrentConversationChain === 'function')
+      ? chatHistoryManager.getCurrentConversationChain()
+      : [];
     const historyMessages = chatHistoryManager?.chatHistory?.messages || [];
-    const userMessages = historyMessages.filter(m => (m?.role || '').toLowerCase() === 'user');
-    const assistantMessages = historyMessages.filter(m => (m?.role || '').toLowerCase() === 'assistant');
-    if (userMessages.length !== 1 || assistantMessages.length !== 1) return;
+    const messages = (Array.isArray(chain) && chain.length > 0) ? chain : historyMessages;
+    if (!Array.isArray(messages) || messages.length === 0) return;
 
-    const userText = extractPlainTextFromContent(userMessages[0]?.content, { imagePlaceholder: '[图片]' });
-    const assistantText = extractPlainTextFromContent(assistantMessages[0]?.content, { imagePlaceholder: '[图片]' });
-    if (!userText || !assistantText) return;
+    const assistantMessages = messages.filter(m => (m?.role || '').toLowerCase() === 'assistant');
+    if (assistantMessages.length !== 1) return;
+
+    const formattedMessages = messages
+      .map(formatMessageForTitle)
+      .filter(Boolean);
+    if (formattedMessages.length === 0) return;
+    const conversationText = formattedMessages.join('\n\n');
 
     const expectedSummary = chatHistoryUI?.getActiveConversationSummary?.() || '';
     conversationTitleRequests.add(conversationId);
@@ -531,8 +550,7 @@ export function createMessageSender(appContext) {
       const title = await requestConversationTitle({
         apiConfig: resolvedApi,
         prompt,
-        userText,
-        assistantText
+        conversationText
       });
       if (!title) return;
       await chatHistoryUI?.updateConversationSummary?.(conversationId, title, { expectedSummary });
