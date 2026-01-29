@@ -1272,14 +1272,7 @@ export function createChatHistoryUI(appContext) {
    */
   async function deleteConversationRecord(conversationId) {
     if (!conversationId) return;
-    let restoreScrollTop = null;
-    const panel = document.getElementById('chat-history-panel');
-    if (panel && panel.classList.contains('visible')) {
-      const listContainer = panel.querySelector('#chat-history-list');
-      if (listContainer) {
-        restoreScrollTop = listContainer.scrollTop;
-      }
-    }
+    const restoreOptions = getHistoryListScrollRestoreOptions();
     try {
       await deleteConversation(conversationId);
     } catch (error) {
@@ -1308,10 +1301,10 @@ export function createChatHistoryUI(appContext) {
     }
 
     invalidateMetadataCache();
-    refreshChatHistory({
-      keepExistingList: true,
-      restoreScrollTop
-    });
+    const removedInView = removeHistoryListItemFromView(conversationId);
+    if (!removedInView) {
+      refreshChatHistory(restoreOptions);
+    }
   }
 
   /**
@@ -1998,6 +1991,199 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 获取历史列表当前滚动位置（用于刷新后恢复）。
+   * @returns {{keepExistingList: boolean, restoreScrollTop: number}|null}
+   */
+  function getHistoryListScrollRestoreOptions() {
+    const panel = document.getElementById('chat-history-panel');
+    if (!panel || !panel.classList.contains('visible')) return null;
+    const listContainer = panel.querySelector('#chat-history-list');
+    if (!listContainer) return null;
+    return {
+      keepExistingList: true,
+      restoreScrollTop: listContainer.scrollTop
+    };
+  }
+
+  /**
+   * 获取历史列表面板与容器（仅在面板可见时返回）。
+   * @returns {{panel: HTMLElement, listContainer: HTMLElement}|null}
+   */
+  function getHistoryListContext() {
+    const panel = document.getElementById('chat-history-panel');
+    if (!panel || !panel.classList.contains('visible')) return null;
+    const listContainer = panel.querySelector('#chat-history-list');
+    if (!listContainer) return null;
+    return { panel, listContainer };
+  }
+
+  /**
+   * 根据当前搜索条件生成用于摘要高亮的计划。
+   * @param {HTMLElement} panel
+   * @returns {{terms:string[], termsLower:string[], hasTerms:boolean}}
+   */
+  function buildHistoryHighlightPlan(panel) {
+    const filterInput = panel.querySelector('.filter-container input[type="text"]');
+    const filterText = filterInput ? filterInput.value : '';
+    const searchPlan = buildChatHistorySearchPlan(filterText);
+    const textPlan = buildChatHistoryTextPlan(searchPlan);
+    if (!textPlan.hasPositive) {
+      return { terms: [], termsLower: [], hasTerms: false };
+    }
+    return {
+      terms: textPlan.highlightRaw,
+      termsLower: textPlan.highlightLower,
+      hasTerms: true
+    };
+  }
+
+  /**
+   * 更新当前列表缓存（currentDisplayItems）的摘要，避免后续渲染使用旧值。
+   * @param {string} conversationId
+   * @param {string} summary
+   */
+  function updateConversationSummaryInDisplayCache(conversationId, summary) {
+    const id = (typeof conversationId === 'string') ? conversationId.trim() : '';
+    if (!id || !Array.isArray(currentDisplayItems)) return;
+    for (const item of currentDisplayItems) {
+      if (item?.id === id) {
+        item.summary = summary;
+        break;
+      }
+    }
+  }
+
+  /**
+   * 仅更新当前已渲染列表中的摘要文本，避免整页刷新导致滚动跳动。
+   * @param {string} conversationId
+   * @param {string} summary
+   * @returns {boolean} 是否成功更新到视图
+   */
+  function updateHistoryListItemSummary(conversationId, summary) {
+    const id = (typeof conversationId === 'string') ? conversationId.trim() : '';
+    if (!id) return false;
+    const ctx = getHistoryListContext();
+    if (!ctx) return false;
+    const { panel, listContainer } = ctx;
+    const item = listContainer.querySelector(`.chat-history-item[data-id="${id}"]`);
+    if (!item) return false;
+    const summaryDiv = item.querySelector('.summary');
+    if (!summaryDiv) return false;
+
+    const displaySummary = summary || '无摘要';
+    const highlightPlan = buildHistoryHighlightPlan(panel);
+    const highlightTerms = Array.isArray(highlightPlan.termsLower) && highlightPlan.termsLower.length
+      ? highlightPlan.termsLower
+      : (Array.isArray(highlightPlan.terms) ? highlightPlan.terms : []);
+    const hasHighlightTerms = highlightTerms.length > 0;
+    if (hasHighlightTerms && displaySummary) {
+      try {
+        const segments = buildHighlightSegments(displaySummary, highlightTerms);
+        if (segments && segments.length) {
+          summaryDiv.textContent = '';
+          appendHighlightSegments(summaryDiv, segments);
+        } else {
+          summaryDiv.textContent = displaySummary;
+        }
+      } catch (e) {
+        console.error('更新摘要高亮时发生错误:', e);
+        summaryDiv.textContent = displaySummary;
+      }
+    } else {
+      summaryDiv.textContent = displaySummary;
+    }
+    return true;
+  }
+
+  /**
+   * 清理没有对应会话条目的分组标题，避免删除后出现空分组。
+   * @param {HTMLElement} listContainer
+   */
+  function cleanupEmptyHistoryGroupHeaders(listContainer) {
+    if (!listContainer) return;
+    const nodes = Array.from(listContainer.children);
+    for (let i = 0; i < nodes.length; i += 1) {
+      const node = nodes[i];
+      if (!node?.classList?.contains('chat-history-group-header')) continue;
+      if (node.classList.contains('pinned-header')) continue;
+      let hasItem = false;
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const next = nodes[j];
+        if (!next?.classList) continue;
+        if (next.classList.contains('chat-history-group-header')) break;
+        if (next.classList.contains('chat-history-item')) {
+          hasItem = true;
+          break;
+        }
+      }
+      if (!hasItem) node.remove();
+    }
+  }
+
+  /**
+   * 从当前列表视图移除指定会话条目（若需要结构重排则返回 false 以触发全量刷新）。
+   * @param {string} conversationId
+   * @returns {boolean} 是否完成局部删除
+   */
+  function removeHistoryListItemFromView(conversationId) {
+    const id = (typeof conversationId === 'string') ? conversationId.trim() : '';
+    if (!id) return false;
+    const ctx = getHistoryListContext();
+    if (!ctx) return true; // 面板不可见时无需刷新
+    const { panel, listContainer } = ctx;
+
+    const isTreeMode = panel.dataset.branchViewMode === 'tree';
+    if (isTreeMode) {
+      const hasChildren = Array.isArray(currentDisplayItems)
+        && currentDisplayItems.some(item => item?.parentConversationId === id);
+      if (hasChildren) return false;
+    }
+
+    const item = listContainer.querySelector(`.chat-history-item[data-id="${id}"]`);
+    if (item) {
+      item.remove();
+    }
+
+    if (Array.isArray(currentDisplayItems) && currentDisplayItems.length > 0) {
+      const beforeLen = currentDisplayItems.length;
+      currentDisplayItems = currentDisplayItems.filter(entry => entry?.id !== id);
+      if (beforeLen !== currentDisplayItems.length) {
+        if (panel?._historyDataSource?.loadedIdSet) {
+          panel._historyDataSource.loadedIdSet.delete(id);
+        }
+      }
+    }
+
+    currentPinnedItemsCountInDisplay = listContainer.querySelectorAll('.chat-history-item.pinned').length;
+    if (currentPinnedItemsCountInDisplay === 0) {
+      const pinnedHeader = listContainer.querySelector('.chat-history-group-header.pinned-header');
+      if (pinnedHeader) pinnedHeader.remove();
+      listContainer.classList.remove('pinned-collapsed');
+      delete panel.dataset.pinnedCollapsed;
+    }
+
+    cleanupEmptyHistoryGroupHeaders(listContainer);
+
+    const itemCount = listContainer.querySelectorAll('.chat-history-item').length;
+    currentlyRenderedCount = itemCount;
+    if (itemCount === 0) {
+      listContainer.querySelectorAll('.chat-history-group-header').forEach((n) => n.remove());
+      const filterInput = panel.querySelector('.filter-container input[type="text"]');
+      const filterText = filterInput ? filterInput.value : '';
+      const searchPlan = buildChatHistorySearchPlan(filterText);
+      const textPlan = buildChatHistoryTextPlan(searchPlan);
+      const hasActiveQuery = (Array.isArray(searchPlan.filters) && searchPlan.filters.length > 0)
+        || textPlan.hasPositive
+        || textPlan.hasNegative;
+      const emptyMsg = document.createElement('div');
+      emptyMsg.textContent = hasActiveQuery ? '没有匹配的聊天记录' : '暂无聊天记录';
+      listContainer.appendChild(emptyMsg);
+    }
+
+    return true;
+  }
+
+  /**
    * 更新会话摘要（对话列表标题），并尽量避免覆盖用户手动重命名的结果。
    * - 如果提供 expectedSummary，则仅在“当前摘要一致”时才写入；
    * - 如果提供 summarySource，则同步更新摘要来源标记；
@@ -2048,7 +2234,11 @@ export function createChatHistoryUI(appContext) {
     await putConversation(conversation);
     updateConversationInCache(conversation);
     invalidateMetadataCache();
-    refreshChatHistory();
+    updateConversationSummaryInDisplayCache(normalizedId, nextSummary);
+    const updatedInView = updateHistoryListItemSummary(normalizedId, nextSummary);
+    if (!updatedInView) {
+      refreshChatHistory(getHistoryListScrollRestoreOptions());
+    }
     return { ok: true, summary: nextSummary };
   }
 
