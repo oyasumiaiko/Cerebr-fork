@@ -1629,6 +1629,27 @@ input:checked + .slider::before {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 55%, transparent);
 }
 
+.api-card.drag-insert-before::before,
+.api-card.drag-insert-after::after {
+    content: '';
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    height: 2px;
+    background: var(--cerebr-highlight);
+    border-radius: 999px;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-highlight) 22%, transparent);
+    pointer-events: none;
+}
+
+.api-card.drag-insert-before::before {
+    top: -8px;
+}
+
+.api-card.drag-insert-after::after {
+    bottom: -8px;
+}
+
 .api-card.delete-confirming {
     border-color: color-mix(in srgb, var(--cerebr-red) 55%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-red) 55%, transparent);

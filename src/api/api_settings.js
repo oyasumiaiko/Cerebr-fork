@@ -642,12 +642,18 @@ export function createApiManager(appContext) {
     return Number.isFinite(index) ? index : null;
   }
 
-  // 清理拖动高亮，避免残留样式干扰后续操作。
+  // 清理拖动高亮与插入指示，避免残留样式干扰后续操作。
   function clearDragOverStyles() {
     if (!apiCardsContainer) return;
-    apiCardsContainer.querySelectorAll('.api-card.drag-over').forEach((card) => {
-      card.classList.remove('drag-over');
+    apiCardsContainer.querySelectorAll('.api-card.drag-over, .api-card.drag-insert-before, .api-card.drag-insert-after').forEach((card) => {
+      card.classList.remove('drag-over', 'drag-insert-before', 'drag-insert-after');
     });
+  }
+
+  // 计算拖动落点是在卡片上半区还是下半区，用于显示“插入到哪一侧”。
+  function getDropPosition(card, clientY) {
+    const rect = card.getBoundingClientRect();
+    return clientY > rect.top + rect.height / 2 ? 'after' : 'before';
   }
 
   // 拖动排序：在数组内移动并同步选中索引，避免选中项错位。
@@ -1020,26 +1026,30 @@ export function createApiManager(appContext) {
       if (fromIndex == null || toIndex == null || fromIndex === toIndex) return;
       e.preventDefault();
       clearDragOverStyles();
+      // 根据指针所在上下半区显示“插入线”，明确提示将插入到卡片的前或后。
+      const dropPosition = getDropPosition(template, e.clientY);
       template.classList.add('drag-over');
+      template.classList.toggle('drag-insert-before', dropPosition === 'before');
+      template.classList.toggle('drag-insert-after', dropPosition === 'after');
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = 'move';
       }
     });
 
-    template.addEventListener('dragleave', () => {
-      template.classList.remove('drag-over');
+    template.addEventListener('dragleave', (e) => {
+      if (template.contains(e.relatedTarget)) return;
+      template.classList.remove('drag-over', 'drag-insert-before', 'drag-insert-after');
     });
 
     template.addEventListener('drop', (e) => {
       e.preventDefault();
-      template.classList.remove('drag-over');
+      template.classList.remove('drag-over', 'drag-insert-before', 'drag-insert-after');
 
       const fromIndex = draggingCardIndex ?? parseCardIndex(e.dataTransfer?.getData('text/plain'));
       const toIndex = parseCardIndex(template.dataset.index);
       if (fromIndex == null || toIndex == null || fromIndex === toIndex) return;
 
-      const rect = template.getBoundingClientRect();
-      const insertAfter = e.clientY > rect.top + rect.height / 2;
+      const insertAfter = getDropPosition(template, e.clientY) === 'after';
       const rawIndex = toIndex + (insertAfter ? 1 : 0);
       const insertIndex = (fromIndex < rawIndex) ? rawIndex - 1 : rawIndex;
       if (insertIndex === fromIndex) return;
