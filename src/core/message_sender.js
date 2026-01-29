@@ -535,6 +535,11 @@ export function createMessageSender(appContext) {
     const messages = (Array.isArray(chain) && chain.length > 0) ? chain : historyMessages;
     if (!Array.isArray(messages) || messages.length === 0) return;
 
+    const firstUserMessage = messages.find(m => (m?.role || '').toLowerCase() === 'user') || null;
+    const promptType = typeof firstUserMessage?.promptType === 'string' ? firstUserMessage.promptType : 'none';
+    if (promptType === 'summary' && !settingsManager.getSetting('autoGenerateTitleForSummary')) return;
+    if ((promptType === 'selection' || promptType === 'query') && !settingsManager.getSetting('autoGenerateTitleForSelection')) return;
+
     const assistantMessages = messages.filter(m => (m?.role || '').toLowerCase() === 'assistant');
     if (assistantMessages.length !== 1) return;
 
@@ -553,7 +558,17 @@ export function createMessageSender(appContext) {
         conversationText
       });
       if (!title) return;
-      await chatHistoryUI?.updateConversationSummary?.(conversationId, title, { expectedSummary });
+      let finalTitle = title;
+      const prefixTag =
+        promptType === 'summary'
+          ? '[总结]'
+          : (promptType === 'selection' || promptType === 'query')
+            ? '[划词解释]'
+            : '';
+      if (prefixTag && !finalTitle.startsWith(prefixTag)) {
+        finalTitle = `${prefixTag} ${finalTitle}`.trim();
+      }
+      await chatHistoryUI?.updateConversationSummary?.(conversationId, finalTitle, { expectedSummary });
     } catch (error) {
       console.warn('生成对话标题失败:', error);
     } finally {

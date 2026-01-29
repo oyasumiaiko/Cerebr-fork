@@ -100,6 +100,10 @@ export function createSettingsManager(appContext) {
     shouldSendChatHistory: true,
     // 对话标题生成：默认关闭，避免未配置时触发额外请求
     autoGenerateConversationTitle: false,
+    // 对话标题生成：是否覆盖总结类标题（保留[总结]前缀）
+    autoGenerateTitleForSummary: true,
+    // 对话标题生成：是否覆盖划词解释类标题（保留[划词解释]前缀）
+    autoGenerateTitleForSelection: true,
     // 对话标题生成：默认跟随当前 API
     conversationTitleApi: 'follow_current',
     // 对话标题生成：默认提示词（用户可在设置中修改）
@@ -264,6 +268,20 @@ export function createSettingsManager(appContext) {
       id: 'auto-generate-conversation-title',
       label: '自动生成对话标题',
       defaultValue: DEFAULT_SETTINGS.autoGenerateConversationTitle
+    },
+    {
+      key: 'autoGenerateTitleForSummary',
+      type: 'toggle',
+      id: 'auto-generate-title-summary',
+      label: '对[总结]自动生成标题',
+      defaultValue: DEFAULT_SETTINGS.autoGenerateTitleForSummary
+    },
+    {
+      key: 'autoGenerateTitleForSelection',
+      type: 'toggle',
+      id: 'auto-generate-title-selection',
+      label: '对[划词解释]自动生成标题',
+      defaultValue: DEFAULT_SETTINGS.autoGenerateTitleForSelection
     },
     {
       key: 'conversationTitleApi',
