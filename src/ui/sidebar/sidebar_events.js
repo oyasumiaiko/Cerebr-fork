@@ -126,24 +126,34 @@ function setupStatusDot(appContext) {
   }
 }
 
+// 统一更新输入框占位符，保持 API 名称与模式提示一致。
+function applyMessageInputPlaceholder(appContext, currentConfig) {
+  const input = appContext?.dom?.messageInput;
+  if (!input) return;
+  const isTemporaryMode = appContext.services.messageSender?.getTemporaryModeState?.() === true;
+  const buildPlaceholder = appContext.utils?.buildMessageInputPlaceholder;
+  const placeholder = (typeof buildPlaceholder === 'function')
+    ? buildPlaceholder(currentConfig, { isTemporaryMode })
+    : (isTemporaryMode ? '纯对话模式，输入消息...' : '输入消息...');
+  input.setAttribute('placeholder', placeholder);
+}
+
 function setupApiMenuWatcher(appContext) {
   const apiManager = appContext.services.apiManager;
 
-  const updateApiMenuText = () => {
-    const currentConfig = apiManager.getSelectedConfig();
+  const updateApiMenuText = (currentConfig) => {
     if (currentConfig) {
       appContext.dom.apiSettingsText.textContent = currentConfig.displayName || currentConfig.modelName || 'API 设置';
     }
   };
 
-  const updateInputApiSwitcher = () => {
+  const updateInputApiSwitcher = (currentConfig) => {
     const switcher = appContext.dom.inputApiSwitcher;
     const currentEl = appContext.dom.inputApiCurrent;
     const listEl = appContext.dom.inputApiList;
     if (!switcher || !currentEl || !listEl) return;
 
     const configs = apiManager.getAllConfigs?.() || [];
-    const currentConfig = apiManager.getSelectedConfig?.() || null;
     const currentName = currentConfig?.displayName || currentConfig?.modelName || currentConfig?.baseUrl || 'API';
     currentEl.textContent = currentName;
     currentEl.title = currentName;
@@ -178,8 +188,10 @@ function setupApiMenuWatcher(appContext) {
   };
 
   const updateAll = () => {
-    updateApiMenuText();
-    updateInputApiSwitcher();
+    const currentConfig = apiManager.getSelectedConfig?.() || null;
+    updateApiMenuText(currentConfig);
+    updateInputApiSwitcher(currentConfig);
+    applyMessageInputPlaceholder(appContext, currentConfig);
   };
 
   updateAll();
@@ -905,7 +917,7 @@ function setupWindowMessageHandlers(appContext) {
           appContext.dom.messageInput.setAttribute('placeholder', data.placeholder);
           if (data.timeout) {
             setTimeout(() => {
-              appContext.dom.messageInput.setAttribute('placeholder', '输入消息...');
+              applyMessageInputPlaceholder(appContext, appContext.services.apiManager?.getSelectedConfig?.() || null);
             }, data.timeout);
           }
         }

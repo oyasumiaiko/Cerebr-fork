@@ -1388,6 +1388,17 @@ export function createMessageSender(appContext) {
     return document.getElementById('input-container');
   }
 
+  // 根据当前 API 与模式刷新输入框 placeholder，避免被模式切换覆盖成固定文案。
+  function updateMessageInputPlaceholder() {
+    if (!messageInput) return;
+    const currentConfig = apiManager?.getSelectedConfig?.() || null;
+    const buildPlaceholder = utils?.buildMessageInputPlaceholder;
+    const placeholder = (typeof buildPlaceholder === 'function')
+      ? buildPlaceholder(currentConfig, { isTemporaryMode })
+      : (isTemporaryMode ? '纯对话模式，输入消息...' : '输入消息...');
+    messageInput.setAttribute('placeholder', placeholder);
+  }
+
   /**
    * 进入临时模式，不获取网页内容
    * @public
@@ -1396,7 +1407,7 @@ export function createMessageSender(appContext) {
     isTemporaryMode = true;
     GetInputContainer().classList.add('temporary-mode');
     document.body.classList.add('temporary-mode');
-    messageInput.setAttribute('placeholder', '纯对话模式，输入消息...');
+    updateMessageInputPlaceholder();
     persistTempModeSessionState(true);
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: true } }));
@@ -1411,7 +1422,7 @@ export function createMessageSender(appContext) {
     isTemporaryMode = false;
     GetInputContainer().classList.remove('temporary-mode');
     document.body.classList.remove('temporary-mode');
-    messageInput.setAttribute('placeholder', '输入消息...');
+    updateMessageInputPlaceholder();
     persistTempModeSessionState(false);
     try {
       document.dispatchEvent(new CustomEvent('TEMP_MODE_CHANGED', { detail: { isOn: false } }));

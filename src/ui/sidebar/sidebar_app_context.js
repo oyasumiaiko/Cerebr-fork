@@ -139,6 +139,17 @@ export function registerSidebarUtilities(appContext) {
 
   appContext.utils.updateInputContainerHeightVar = updateInputContainerHeightVar;
 
+  // 统一生成输入框 placeholder 文案，避免各处硬编码导致切换覆盖不一致。
+  appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
+    const rawName = currentConfig?.displayName || currentConfig?.modelName || currentConfig?.baseUrl || '';
+    const apiName = (typeof rawName === 'string') ? rawName.trim() : '';
+    const baseText = apiName ? `给${apiName}发送消息...` : '输入消息...';
+    if (options?.isTemporaryMode) {
+      return `纯对话模式，${baseText}`;
+    }
+    return baseText;
+  };
+
   appContext.utils.scrollToBottom = (targetContainer = null) => {
     const settingsManager = appContext.services.settingsManager;
     const messageSender = appContext.services.messageSender;
