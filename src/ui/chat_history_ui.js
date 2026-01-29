@@ -6965,15 +6965,15 @@ export function createChatHistoryUI(appContext) {
       apiTab.textContent = 'API 设置';
       apiTab.dataset.tab = 'api-settings';
       
-      const galleryTab = document.createElement('div');
-      galleryTab.className = 'history-tab';
-      galleryTab.textContent = '图片相册';
-      galleryTab.dataset.tab = 'gallery';
-
       const settingsTab = document.createElement('div');
       settingsTab.className = 'history-tab';
       settingsTab.textContent = '偏好设置';
       settingsTab.dataset.tab = 'settings';
+
+      const galleryTab = document.createElement('div');
+      galleryTab.className = 'history-tab';
+      galleryTab.textContent = '图片相册';
+      galleryTab.dataset.tab = 'gallery';
       
       const statsTab = document.createElement('div');
       statsTab.className = 'history-tab';
@@ -6988,8 +6988,8 @@ export function createChatHistoryUI(appContext) {
       tabBar.appendChild(historyTab);
       tabBar.appendChild(promptTab);
       tabBar.appendChild(apiTab);
-      tabBar.appendChild(galleryTab);
       tabBar.appendChild(settingsTab);
+      tabBar.appendChild(galleryTab);
       tabBar.appendChild(statsTab);
       tabBar.appendChild(backupTab);
       panel.appendChild(tabBar);
@@ -7180,8 +7180,8 @@ export function createChatHistoryUI(appContext) {
       tabContents.appendChild(historyContent);
       if (promptSettingsContent) tabContents.appendChild(promptSettingsContent);
       if (apiSettingsContent) tabContents.appendChild(apiSettingsContent);
-      tabContents.appendChild(galleryContent);
       tabContents.appendChild(settingsContent);
+      tabContents.appendChild(galleryContent);
       tabContents.appendChild(statsContent);
       tabContents.appendChild(backupSettingsContent);
       panel.appendChild(tabContents);
