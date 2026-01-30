@@ -341,6 +341,16 @@ export function createMessageSender(appContext) {
     return messages;
   }
 
+  /**
+   * 清理用户文本中的系统注入块，避免将 {{system}}...{{end_system}} 记录到历史。
+   * @param {string} text
+   * @returns {string}
+   */
+  function stripInjectedSystemBlocks(text) {
+    if (typeof text !== 'string') return text;
+    return text.replace(/{{system}}[\s\S]*?{{end_system}}/g, '');
+  }
+
   function normalizeInjectedRole(role) {
     const normalized = String(role || '').trim().toLowerCase();
     if (normalized === 'assistant' || normalized === 'ai' || normalized === 'model') return 'assistant';
@@ -1672,6 +1682,21 @@ export function createMessageSender(appContext) {
           console.log('捕获注入的系统消息：', injectedSystemMessages);
           return '';
         });
+      }
+
+      // 清理历史文本中的系统注入块，避免落库（仅影响显示/历史，不影响注入逻辑）
+      messageTextForHistory = stripInjectedSystemBlocks(messageTextForHistory);
+      if (preprocessHistoryPatch && typeof preprocessHistoryPatch === 'object') {
+        if (typeof preprocessHistoryPatch.preprocessOriginalText === 'string') {
+          preprocessHistoryPatch.preprocessOriginalText = stripInjectedSystemBlocks(
+            preprocessHistoryPatch.preprocessOriginalText
+          );
+        }
+        if (typeof preprocessHistoryPatch.preprocessRenderedText === 'string') {
+          preprocessHistoryPatch.preprocessRenderedText = stripInjectedSystemBlocks(
+            preprocessHistoryPatch.preprocessRenderedText
+          );
+        }
       }
 
       // 在重新生成模式下，不添加新的用户消息

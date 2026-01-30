@@ -5228,28 +5228,64 @@ body.hide-references .reference-number.superscript {
 
 #chat-history-panel .settings-tab-content {
     padding: 12px;
-    gap: 8px;
+    gap: 10px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 92%, var(--cerebr-message-ai-bg));
+    border: 1px solid var(--cerebr-border-color);
+    border-radius: 12px;
 }
 
 #chat-history-panel .settings-tab-content .esc-settings-menu {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: contents;
 }
 
 #chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] {
+    display: contents;
+}
+
+#chat-history-panel .settings-tab-content .settings-group {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 80%, transparent);
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 80%, transparent);
 }
 
-#chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] .menu-item {
+#chat-history-panel .settings-tab-content .settings-group-title {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--cerebr-text-color) 65%, transparent);
+}
+
+#chat-history-panel .settings-tab-content .settings-group .menu-item {
     width: 100%;
 }
 
-#chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] .background-image-setting,
-#chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] .menu-item--stack {
+#chat-history-panel .settings-tab-content .settings-group .background-image-setting,
+#chat-history-panel .settings-tab-content .settings-group .menu-item--stack {
     grid-column: 1 / -1;
+}
+
+#chat-history-panel .settings-tab-content .menu-item > span:first-child {
+    flex: 0 1 45%;
+    min-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#chat-history-panel .settings-tab-content .menu-item input[type="range"] {
+    width: auto;
+    max-width: 100%;
+    flex: 1 1 160px;
+    min-width: 140px;
+}
+
+#chat-history-panel .settings-tab-content .menu-item span:last-child {
+    min-width: 48px;
 }
 
 /* 滚动条样式统一至全局 */

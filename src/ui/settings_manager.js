@@ -190,6 +190,7 @@ export function createSettingsManager(appContext) {
       type: 'text',
       id: 'background-image-url',
       label: '背景图片',
+      group: 'background',
       placeholder: '输入图片 URL、data URI 或 txt 文件路径',
       defaultValue: DEFAULT_SETTINGS.backgroundImageUrl,
       apply: (v) => applyBackgroundImage(v),
@@ -208,6 +209,7 @@ export function createSettingsManager(appContext) {
       type: 'range',
       id: 'background-image-intensity',
       label: '图片浓度',
+      group: 'background',
       min: 0,
       max: 1,
       step: 0.05,
@@ -220,6 +222,7 @@ export function createSettingsManager(appContext) {
       type: 'range',
       id: 'background-overall-opacity',
       label: '背景透明度',
+      group: 'background',
       min: 0,
       max: 1,
       step: 0.05,
@@ -233,6 +236,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'auto-scroll-switch',
       label: '自动滚动',
+      group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.autoScroll,
       apply: (v) => applyAutoScroll(v)
     },
@@ -242,6 +246,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'stop-at-top-switch',
       label: '滚动到顶部时停止',
+      group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.stopAtTop,
       apply: (v) => applyStopAtTop(v)
     },
@@ -252,6 +257,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'clear-on-search-switch',
       label: '划词搜索时清空聊天',
+      group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.clearOnSearch,
       apply: (v) => applyClearOnSearch(v)
     },
@@ -261,6 +267,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'send-chat-history-switch',
       label: '发送聊天历史',
+      group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.shouldSendChatHistory,
       apply: (v) => applySendChatHistory(v)
     },
@@ -269,6 +276,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'auto-generate-conversation-title',
       label: '自动生成对话标题',
+      group: 'title',
       defaultValue: DEFAULT_SETTINGS.autoGenerateConversationTitle
     },
     {
@@ -276,6 +284,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'auto-generate-title-summary',
       label: '对[总结]自动生成标题',
+      group: 'title',
       defaultValue: DEFAULT_SETTINGS.autoGenerateTitleForSummary
     },
     {
@@ -283,6 +292,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'auto-generate-title-selection',
       label: '对[划词解释]自动生成标题',
+      group: 'title',
       defaultValue: DEFAULT_SETTINGS.autoGenerateTitleForSelection
     },
     {
@@ -290,6 +300,7 @@ export function createSettingsManager(appContext) {
       type: 'select',
       id: 'conversation-title-api',
       label: '对话标题生成 API',
+      group: 'title',
       options: () => getConversationTitleApiOptions(),
       defaultValue: DEFAULT_SETTINGS.conversationTitleApi
     },
@@ -300,6 +311,7 @@ export function createSettingsManager(appContext) {
       label: '对话标题提示词',
       placeholder: '输入用于生成对话标题的提示词（系统提示词）',
       rows: 4,
+      group: 'title',
       defaultValue: DEFAULT_SETTINGS.conversationTitlePrompt,
       readFromUI: (el) => (el?.value || '').trim(),
       writeToUI: (el, value) => { if (el) el.value = value || ''; }
@@ -310,6 +322,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'send-signature-switch',
       label: '发送 signature（推理签名）',
+      group: 'advanced',
       defaultValue: DEFAULT_SETTINGS.shouldSendSignature
     },
     {
@@ -317,6 +330,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'auto-retry-switch',
       label: '自动重试',
+      group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.autoRetry,
       apply: (v) => applyAutoRetry(v)
     },
@@ -324,6 +338,7 @@ export function createSettingsManager(appContext) {
       key: 'showModelNameInPlaceholder',
       type: 'toggle',
       label: '输入框占位符显示模型名',
+      group: 'input',
       defaultValue: DEFAULT_SETTINGS.showModelNameInPlaceholder,
       apply: (v) => applyShowModelNameInPlaceholder(v)
     },
@@ -343,6 +358,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       id: 'show-reference-switch',
       label: '显示引用标记',
+      group: 'display',
       defaultValue: DEFAULT_SETTINGS.showReference,
       apply: (v) => applyShowReference(v)
     },
@@ -381,6 +397,7 @@ export function createSettingsManager(appContext) {
       type: 'range',
       id: 'fullscreen-width',
       label: '全屏宽度',
+      group: 'layout',
       min: 500,
       max: 2400,
       step: 50,
@@ -608,6 +625,40 @@ export function createSettingsManager(appContext) {
       }
       return autoSection;
     };
+    const GROUP_LABELS = {
+      background: '背景',
+      display: '显示',
+      layout: '布局',
+      behavior: '行为',
+      input: '输入',
+      title: '对话标题',
+      advanced: '高级',
+      other: '其他'
+    };
+    const normalizeGroupKey = (def) => {
+      if (def && typeof def.group === 'string' && def.group.trim()) {
+        return def.group.trim();
+      }
+      return 'other';
+    };
+    const ensureGroupSection = (autoSection, groupKey) => {
+      if (!autoSection) return null;
+      const key = groupKey || 'other';
+      let groupEl = autoSection.querySelector(`.settings-group[data-group="${key}"]`);
+      if (!groupEl) {
+        groupEl = document.createElement('div');
+        groupEl.className = 'settings-group';
+        groupEl.dataset.group = key;
+
+        const title = document.createElement('div');
+        title.className = 'settings-group-title';
+        title.textContent = GROUP_LABELS[key] || GROUP_LABELS.other;
+
+        groupEl.appendChild(title);
+        autoSection.appendChild(groupEl);
+      }
+      return groupEl;
+    };
     const resolveContainer = (def) => {
       const wantsQuick = def.menu === 'quick';
       if (wantsQuick) {
@@ -634,7 +685,9 @@ export function createSettingsManager(appContext) {
       }
       const { container, scope } = resolveContainer(def);
       const autoSection = ensureAutoSection(container, scope);
-      const targetSection = autoSection;
+      const targetSection = (scope === 'panel')
+        ? ensureGroupSection(autoSection, normalizeGroupKey(def))
+        : autoSection;
       if (existing) {
         dynamicElements.set(def.key, existing);
         const existingItem = existing.closest('.menu-item');
