@@ -28,6 +28,8 @@ input, textarea, select {
     --cerebr-background-image: none;
     --cerebr-background-image-intensity: 0;
     --cerebr-background-total-opacity: 1;
+    --cerebr-fullscreen-bg-size: contain;
+    --cerebr-fullscreen-blur-opacity: 1;
     
     --cerebr-bg-color: rgba(255, 255, 255, var(--cerebr-opacity));
     --cerebr-text-color: #222;
@@ -6554,13 +6556,13 @@ html.fullscreen-mode {
 }
 
 html.fullscreen-mode body::before {
-  background-size: contain;
+  background-size: var(--cerebr-fullscreen-bg-size, contain);
   background-position: center;
   background-repeat: no-repeat;
 }
 
 html.fullscreen-mode::before {
-  opacity: calc(var(--cerebr-background-image-intensity) * var(--cerebr-background-total-opacity));
+  opacity: calc(var(--cerebr-fullscreen-blur-opacity, 1) * var(--cerebr-background-image-intensity) * var(--cerebr-background-total-opacity));
 }
 
 /* 全屏下：让容器占满宽度，但用内边距把视觉内容限制在中心列。

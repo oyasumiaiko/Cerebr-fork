@@ -118,6 +118,7 @@ export function createSettingsManager(appContext) {
     scaleFactor: 1, // Added default scaleFactor
     backgroundImageUrl: '',
     backgroundImageIntensity: 0.6,
+    fullscreenBackgroundCover: false,
     backgroundOverallOpacity: 1,
     // 是否启用 $ / $$ 作为数学公式分隔符（默认开启以保持兼容）
     enableDollarMath: true,
@@ -229,6 +230,15 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.backgroundOverallOpacity,
       apply: (v) => applyBackgroundOverallOpacity(v),
       formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
+    },
+    {
+      key: 'fullscreenBackgroundCover',
+      type: 'toggle',
+      id: 'fullscreen-background-cover',
+      label: '全屏背景铺满屏幕',
+      group: 'background',
+      defaultValue: DEFAULT_SETTINGS.fullscreenBackgroundCover,
+      apply: (v) => applyFullscreenBackgroundCover(v)
     },
     // 自动滚动
     {
@@ -1373,6 +1383,18 @@ export function createSettingsManager(appContext) {
   function applyBackgroundOverallOpacity(value) {
     const numeric = clamp01(value, DEFAULT_SETTINGS.backgroundOverallOpacity);
     document.documentElement.style.setProperty('--cerebr-background-total-opacity', numeric);
+  }
+
+  /**
+   * 全屏模式背景铺满开关：
+   * - 关闭：保持 contain + 模糊填充（当前默认行为）
+   * - 开启：使用 cover，取消模糊填充
+   * @param {boolean} enabled
+   */
+  function applyFullscreenBackgroundCover(enabled) {
+    const useCover = !!enabled;
+    document.documentElement.style.setProperty('--cerebr-fullscreen-bg-size', useCover ? 'cover' : 'contain');
+    document.documentElement.style.setProperty('--cerebr-fullscreen-blur-opacity', useCover ? '0' : '1');
   }
 
   function refreshBackgroundImage(options = {}) {
