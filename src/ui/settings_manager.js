@@ -707,6 +707,7 @@ export function createSettingsManager(appContext) {
       item.appendChild(labelSpan);
 
       if (def.type === 'toggle') {
+        item.classList.add('menu-item--toggle');
         const wrap = document.createElement('label');
         wrap.className = 'switch';
         const input = document.createElement('input');
@@ -720,6 +721,7 @@ export function createSettingsManager(appContext) {
         targetSection.appendChild(item);
         dynamicElements.set(def.key, input);
       } else if (def.type === 'range') {
+        item.classList.add('menu-item--range');
         const input = document.createElement('input');
         input.type = 'range';
         input.min = String(def.min ?? 0);
@@ -848,6 +850,7 @@ export function createSettingsManager(appContext) {
           dynamicElements.set(def.key, input);
         }
       } else if (def.type === 'select') {
+        item.classList.add('menu-item--select');
         const select = document.createElement('select');
         select.id = def.id || `setting-${def.key}`;
         const optionsArr = typeof def.options === 'function' ? def.options() : (def.options || []);

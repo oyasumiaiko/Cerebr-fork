@@ -5269,7 +5269,6 @@ body.hide-references .reference-number.superscript {
     border-radius: 0;
     background: transparent;
     display: grid;
-    grid-template-columns: minmax(140px, 1fr) minmax(180px, 2fr) auto;
     align-items: center;
     column-gap: 12px;
 }
@@ -5286,33 +5285,45 @@ body.hide-references .reference-number.superscript {
     line-height: 1.35;
 }
 
-#chat-history-panel .settings-tab-content .menu-item input[type="range"] {
+#chat-history-panel .settings-tab-content .menu-item--toggle {
+    grid-template-columns: minmax(160px, 1fr) auto;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--toggle .switch {
+    justify-self: end;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--range {
+    grid-template-columns: minmax(160px, 1fr) minmax(160px, 2fr) auto;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--range input[type="range"] {
     width: 100%;
     max-width: 100%;
-    min-width: 140px;
+    min-width: 160px;
     margin: 0;
 }
 
-#chat-history-panel .settings-tab-content .menu-item span:last-child {
+#chat-history-panel .settings-tab-content .menu-item--range span:last-child {
     min-width: 48px;
     text-align: right;
     justify-self: end;
 }
 
-#chat-history-panel .settings-tab-content .menu-item select,
-#chat-history-panel .settings-tab-content .menu-item input[type="text"],
-#chat-history-panel .settings-tab-content .menu-item input[type="number"],
-#chat-history-panel .settings-tab-content .menu-item input[type="url"],
-#chat-history-panel .settings-tab-content .menu-item input[type="search"],
-#chat-history-panel .settings-tab-content .menu-item input[type="password"],
-#chat-history-panel .settings-tab-content .menu-item input[type="email"] {
+#chat-history-panel .settings-tab-content .menu-item--select {
+    grid-template-columns: minmax(160px, 1fr) minmax(200px, 2fr);
+}
+
+#chat-history-panel .settings-tab-content .menu-item--select select,
+#chat-history-panel .settings-tab-content .menu-item--select input[type="text"],
+#chat-history-panel .settings-tab-content .menu-item--select input[type="number"],
+#chat-history-panel .settings-tab-content .menu-item--select input[type="url"],
+#chat-history-panel .settings-tab-content .menu-item--select input[type="search"],
+#chat-history-panel .settings-tab-content .menu-item--select input[type="password"],
+#chat-history-panel .settings-tab-content .menu-item--select input[type="email"] {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-}
-
-#chat-history-panel .settings-tab-content .menu-item .switch {
-    justify-self: end;
 }
 
 #chat-history-panel .settings-tab-content .menu-item--stack {
