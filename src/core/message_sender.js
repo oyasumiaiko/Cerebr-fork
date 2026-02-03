@@ -1319,6 +1319,52 @@ export function createMessageSender(appContext) {
   ];
 
   /**
+   * 对外暴露的“命令元信息列表”，用于 UI 提示展示。
+   * 注意：这里不暴露 handler，避免 UI 误调用业务逻辑。
+   * @returns {Array<{name: string, usage: string, description: string, aliases: string[]}>}
+   */
+  function getSlashCommandList() {
+    return slashCommandRegistry.map((item) => ({
+      name: item.name,
+      usage: item.usage,
+      description: item.description,
+      aliases: Array.isArray(item.aliases) ? item.aliases.slice() : []
+    }));
+  }
+
+  /**
+   * 解析输入文本，生成“用于 UI 展示”的斜杠命令提示列表。
+   * @param {string} rawText
+   * @returns {{ isActive: boolean, keyword: string, commands: Array<{name: string, usage: string, description: string, aliases: string[]}> }}
+   */
+  function getSlashCommandHints(rawText) {
+    const trimmed = (typeof rawText === 'string' ? rawText : '').trimStart();
+    if (!trimmed.startsWith('/')) {
+      return { isActive: false, keyword: '', commands: [] };
+    }
+    if (trimmed.startsWith('//')) {
+      return { isActive: false, keyword: '', commands: [] };
+    }
+
+    const body = trimmed.slice(1);
+    const rawKeyword = body.trim().split(/\s+/)[0] || '';
+    const keyword = rawKeyword.toLowerCase();
+    const all = getSlashCommandList();
+
+    if (!keyword) {
+      return { isActive: true, keyword: '', commands: all };
+    }
+
+    const commands = all.filter((item) => {
+      if (!item || !item.name) return false;
+      if (item.name.startsWith(keyword)) return true;
+      return Array.isArray(item.aliases) && item.aliases.some(alias => alias.startsWith(keyword));
+    });
+
+    return { isActive: true, keyword, commands };
+  }
+
+  /**
    * 解析并执行斜杠命令（仅在用户直接输入时调用）。
    * @param {string} rawText
    * @param {{ hasImages: boolean }} options
@@ -4172,6 +4218,8 @@ export function createMessageSender(appContext) {
     setCurrentConversationId,
     getCurrentConversationId,
     getShouldAutoScroll,
-    setShouldAutoScroll
+    setShouldAutoScroll,
+    getSlashCommandList,
+    getSlashCommandHints
   };
 } 

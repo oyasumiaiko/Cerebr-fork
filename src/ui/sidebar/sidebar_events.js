@@ -26,6 +26,7 @@ export function registerSidebarEventHandlers(appContext) {
   setupWindowMessageHandlers(appContext);
   setupTempModeIndicator(appContext);
   setupMessageInputHandlers(appContext);
+  setupSlashCommandHints(appContext);
   setupChatActionButtons(appContext);
   setupDebugButton(appContext);
   setupMemoryManagement(appContext);
@@ -1060,6 +1061,157 @@ function setupWindowMessageHandlers(appContext) {
   });
 }
 
+/**
+ * 斜杠命令提示面板：在输入框中输入 "/" 时显示提示列表。
+ * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
+ */
+function setupSlashCommandHints(appContext) {
+  const input = appContext.dom.messageInput;
+  const panel = appContext.dom.slashCommandHints;
+  const list = appContext.dom.slashCommandHintsList;
+  const header = appContext.dom.slashCommandHintsHeader;
+  const sender = appContext.services.messageSender;
+
+  if (!input || !panel || !list) return;
+  if (!sender || typeof sender.getSlashCommandHints !== 'function') return;
+
+  let isPointerInside = false;
+
+  const setPanelVisible = (visible) => {
+    if (visible) {
+      panel.classList.add('visible');
+      panel.setAttribute('aria-hidden', 'false');
+    } else {
+      panel.classList.remove('visible');
+      panel.setAttribute('aria-hidden', 'true');
+    }
+  };
+
+  const clearList = () => {
+    while (list.firstChild) {
+      list.removeChild(list.firstChild);
+    }
+  };
+
+  const hideHints = () => {
+    clearList();
+    setPanelVisible(false);
+  };
+
+  const buildEmptyItem = (keyword) => {
+    const item = document.createElement('div');
+    item.className = 'slash-command-hint-item slash-command-hint-item--empty';
+    item.textContent = keyword ? `未找到匹配 “${keyword}” 的命令` : '暂无可用命令';
+    return item;
+  };
+
+  const buildCommandItem = (command) => {
+    const item = document.createElement('div');
+    item.className = 'slash-command-hint-item';
+    item.dataset.command = command.name;
+
+    const main = document.createElement('div');
+    main.className = 'slash-command-hint-main';
+
+    const title = document.createElement('div');
+    title.className = 'slash-command-hint-title';
+    title.textContent = `/${command.name}`;
+
+    if (Array.isArray(command.aliases) && command.aliases.length > 0) {
+      const alias = document.createElement('span');
+      alias.className = 'slash-command-hint-alias';
+      alias.textContent = `别名：${command.aliases.map(a => `/${a}`).join('、')}`;
+      title.appendChild(alias);
+    }
+
+    const desc = document.createElement('div');
+    desc.className = 'slash-command-hint-desc';
+    desc.textContent = command.description || '';
+
+    main.appendChild(title);
+    main.appendChild(desc);
+
+    const usage = document.createElement('div');
+    usage.className = 'slash-command-hint-usage';
+    usage.textContent = command.usage || '';
+
+    item.appendChild(main);
+    item.appendChild(usage);
+    return item;
+  };
+
+  const updateHints = () => {
+    const text = input.textContent || '';
+    const result = sender.getSlashCommandHints(text);
+    if (!result || !result.isActive) {
+      hideHints();
+      return;
+    }
+
+    const commands = Array.isArray(result.commands) ? result.commands : [];
+    const keyword = result.keyword || '';
+
+    clearList();
+    if (header) {
+      const title = keyword ? `斜杠命令 · 匹配 "${keyword}"` : '斜杠命令';
+      header.textContent = title;
+    }
+
+    if (commands.length === 0) {
+      list.appendChild(buildEmptyItem(keyword));
+      setPanelVisible(true);
+      return;
+    }
+
+    commands.forEach((command) => {
+      list.appendChild(buildCommandItem(command));
+    });
+
+    setPanelVisible(true);
+  };
+
+  const applyCommandToInput = (commandName) => {
+    if (!commandName) return;
+    input.textContent = `/${commandName} `;
+    appContext.services.inputController?.focusToEnd?.();
+    updateHints();
+  };
+
+  panel.addEventListener('pointerenter', () => { isPointerInside = true; });
+  panel.addEventListener('pointerleave', () => { isPointerInside = false; });
+
+  panel.addEventListener('mousedown', (e) => {
+    // 阻止点击提示面板时输入框失焦
+    e.preventDefault();
+  });
+
+  panel.addEventListener('click', (e) => {
+    const item = e.target?.closest?.('.slash-command-hint-item');
+    const commandName = item?.dataset?.command;
+    if (!commandName) return;
+    applyCommandToInput(commandName);
+  });
+
+  input.addEventListener('input', updateHints);
+  input.addEventListener('focus', updateHints);
+  input.addEventListener('blur', () => {
+    // 如果鼠标停留在提示面板上，稍后再决定是否关闭
+    setTimeout(() => {
+      if (isPointerInside) return;
+      hideHints();
+    }, 80);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    hideHints();
+  });
+
+  // 供其他逻辑（发送、清空等）主动关闭提示面板
+  appContext.utils.hideSlashCommandHints = hideHints;
+  appContext.utils.updateSlashCommandHints = updateHints;
+}
+
 function setupTempModeIndicator(appContext) {
   document.addEventListener('TEMP_MODE_CHANGED', (e) => {
     const isOn = !!e?.detail?.isOn;
@@ -1096,6 +1248,8 @@ function setupMessageInputHandlers(appContext) {
     // 阻止事件传播，避免其他监听器（如全局或父级）误判为普通 Enter 而触发发送
     // 特别是 Alt+Enter 仅用于“添加到历史（未发送）”，不应触发其他逻辑
     e.stopPropagation();
+    // 按下 Enter 后优先关闭斜杠命令提示面板，避免残留
+    appContext.utils.hideSlashCommandHints?.();
 
     // 兼容右 Alt（AltGr）：
     // - 在部分键盘布局/浏览器实现中，右 Alt 会表现为 AltGraph；
@@ -1282,7 +1436,10 @@ function setupChatActionButtons(appContext) {
   });
 
   appContext.dom.quickSummary.addEventListener('click', () => appContext.services.messageSender.performQuickSummary());
-  appContext.dom.sendButton.addEventListener('click', () => appContext.services.messageSender.sendMessage());
+  appContext.dom.sendButton.addEventListener('click', () => {
+    appContext.utils.hideSlashCommandHints?.();
+    appContext.services.messageSender.sendMessage();
+  });
 
   if (appContext.dom.chatHistoryMenuItem) {
     appContext.dom.chatHistoryMenuItem.addEventListener('click', async () => {
