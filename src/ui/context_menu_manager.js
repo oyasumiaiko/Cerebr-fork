@@ -49,6 +49,7 @@ export function createContextMenuManager(appContext) {
   const insertMessageSubmenuList = insertMessageSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateSubmenu = regenerateButton?.querySelector('.context-menu-submenu');
   const regenerateSubmenuList = regenerateSubmenu?.querySelector('.context-menu-submenu-list');
+  const regenerateApiHint = document.getElementById('regenerate-message-api-hint');
 
   // Services from appContext.services
   const messageSender = services.messageSender;
@@ -269,6 +270,78 @@ export function createContextMenuManager(appContext) {
     return `收藏 API ${index + 1}`;
   }
 
+  // 将任意 API 配置转换为可展示名称，避免出现空白小字。
+  function getApiDisplayName(config) {
+    const displayName = (typeof config?.displayName === 'string') ? config.displayName.trim() : '';
+    if (displayName) return displayName;
+    const modelName = (typeof config?.modelName === 'string') ? config.modelName.trim() : '';
+    if (modelName) return modelName;
+    const baseUrl = (typeof config?.baseUrl === 'string') ? config.baseUrl.trim() : '';
+    if (baseUrl) return baseUrl;
+    return 'API';
+  }
+
+  /**
+   * 统一解析“重新生成”的 API 参数，确保展示与实际发送一致。
+   * - 若传入 apiOverride（如收藏 API/指定 ID），直接使用；
+   * - 否则沿用 prompt 设置中的 model 偏好，未设置则回退为 follow_current。
+   *
+   * @param {string} originalMessageText
+   * @param {any} [apiOverride=null]
+   * @returns {any}
+   */
+  function resolveRegenerateApiParam(originalMessageText, apiOverride = null) {
+    if (apiOverride != null) return apiOverride;
+    let apiParam = 'follow_current';
+    try {
+      const promptSettingsManager = appContext.services.promptSettingsManager;
+      const prompts = (typeof promptSettingsManager?.getPrompts === 'function')
+        ? (promptSettingsManager.getPrompts() || {})
+        : {};
+      const content = (typeof originalMessageText === 'string') ? originalMessageText : '';
+      const promptType = (typeof messageProcessor?.getPromptTypeFromContent === 'function')
+        ? (messageProcessor.getPromptTypeFromContent(content, prompts) || 'none')
+        : 'none';
+      const modelPref = (prompts[promptType]?.model || '').trim();
+      apiParam = modelPref || 'follow_current';
+    } catch (_) {
+      apiParam = 'follow_current';
+    }
+    return apiParam;
+  }
+
+  /**
+   * 获取“重新生成”默认将使用的 API 配置，用于右键菜单小字提示。
+   * 说明：这里与发送逻辑保持一致——只有当 apiParam 能解析到明确配置时才覆盖。
+   *
+   * @param {string} originalMessageText
+   * @returns {Object|null}
+   */
+  function resolveRegenerateDisplayConfig(originalMessageText) {
+    const apiParam = resolveRegenerateApiParam(originalMessageText, null);
+    let overrideConfig = null;
+    if (apiParam != null && typeof apiManager?.resolveApiParam === 'function') {
+      if (typeof apiParam === 'string' && (apiParam === 'follow_current' || apiParam === 'selected')) {
+        overrideConfig = null;
+      } else {
+        overrideConfig = apiManager.resolveApiParam(apiParam) || null;
+      }
+    }
+    const apiContext = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
+      ? chatHistoryUI.resolveActiveConversationApiConfig()
+      : null;
+    const displayConfig = apiContext?.displayConfig || apiManager?.getSelectedConfig?.() || null;
+    return overrideConfig || displayConfig;
+  }
+
+  function updateRegenerateApiHint(originalMessageText) {
+    if (!regenerateApiHint) return;
+    const config = resolveRegenerateDisplayConfig(originalMessageText);
+    const label = getApiDisplayName(config);
+    regenerateApiHint.textContent = label;
+    regenerateApiHint.title = label;
+  }
+
   function buildApiParamFromSubmenuItem(item) {
     if (!item) return null;
     const apiId = item.dataset.apiId;
@@ -373,8 +446,13 @@ export function createContextMenuManager(appContext) {
     if (regenTarget) {
       renderRegenerateSubmenu();
       updateSubmenuDirection(regenerateButton, regenerateSubmenu);
+      updateRegenerateApiHint(regenTarget.originalMessageText);
     } else {
       regenerateButton.classList.remove('context-menu-item--submenu-left');
+      if (regenerateApiHint) {
+        regenerateApiHint.textContent = '';
+        regenerateApiHint.removeAttribute('title');
+      }
     }
 
     // “在此处插入”仅对有 messageId 的正式消息生效
@@ -481,16 +559,7 @@ export function createContextMenuManager(appContext) {
     } = regenTarget;
 
     try {
-      let apiParam = apiOverride;
-      if (apiParam == null) {
-        const prompts = appContext.services.promptSettingsManager.getPrompts();
-        apiParam = 'follow_current';
-        try {
-          const promptType = appContext.services.messageProcessor.getPromptTypeFromContent(originalMessageText, prompts) || 'none';
-          const modelPref = (prompts[promptType]?.model || '').trim();
-          apiParam = modelPref || 'follow_current';
-        } catch (_) { apiParam = 'follow_current'; }
-      }
+      const apiParam = resolveRegenerateApiParam(originalMessageText, apiOverride);
 
       // 关键：指定 targetAiMessageId，让发送层“原地替换”目标 AI 消息内容（不删除/不新增其他消息）
       messageSender.sendMessage({

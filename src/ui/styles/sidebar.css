@@ -2862,6 +2862,30 @@ input:checked + .slider::before {
     flex: 1;
 }
 
+.context-menu-item__label--stack {
+    align-items: flex-start;
+}
+
+.context-menu-item__label-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    min-width: 0;
+}
+
+.context-menu-item__hint {
+    margin-top: 2px;
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.context-menu-item__hint:empty {
+    display: none;
+}
+
 .context-menu-item__arrow {
     margin-left: auto;
     opacity: 0.7;
