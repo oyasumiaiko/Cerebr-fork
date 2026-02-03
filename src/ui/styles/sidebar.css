@@ -716,6 +716,14 @@ body.thread-resize-active * {
     /* border: 1px solid rgba(255, 255, 255, 0.1); */
 }
 
+/* 超长对话虚拟化：远离视口的消息仅保留高度占位，避免大块 DOM 持续参与渲染 */
+.message.message-virtualized {
+    visibility: hidden;
+    box-shadow: none;
+    background: transparent;
+    pointer-events: none;
+}
+
 /* 聊天记录历史跳转时禁用入场动画，避免定位消息出现延时 */
 #chat-container .message.skip-appear-animation {
     animation: none;

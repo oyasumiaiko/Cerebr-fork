@@ -281,6 +281,279 @@ export function createMessageProcessor(appContext) {
     return chatContainer;
   }
 
+  function resolveMessageListContainer(messageElement) {
+    if (!messageElement) return chatContainer;
+    const threadContainer = dom?.threadContainer || null;
+    if (threadContainer && threadContainer.contains(messageElement)) {
+      return threadContainer;
+    }
+    return chatContainer;
+  }
+
+  // --- 超长对话虚拟化（远距离消息折叠）---
+  // 目标：当消息数量极大时，只让“视野附近”的消息保持完整 DOM；
+  //      对于视野很远处的消息，仅保留高度占位，从而显著降低布局/绘制压力。
+  const messageVirtualizer = createMessageVirtualizer();
+
+  function createMessageVirtualizer() {
+    const virtualizedMap = new WeakMap();
+    const containerStateMap = new WeakMap();
+
+    // 可调参数：数值越大，越保守（渲染更多消息）；越小越激进（虚拟化更多消息）。
+    const MIN_MESSAGES_FOR_VIRTUALIZE = 120;
+    const KEEP_BUFFER_MULTIPLIER = 1.2; // 视口上下各保留 1.2x 高度
+    const DROP_BUFFER_MULTIPLIER = 2.8; // 超过 2.8x 视口高度才进入虚拟化
+    const MIN_KEEP_BUFFER_PX = 800;
+    const MIN_DROP_BUFFER_PX = 1600;
+    const PIN_TAIL_COUNT = 6; // 永远保留末尾若干消息（流式更新/快速查看）
+
+    function getContainerState(container) {
+      let state = containerStateMap.get(container);
+      if (!state) {
+        state = {
+          raf: null,
+          pending: false,
+          installed: false,
+          scrollHandler: null,
+          resizeObserver: null,
+          mutationObserver: null
+        };
+        containerStateMap.set(container, state);
+      }
+      return state;
+    }
+
+    function shouldPinMessage(messageEl, index, total, tailStart) {
+      if (!messageEl || !messageEl.classList) return true;
+      if (index >= tailStart) return true;
+      if (messageEl.classList.contains('loading-message')) return true;
+      if (messageEl.classList.contains('updating')) return true;
+      if (messageEl.classList.contains('regenerating')) return true;
+      if (messageEl.classList.contains('editing')) return true;
+      if (messageEl.dataset?.virtualPin === '1') return true;
+      try {
+        if (messageEl.contains(document.activeElement)) return true;
+      } catch (_) {}
+      return false;
+    }
+
+    function snapshotInlineStyle(messageEl) {
+      return {
+        height: messageEl.style.height || '',
+        minHeight: messageEl.style.minHeight || '',
+        boxSizing: messageEl.style.boxSizing || '',
+        overflow: messageEl.style.overflow || ''
+      };
+    }
+
+    function restoreInlineStyle(messageEl, snapshot) {
+      if (!messageEl) return;
+      messageEl.style.height = snapshot?.height || '';
+      messageEl.style.minHeight = snapshot?.minHeight || '';
+      messageEl.style.boxSizing = snapshot?.boxSizing || '';
+      messageEl.style.overflow = snapshot?.overflow || '';
+    }
+
+    function virtualizeMessage(messageEl) {
+      if (!messageEl || messageEl.dataset?.virtualized === '1') return;
+      const measuredHeight = messageEl.offsetHeight || 0;
+      if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) return;
+
+      const fragment = document.createDocumentFragment();
+      while (messageEl.firstChild) {
+        fragment.appendChild(messageEl.firstChild);
+      }
+
+      const styleSnapshot = snapshotInlineStyle(messageEl);
+      messageEl.style.boxSizing = 'border-box';
+      messageEl.style.height = `${Math.round(measuredHeight)}px`;
+      messageEl.style.minHeight = `${Math.round(measuredHeight)}px`;
+      messageEl.style.overflow = 'hidden';
+      messageEl.classList.add('message-virtualized');
+      messageEl.dataset.virtualized = '1';
+      messageEl.dataset.virtualHeight = String(Math.round(measuredHeight));
+
+      virtualizedMap.set(messageEl, { fragment, styleSnapshot });
+    }
+
+    function restoreMessage(messageEl) {
+      if (!messageEl || messageEl.dataset?.virtualized !== '1') return;
+      const record = virtualizedMap.get(messageEl);
+      if (record) {
+        while (messageEl.firstChild) {
+          messageEl.removeChild(messageEl.firstChild);
+        }
+        messageEl.appendChild(record.fragment);
+        restoreInlineStyle(messageEl, record.styleSnapshot);
+        virtualizedMap.delete(messageEl);
+      } else {
+        restoreInlineStyle(messageEl, null);
+      }
+      messageEl.classList.remove('message-virtualized');
+      delete messageEl.dataset.virtualized;
+      delete messageEl.dataset.virtualHeight;
+    }
+
+    function ensureMessageVisible(messageEl) {
+      if (!messageEl) return;
+      if (messageEl.dataset?.virtualized === '1') {
+        restoreMessage(messageEl);
+      }
+    }
+
+    // 二分查找：找到第一个 bottom > offset 的消息索引
+    function findFirstIndexByBottom(list, offset) {
+      let low = 0;
+      let high = list.length - 1;
+      let first = list.length;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const el = list[mid];
+        const bottom = (el?.offsetTop || 0) + (el?.offsetHeight || 0);
+        if (bottom <= offset) {
+          low = mid + 1;
+        } else {
+          first = mid;
+          high = mid - 1;
+        }
+      }
+      return first;
+    }
+
+    // 二分查找：找到最后一个 top < offset 的消息索引
+    function findLastIndexByTop(list, offset) {
+      let low = 0;
+      let high = list.length - 1;
+      let last = -1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const el = list[mid];
+        const top = el?.offsetTop || 0;
+        if (top < offset) {
+          last = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return last;
+    }
+
+    function restoreAll(container) {
+      if (!container) return;
+      const nodes = container.querySelectorAll('.message[data-virtualized="1"]');
+      nodes.forEach((node) => restoreMessage(node));
+    }
+
+    function updateContainer(container) {
+      if (!container) return;
+      const messageNodes = Array.from(container.querySelectorAll('.message'));
+      const messages = messageNodes.filter((node) => (node?.offsetHeight || 0) > 0);
+      const total = messages.length;
+      if (!total) return;
+
+      if (total < MIN_MESSAGES_FOR_VIRTUALIZE) {
+        restoreAll(container);
+        return;
+      }
+
+      const viewportHeight = container.clientHeight || 0;
+      if (viewportHeight <= 0) return;
+      const viewportTop = container.scrollTop || 0;
+      const viewportBottom = viewportTop + viewportHeight;
+
+      const keepBuffer = Math.max(MIN_KEEP_BUFFER_PX, viewportHeight * KEEP_BUFFER_MULTIPLIER);
+      const dropBuffer = Math.max(MIN_DROP_BUFFER_PX, viewportHeight * DROP_BUFFER_MULTIPLIER);
+
+      const keepTop = viewportTop - keepBuffer;
+      const keepBottom = viewportBottom + keepBuffer;
+      const dropTop = viewportTop - dropBuffer;
+      const dropBottom = viewportBottom + dropBuffer;
+
+      const firstKeepIdx = findFirstIndexByBottom(messages, keepTop);
+      const lastKeepIdx = findLastIndexByTop(messages, keepBottom);
+      const firstDropIdx = findFirstIndexByBottom(messages, dropTop);
+      const lastDropIdx = findLastIndexByTop(messages, dropBottom);
+
+      const tailStart = Math.max(total - PIN_TAIL_COUNT, 0);
+
+      for (let i = 0; i < total; i += 1) {
+        const node = messages[i];
+        if (!node || !node.classList) continue;
+        const isVirtualized = node.dataset?.virtualized === '1';
+        const pinned = shouldPinMessage(node, i, total, tailStart);
+
+        if (pinned) {
+          if (isVirtualized) restoreMessage(node);
+          continue;
+        }
+
+        const inKeepRange = i >= firstKeepIdx && i <= lastKeepIdx;
+        const outsideDropRange = i < firstDropIdx || i > lastDropIdx;
+
+        if (isVirtualized) {
+          if (inKeepRange) restoreMessage(node);
+          continue;
+        }
+        if (outsideDropRange) {
+          virtualizeMessage(node);
+        }
+      }
+    }
+
+    function scheduleUpdate(container) {
+      if (!container) return;
+      const state = getContainerState(container);
+      if (state.raf) {
+        state.pending = true;
+        return;
+      }
+      state.raf = requestAnimationFrame(() => {
+        state.raf = null;
+        updateContainer(container);
+        if (state.pending) {
+          state.pending = false;
+          scheduleUpdate(container);
+        }
+      });
+    }
+
+    function installContainer(container) {
+      if (!container) return;
+      const state = getContainerState(container);
+      if (state.installed) return;
+
+      const onScroll = () => scheduleUpdate(container);
+      container.addEventListener('scroll', onScroll, { passive: true });
+      state.scrollHandler = onScroll;
+
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => scheduleUpdate(container));
+        ro.observe(container);
+        state.resizeObserver = ro;
+      }
+
+      const mo = new MutationObserver(() => scheduleUpdate(container));
+      mo.observe(container, { childList: true });
+      state.mutationObserver = mo;
+
+      state.installed = true;
+    }
+
+    function init() {
+      installContainer(chatContainer);
+      installContainer(dom?.threadContainer || null);
+      scheduleUpdate(chatContainer);
+      scheduleUpdate(dom?.threadContainer || null);
+    }
+
+    return {
+      init,
+      scheduleUpdate,
+      ensureMessageVisible
+    };
+  }
+
   /**
    * 设置或更新思考过程的显示区域
    * @param {HTMLElement} messageWrapperDiv - 包裹单条消息的顶层div (e.g., .message)
@@ -548,11 +821,11 @@ export function createMessageProcessor(appContext) {
             });
           }
         });
-        messageDiv.dataset.dblclickListenerAdded = 'true';
-      }
-    } else {
-      messageDiv = null;
+      messageDiv.dataset.dblclickListenerAdded = 'true';
     }
+  } else {
+    messageDiv = null;
+  }
     
     if (!skipHistory) {
       if (messageIdToUpdate) {
@@ -646,6 +919,9 @@ export function createMessageProcessor(appContext) {
     } catch (e) {
       console.warn('应用划词线程高亮失败:', e);
     }
+    if (shouldRenderDom && messageDiv && targetContainer) {
+      messageVirtualizer.scheduleUpdate(targetContainer);
+    }
     return messageDiv;
   }
 
@@ -659,6 +935,8 @@ export function createMessageProcessor(appContext) {
   function updateAIMessage(messageId, newAnswerContent, newThoughtsRaw, groundingMetadata) {
     const messageDiv = resolveMessageElement(messageId);
     const node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
+
+    messageVirtualizer.ensureMessageVisible(messageDiv);
 
     // 统一拆分 <think> 思考段落，保证思考摘要独立存储与展示
     let safeAnswerContent = newAnswerContent;
@@ -773,6 +1051,7 @@ export function createMessageProcessor(appContext) {
       console.warn('更新 AI 消息时应用划词线程高亮失败:', e);
     }
     scrollToBottom(resolveScrollContainerForMessage(messageDiv));
+    messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageDiv));
   }
 
   /**
@@ -1193,6 +1472,7 @@ export function createMessageProcessor(appContext) {
 
   // 在创建消息处理器时安装一次全局链接拦截器
   installMarkdownLinkInterceptor();
+  messageVirtualizer.init();
 
   /**
    * 预处理 Markdown 文本，修正 "**bold**text" 这类连写导致的粗体解析问题
