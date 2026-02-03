@@ -1036,6 +1036,12 @@ body.thread-resize-active * {
     border-color: color-mix(in srgb, var(--cerebr-border-color) 40%, transparent);
 }
 
+.slash-command-hint-item.is-active {
+    background-color: var(--cerebr-message-user-bg);
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 55%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 45%, transparent);
+}
+
 .slash-command-hint-main {
     display: flex;
     flex-direction: column;

@@ -1208,24 +1208,6 @@ export function createMessageSender(appContext) {
     };
   }
 
-  /**
-   * 构建斜杠命令帮助文本（Markdown）。
-   * @param {Array<Object>} commandList
-   * @returns {string}
-   */
-  function buildSlashCommandHelpText(commandList) {
-    const lines = ['可用斜杠命令：', ''];
-    commandList.forEach((cmd) => {
-      const aliases = Array.isArray(cmd.aliases)
-        ? cmd.aliases.filter(Boolean).map(alias => `/${alias}`)
-        : [];
-      const aliasText = aliases.length > 0 ? `（别名：${aliases.join('、')}）` : '';
-      lines.push(`- ${cmd.usage}：${cmd.description}${aliasText}`);
-    });
-    lines.push('', '提示：输入 `//` 可发送以 `/` 开头的普通文本。');
-    return lines.join('\n');
-  }
-
   // 斜杠命令定义（基础版）
   const slashCommandRegistry = [
     {
@@ -1234,9 +1216,11 @@ export function createMessageSender(appContext) {
       usage: '/help',
       description: '显示可用斜杠命令',
       handler: async () => {
-        const helpText = buildSlashCommandHelpText(slashCommandRegistry);
-        messageProcessor.appendMessage(helpText, 'ai', true);
-      }
+        if (typeof showNotification === 'function') {
+          showNotification({ message: '输入 / 即可在输入框上方查看斜杠命令', type: 'info' });
+        }
+      },
+      requiresArgs: false
     },
     {
       name: 'clear',
@@ -1248,7 +1232,8 @@ export function createMessageSender(appContext) {
         if (typeof showNotification === 'function') {
           showNotification('已清空当前对话');
         }
-      }
+      },
+      requiresArgs: false
     },
     {
       name: 'stop',
@@ -1260,7 +1245,8 @@ export function createMessageSender(appContext) {
         if (typeof showNotification === 'function') {
           showNotification(stopped ? '已停止生成' : '当前没有进行中的请求');
         }
-      }
+      },
+      requiresArgs: false
     },
     {
       name: 'temp',
@@ -1286,6 +1272,144 @@ export function createMessageSender(appContext) {
           showNotification(status);
         }
         return { ok: true };
+      },
+      requiresArgs: false,
+      getArgSuggestions: ({ keyword }) => {
+        const candidates = ['on', 'off', 'toggle'];
+        const lower = String(keyword || '').toLowerCase();
+        return candidates
+          .filter(item => !lower || item.startsWith(lower))
+          .map(item => ({
+            value: item,
+            label: item,
+            description: item === 'toggle' ? '切换模式' : (item === 'on' ? '进入纯对话模式' : '退出纯对话模式')
+          }));
+      }
+    },
+    {
+      name: 'model',
+      aliases: ['m', 'api'],
+      usage: '/model <模型名称>',
+      description: '切换模型/API 配置',
+      requiresArgs: true,
+      getArgSuggestions: ({ keyword }) => {
+        const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
+        const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+        const currentConfig = apiManager.getSelectedConfig?.() || null;
+        const currentId = currentConfig?.id || null;
+
+        const buildText = (config, index) => {
+          const displayName = config.displayName || '';
+          const modelName = config.modelName || '';
+          const baseUrl = config.baseUrl || '';
+          const title = displayName || modelName || baseUrl || `配置 ${index + 1}`;
+          const preferDisplayAsValue = displayName && !/\s/.test(displayName);
+          const value = preferDisplayAsValue
+            ? displayName
+            : (modelName || config.id || baseUrl || String(index + 1));
+          const detailParts = [];
+          if (modelName && modelName !== title) detailParts.push(modelName);
+          if (baseUrl) detailParts.push(baseUrl);
+          if (config.id && config.id === currentId) detailParts.push('当前');
+          return {
+            value,
+            label: title,
+            description: detailParts.join(' · ')
+          };
+        };
+
+        const items = allConfigs.map(buildText);
+        if (!normalizedKeyword) return items;
+
+        const match = (item) => {
+          const haystack = `${item.label} ${item.value} ${item.description}`.toLowerCase();
+          return haystack.includes(normalizedKeyword);
+        };
+
+        return items.filter(match);
+      },
+      handler: async ({ args, argsText }) => {
+        const keywordRaw = (argsText || '').trim();
+        if (!keywordRaw) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: '用法：/model <模型名称>', type: 'warning' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
+        if (allConfigs.length === 0) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: '未找到可用的 API 配置', type: 'warning' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        const keyword = keywordRaw.toLowerCase();
+        let targetIndex = -1;
+
+        // 0) 纯数字：视为 1-based 索引
+        if (/^\d+$/.test(keyword)) {
+          const parsedIndex = parseInt(keyword, 10) - 1;
+          if (Number.isFinite(parsedIndex) && parsedIndex >= 0 && parsedIndex < allConfigs.length) {
+            targetIndex = parsedIndex;
+          }
+        }
+
+        // 1) 尝试使用内置解析（支持 id / displayName / modelName 等）
+        if (targetIndex < 0 && typeof apiManager.resolveApiParam === 'function') {
+          try {
+            const resolved = apiManager.resolveApiParam(keywordRaw);
+            if (resolved) {
+              targetIndex = allConfigs.findIndex(cfg => cfg.id && resolved.id && cfg.id === resolved.id);
+            }
+          } catch (_) {}
+        }
+
+        // 2) 精确匹配（displayName / modelName / baseUrl / id）
+        if (targetIndex < 0) {
+          targetIndex = allConfigs.findIndex((cfg) => {
+            const candidates = [cfg.displayName, cfg.modelName, cfg.baseUrl, cfg.id]
+              .filter(Boolean)
+              .map(val => String(val).toLowerCase());
+            return candidates.includes(keyword);
+          });
+        }
+
+        // 3) 模糊匹配：仅当唯一命中时才采用
+        if (targetIndex < 0) {
+          const fuzzyMatches = allConfigs
+            .map((cfg, index) => ({
+              index,
+              haystack: `${cfg.displayName || ''} ${cfg.modelName || ''} ${cfg.baseUrl || ''} ${cfg.id || ''}`.toLowerCase()
+            }))
+            .filter(item => item.haystack.includes(keyword));
+          if (fuzzyMatches.length === 1) {
+            targetIndex = fuzzyMatches[0].index;
+          }
+        }
+
+        if (targetIndex < 0) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: `未找到匹配的模型：${keywordRaw}`, type: 'warning' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        const success = apiManager.setSelectedIndex?.(targetIndex);
+        const picked = allConfigs[targetIndex];
+        if (success === false) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: '切换模型失败，请稍后重试', type: 'error' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        if (typeof showNotification === 'function') {
+          const display = picked?.displayName || picked?.modelName || picked?.baseUrl || '已切换模型';
+          showNotification(`已切换到 ${display}`);
+        }
+        return { ok: true };
       }
     },
     {
@@ -1302,7 +1426,8 @@ export function createMessageSender(appContext) {
         }
         await performQuickSummary();
         return { ok: true };
-      }
+      },
+      requiresArgs: false
     },
     {
       name: 'history',
@@ -1314,7 +1439,8 @@ export function createMessageSender(appContext) {
           services.uiManager?.closeExclusivePanels?.();
           await chatHistoryUI?.showChatHistoryPanel?.('history');
         } catch (_) {}
-      }
+      },
+      requiresArgs: false
     }
   ];
 
@@ -1340,28 +1466,115 @@ export function createMessageSender(appContext) {
   function getSlashCommandHints(rawText) {
     const trimmed = (typeof rawText === 'string' ? rawText : '').trimStart();
     if (!trimmed.startsWith('/')) {
-      return { isActive: false, keyword: '', commands: [] };
+      return { isActive: false, keyword: '', commands: [], items: [] };
     }
     if (trimmed.startsWith('//')) {
-      return { isActive: false, keyword: '', commands: [] };
+      return { isActive: false, keyword: '', commands: [], items: [] };
     }
 
     const body = trimmed.slice(1);
-    const rawKeyword = body.trim().split(/\s+/)[0] || '';
-    const keyword = rawKeyword.toLowerCase();
-    const all = getSlashCommandList();
+    const hasTrailingSpace = /\s$/.test(body);
+    const normalizedBody = body.trim();
+    const tokens = normalizedBody ? normalizedBody.split(/\s+/) : [];
+    const commandToken = tokens[0] || '';
+    const argsTokens = tokens.slice(1);
+    const commandKeyword = commandToken.toLowerCase();
 
-    if (!keyword) {
-      return { isActive: true, keyword: '', commands: all };
+    const registry = slashCommandRegistry.slice();
+    const allCommands = getSlashCommandList();
+
+    if (!commandKeyword) {
+      return { isActive: true, keyword: '', commands: allCommands, items: buildHintItemsFromCommands(registry, '') };
     }
 
-    const commands = all.filter((item) => {
+    const matchedCommands = registry.filter((item) => {
       if (!item || !item.name) return false;
-      if (item.name.startsWith(keyword)) return true;
-      return Array.isArray(item.aliases) && item.aliases.some(alias => alias.startsWith(keyword));
+      if (item.name.startsWith(commandKeyword)) return true;
+      return Array.isArray(item.aliases) && item.aliases.some(alias => alias.startsWith(commandKeyword));
     });
 
-    return { isActive: true, keyword, commands };
+    const matchedPublic = allCommands.filter((item) => {
+      if (!item || !item.name) return false;
+      if (item.name.startsWith(commandKeyword)) return true;
+      return Array.isArray(item.aliases) && item.aliases.some(alias => alias.startsWith(commandKeyword));
+    });
+
+    const primaryCommand = (() => {
+      const exactByName = matchedCommands.find(item => item.name === commandKeyword);
+      if (exactByName) return exactByName;
+      const exactByAlias = matchedCommands.find(item => Array.isArray(item.aliases) && item.aliases.includes(commandKeyword));
+      if (exactByAlias) return exactByAlias;
+      if (matchedCommands.length === 1) return matchedCommands[0];
+      return null;
+    })();
+
+    const items = buildHintItemsFromCommands(matchedCommands, commandKeyword);
+
+    const shouldShowArgs = !!primaryCommand
+      && typeof primaryCommand.getArgSuggestions === 'function'
+      && (
+        argsTokens.length > 0
+        || hasTrailingSpace
+        || (matchedCommands.length === 1 && commandKeyword.length > 0)
+      );
+
+    if (shouldShowArgs) {
+      const argKeyword = hasTrailingSpace ? '' : (argsTokens[argsTokens.length - 1] || '');
+      const argSuggestions = primaryCommand.getArgSuggestions({
+        keyword: argKeyword,
+        args: argsTokens,
+        command: primaryCommand
+      }) || [];
+
+      argSuggestions.forEach((arg) => {
+        const value = typeof arg?.value === 'string' ? arg.value : '';
+        const label = typeof arg?.label === 'string' ? arg.label : value;
+        const description = typeof arg?.description === 'string' ? arg.description : '';
+        if (!value && !label) return;
+        items.push({
+          key: `${primaryCommand.name}::${value || label}`,
+          kind: 'argument',
+          label,
+          description,
+          usage: `/${primaryCommand.name} ${value || label}`,
+          applyText: `/${primaryCommand.name} ${value || label}`,
+          executeOnEnter: true
+        });
+      });
+    }
+
+    return {
+      isActive: true,
+      keyword: commandKeyword,
+      commands: matchedPublic,
+      items,
+      context: {
+        commandToken,
+        argsTokens,
+        primaryCommand: primaryCommand?.name || ''
+      }
+    };
+  }
+
+  /**
+   * 将命令列表映射为提示项列表（用于 UI 渲染）。
+   * @param {Array<Object>} commands
+   * @param {string} keyword
+   * @returns {Array<Object>}
+   */
+  function buildHintItemsFromCommands(commands, keyword) {
+    return (commands || []).map((cmd) => {
+      const requiresArgs = !!cmd?.requiresArgs;
+      return {
+        key: `cmd::${cmd.name}`,
+        kind: 'command',
+        label: `/${cmd.name}`,
+        description: cmd.description || '',
+        usage: cmd.usage || '',
+        applyText: requiresArgs ? `/${cmd.name} ` : `/${cmd.name}`,
+        executeOnEnter: !requiresArgs
+      };
+    });
   }
 
   /**

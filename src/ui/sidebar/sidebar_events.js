@@ -1076,14 +1076,22 @@ function setupSlashCommandHints(appContext) {
   if (!sender || typeof sender.getSlashCommandHints !== 'function') return;
 
   let isPointerInside = false;
+  const hintState = {
+    items: [],
+    activeIndex: -1,
+    isVisible: false,
+    lastActiveKey: ''
+  };
 
   const setPanelVisible = (visible) => {
     if (visible) {
       panel.classList.add('visible');
       panel.setAttribute('aria-hidden', 'false');
+      hintState.isVisible = true;
     } else {
       panel.classList.remove('visible');
       panel.setAttribute('aria-hidden', 'true');
+      hintState.isVisible = false;
     }
   };
 
@@ -1095,6 +1103,9 @@ function setupSlashCommandHints(appContext) {
 
   const hideHints = () => {
     clearList();
+    hintState.items = [];
+    hintState.activeIndex = -1;
+    hintState.lastActiveKey = '';
     setPanelVisible(false);
   };
 
@@ -1105,39 +1116,71 @@ function setupSlashCommandHints(appContext) {
     return item;
   };
 
-  const buildCommandItem = (command) => {
-    const item = document.createElement('div');
-    item.className = 'slash-command-hint-item';
-    item.dataset.command = command.name;
+  const buildHintItem = (hintItem) => {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'slash-command-hint-item';
+    itemEl.dataset.key = hintItem.key || '';
+    itemEl.dataset.kind = hintItem.kind || 'command';
+    itemEl.dataset.apply = hintItem.applyText || '';
+    itemEl.dataset.execute = hintItem.executeOnEnter ? '1' : '0';
 
     const main = document.createElement('div');
     main.className = 'slash-command-hint-main';
 
     const title = document.createElement('div');
     title.className = 'slash-command-hint-title';
-    title.textContent = `/${command.name}`;
-
-    if (Array.isArray(command.aliases) && command.aliases.length > 0) {
-      const alias = document.createElement('span');
-      alias.className = 'slash-command-hint-alias';
-      alias.textContent = `别名：${command.aliases.map(a => `/${a}`).join('、')}`;
-      title.appendChild(alias);
-    }
+    title.textContent = hintItem.label || '';
 
     const desc = document.createElement('div');
     desc.className = 'slash-command-hint-desc';
-    desc.textContent = command.description || '';
+    desc.textContent = hintItem.description || '';
 
     main.appendChild(title);
     main.appendChild(desc);
 
     const usage = document.createElement('div');
     usage.className = 'slash-command-hint-usage';
-    usage.textContent = command.usage || '';
+    usage.textContent = hintItem.usage || '';
 
-    item.appendChild(main);
-    item.appendChild(usage);
-    return item;
+    itemEl.appendChild(main);
+    itemEl.appendChild(usage);
+    return itemEl;
+  };
+
+  const setActiveIndex = (index) => {
+    const items = list.querySelectorAll('.slash-command-hint-item');
+    const total = items.length;
+    if (!total) {
+      hintState.activeIndex = -1;
+      return;
+    }
+    const clamped = Math.max(0, Math.min(index, total - 1));
+    items.forEach((el, idx) => {
+      if (idx === clamped) {
+        el.classList.add('is-active');
+        el.setAttribute('aria-selected', 'true');
+        hintState.lastActiveKey = el.dataset.key || '';
+      } else {
+        el.classList.remove('is-active');
+        el.setAttribute('aria-selected', 'false');
+      }
+    });
+    hintState.activeIndex = clamped;
+    try {
+      const activeEl = items[clamped];
+      activeEl?.scrollIntoView?.({ block: 'nearest' });
+    } catch (_) {}
+  };
+
+  const resolveDefaultActiveIndex = () => {
+    const items = list.querySelectorAll('.slash-command-hint-item');
+    if (!items.length) return -1;
+    if (hintState.lastActiveKey) {
+      for (let i = 0; i < items.length; i += 1) {
+        if (items[i].dataset.key === hintState.lastActiveKey) return i;
+      }
+    }
+    return 0;
   };
 
   const updateHints = () => {
@@ -1148,7 +1191,7 @@ function setupSlashCommandHints(appContext) {
       return;
     }
 
-    const commands = Array.isArray(result.commands) ? result.commands : [];
+    const items = Array.isArray(result.items) ? result.items : [];
     const keyword = result.keyword || '';
 
     clearList();
@@ -1157,28 +1200,57 @@ function setupSlashCommandHints(appContext) {
       header.textContent = title;
     }
 
-    if (commands.length === 0) {
+    if (items.length === 0) {
       list.appendChild(buildEmptyItem(keyword));
       setPanelVisible(true);
       return;
     }
 
-    commands.forEach((command) => {
-      list.appendChild(buildCommandItem(command));
+    items.forEach((hintItem) => {
+      list.appendChild(buildHintItem(hintItem));
     });
 
     setPanelVisible(true);
+    hintState.items = items;
+    const nextIndex = resolveDefaultActiveIndex();
+    if (nextIndex >= 0) {
+      setActiveIndex(nextIndex);
+    }
   };
 
-  const applyCommandToInput = (commandName) => {
-    if (!commandName) return;
-    input.textContent = `/${commandName} `;
+  const applyHintToInput = (itemEl) => {
+    if (!itemEl) return;
+    const applyText = itemEl.dataset.apply || '';
+    if (!applyText) return;
+    input.textContent = applyText;
     appContext.services.inputController?.focusToEnd?.();
+    appContext.services.uiManager?.updateSendButtonState?.();
     updateHints();
+  };
+
+  const executeHintIfNeeded = (itemEl) => {
+    if (!itemEl) return false;
+    const shouldExecute = itemEl.dataset.execute === '1';
+    if (!shouldExecute) return false;
+    const applyText = itemEl.dataset.apply || '';
+    if (!applyText) return false;
+    input.textContent = applyText;
+    appContext.services.inputController?.focusToEnd?.();
+    appContext.services.uiManager?.updateSendButtonState?.();
+    hideHints();
+    appContext.services.messageSender.sendMessage();
+    return true;
   };
 
   panel.addEventListener('pointerenter', () => { isPointerInside = true; });
   panel.addEventListener('pointerleave', () => { isPointerInside = false; });
+  panel.addEventListener('mousemove', (e) => {
+    const item = e.target?.closest?.('.slash-command-hint-item');
+    if (!item) return;
+    const items = list.querySelectorAll('.slash-command-hint-item');
+    const index = Array.from(items).indexOf(item);
+    if (index >= 0) setActiveIndex(index);
+  });
 
   panel.addEventListener('mousedown', (e) => {
     // 阻止点击提示面板时输入框失焦
@@ -1187,9 +1259,10 @@ function setupSlashCommandHints(appContext) {
 
   panel.addEventListener('click', (e) => {
     const item = e.target?.closest?.('.slash-command-hint-item');
-    const commandName = item?.dataset?.command;
-    if (!commandName) return;
-    applyCommandToInput(commandName);
+    if (!item) return;
+    if (!executeHintIfNeeded(item)) {
+      applyHintToInput(item);
+    }
   });
 
   input.addEventListener('input', updateHints);
@@ -1210,6 +1283,43 @@ function setupSlashCommandHints(appContext) {
   // 供其他逻辑（发送、清空等）主动关闭提示面板
   appContext.utils.hideSlashCommandHints = hideHints;
   appContext.utils.updateSlashCommandHints = updateHints;
+  appContext.utils.handleSlashCommandKeydown = (e) => {
+    if (!hintState.isVisible) return false;
+    if (!list || list.children.length === 0) return false;
+
+    const hasActionableItem = () => {
+      const items = list.querySelectorAll('.slash-command-hint-item');
+      return Array.from(items).some(el => (el.dataset.apply || '').trim());
+    };
+
+    if (!hasActionableItem()) return false;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = (e.key === 'ArrowDown') ? 1 : -1;
+      const nextIndex = hintState.activeIndex < 0 ? 0 : hintState.activeIndex + delta;
+      setActiveIndex(nextIndex);
+      return true;
+    }
+
+    if (e.key === 'Enter') {
+      const items = list.querySelectorAll('.slash-command-hint-item');
+      if (!items.length) return false;
+      const idx = hintState.activeIndex >= 0 ? hintState.activeIndex : 0;
+      const activeItem = items[idx];
+      if (!activeItem) return false;
+      if (!(activeItem.dataset.apply || '').trim()) return false;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!executeHintIfNeeded(activeItem)) {
+        applyHintToInput(activeItem);
+      }
+      return true;
+    }
+
+    return false;
+  };
 }
 
 function setupTempModeIndicator(appContext) {
@@ -1240,6 +1350,7 @@ function setupMessageInputHandlers(appContext) {
   input.addEventListener('compositionend', () => { appContext.state.isComposing = false; });
 
   input.addEventListener('keydown', async function (e) {
+    if (appContext.utils.handleSlashCommandKeydown?.(e)) return;
     if (e.key !== 'Enter') return;
     if (e.shiftKey) return;
     if (appContext.state.isComposing) return;
