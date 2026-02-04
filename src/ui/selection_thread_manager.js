@@ -1,4 +1,5 @@
 import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
+import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 
 /**
  * 划词线程管理器
@@ -2485,7 +2486,7 @@ export function createSelectionThreadManager(appContext) {
       return;
     }
     try {
-      await chrome.storage.sync.set({ [THREAD_LAYOUT_STORAGE_KEY]: pending });
+      await queueStorageSet('sync', { [THREAD_LAYOUT_STORAGE_KEY]: pending }, { flush: 'now' });
       threadLayoutSyncState.lastSyncAt = Date.now();
       threadLayoutSyncState.lastSignature = threadLayoutSyncState.pendingSignature || getThreadLayoutSignature(pending);
       threadLayoutSyncState.pendingPayload = null;

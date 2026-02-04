@@ -2,6 +2,7 @@
  * 通用的 chrome.storage.sync 分片读写工具
  * 统一基于“按字节切分字符串”的策略，避免单项 8KB 限制
  */
+import { queueStorageSet } from './storage_write_queue_bridge.js';
 
 /**
  * 每项最大字节（留余量），chrome.storage.sync.QUOTA_BYTES_PER_ITEM = 8192
@@ -68,7 +69,7 @@ export async function setChunksToSync(chunkKeyBase, chunks, extraEntries = null)
   if (extraEntries && typeof extraEntries === 'object') {
     Object.assign(toSet, extraEntries);
   }
-  await chrome.storage.sync.set(toSet);
+  await queueStorageSet('sync', toSet, { flush: 'now' });
 }
 
 /**

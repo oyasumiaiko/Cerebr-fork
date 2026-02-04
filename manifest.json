@@ -75,6 +75,7 @@
       "matches": ["<all_urls>"],
       "js": [
         "lib/pdf.js",
+        "src/utils/storage_write_queue.js",
         "src/utils/element-picker.js",
         "src/extension/content.js"
       ],

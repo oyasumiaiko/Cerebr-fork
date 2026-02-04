@@ -18,6 +18,7 @@ import {
   getChunksFromSync,
   removeChunksByPrefix
 } from './sync_chunk.js';
+import { queueStorageSet } from './storage_write_queue_bridge.js';
 
 // 分片相关后缀约定（基于主键 key 派生）：
 // - metaKey: `${key}_chunks_meta`
@@ -74,7 +75,7 @@ export function createStorageService() {
         if (getStringByteLength(str) > (MAX_SYNC_ITEM_BYTES - 1000)) {
           await setLargeToSync(key, str);
         } else {
-          await chrome.storage.sync.set({ [key]: str });
+          await queueStorageSet('sync', { [key]: str }, { flush: 'now' });
           // 清理可能存在的历史分片
           await removeLargeFromSync(key);
         }

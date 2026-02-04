@@ -28,6 +28,7 @@ import {
   getChunksFromSync,
   removeChunksByPrefix
 } from '../utils/sync_chunk.js';
+import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 
 /**
  * 获取字符串的UTF-8字节长度
@@ -51,9 +52,7 @@ export async function migrateOldPromptSettings() {
     if (!oldData) return;
 
     const migrationTasks = Object.entries(oldData).map(([type, settings]) =>
-      new Promise(resolve => {
-        chrome.storage.sync.set({ [`${PROMPT_KEY_PREFIX}${type}`]: settings }, resolve);
-      })
+      queueStorageSet('sync', { [`${PROMPT_KEY_PREFIX}${type}`]: settings }, { flush: 'now' })
     );
     await Promise.all(migrationTasks);
 
@@ -143,7 +142,7 @@ export async function savePromptSettingsBulk(items, previousSavedState = {}) {
 
     if (itemBytes < MAX_SYNC_ITEM_BYTES) {
       // 直接存储
-      saveOps.push(chrome.storage.sync.set({ [mainKey]: itemToStore }));
+      saveOps.push(queueStorageSet('sync', { [mainKey]: itemToStore }, { flush: 'now' }));
       newState[type] = { prompt: item.prompt, model: item.model };
       continue;
     }

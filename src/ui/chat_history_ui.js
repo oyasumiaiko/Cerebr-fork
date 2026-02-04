@@ -16,6 +16,7 @@ import {
   getDatabaseStats
 } from '../storage/indexeddb_helper.js';
 import { storageService } from '../utils/storage_service.js';
+import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { generateCandidateUrls } from '../utils/url_candidates.js';
 import { buildConversationSummaryFromMessages } from '../utils/conversation_title.js';
@@ -1324,7 +1325,7 @@ export function createChatHistoryUI(appContext) {
    */
   async function setPinnedIds(ids) {
     try {
-      await chrome.storage.sync.set({ [PINNED_STORAGE_KEY]: ids });
+      await queueStorageSet('sync', { [PINNED_STORAGE_KEY]: ids }, { flush: 'now' });
     } catch (error) {
       console.error('保存置顶 ID 失败:', error);
     }

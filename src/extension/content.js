@@ -6,6 +6,19 @@ console.log('Document readyState:', document.readyState);
 let currentSelection = "";
 // 存储已附加监听器的 iframe 窗口，防止重复操作
 const monitoredFrames = new WeakSet();
+// 统一的 sync 写入入口：优先走写入队列，避免高频触发配额
+const storageWriteQueue = globalThis.CerebrStorageWriteQueue || null;
+function queueSyncSet(payload) {
+    if (storageWriteQueue?.set) {
+        storageWriteQueue.set('sync', payload);
+        return;
+    }
+    try {
+        chrome.storage.sync.set(payload);
+    } catch (error) {
+        console.warn('sync 写入失败（已忽略）：', error);
+    }
+}
 
 /**
  * 统一的选区变化处理函数
@@ -268,7 +281,7 @@ class CerebrSidebar {
   updateWidth(width) {
     this.sidebarWidth = width;
     this.sidebar.style.width = `calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor})`;
-    chrome.storage.sync.set({ sidebarWidth: this.sidebarWidth });
+    queueSyncSet({ sidebarWidth: this.sidebarWidth });
     this.updateDockLayout();
   }
 
@@ -303,7 +316,7 @@ class CerebrSidebar {
       this.sidebar.style.transform = `var(--transform-hidden)`;
     }
 
-    chrome.storage.sync.set({ sidebarPosition: this.sidebarPosition });
+    queueSyncSet({ sidebarPosition: this.sidebarPosition });
     this.updateDockLayout();
     
     // console.log(`侧边栏位置已更新为: ${position}, 可见状态: ${this.isVisible}`);
@@ -772,7 +785,7 @@ class CerebrSidebar {
         case 'SCALE_FACTOR_CHANGE':
           this.scaleFactor = event.data.value;
           this.updateScale();
-          chrome.storage.sync.set({ scaleFactor: this.scaleFactor });
+          queueSyncSet({ scaleFactor: this.scaleFactor });
           break;
 
         case 'SIDEBAR_POSITION_CHANGE':
