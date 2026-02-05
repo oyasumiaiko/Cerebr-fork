@@ -124,10 +124,43 @@ export function createContextMenuManager(appContext) {
 
     const userNode = isUser ? node : findParentUser(node);
     if (!userNode) return null;
-    if (userNode.threadHiddenSelection) return null;
 
     let targetAiNode = isAi ? node : findNextAi(userNode, userNode.threadId || null);
-    const userMessageId = userNode.id || '';
+    // 说明：当连续出现多条 user 消息时，重新生成应等价于“最后一条 user -> 下一条 AI”，
+    // 这样上下文会覆盖整个连续 user 片段，避免在中途选中时丢掉后续用户消息。
+    let effectiveUserNode = userNode;
+    if (targetAiNode) {
+      const parentUser = findParentUser(targetAiNode);
+      if (parentUser) {
+        effectiveUserNode = parentUser;
+      }
+    } else {
+      // 没有 AI（例如尚未回复）：沿着最早子链向后，找到连续 user 的最后一条。
+      let cursor = userNode;
+      let lastUser = userNode;
+      const visited = new Set();
+      while (cursor) {
+        const children = Array.isArray(cursor.children) ? cursor.children : [];
+        const candidates = children
+          .map(id => findNode(id))
+          .filter(Boolean)
+          .filter(child => !userNode.threadId || child.threadId === userNode.threadId);
+        if (!candidates.length) break;
+        const next = candidates.slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))[0];
+        if (!next || visited.has(next.id)) break;
+        if (next.role === 'assistant') break;
+        if (next.role === 'user') {
+          lastUser = next;
+        }
+        visited.add(next.id);
+        cursor = next;
+      }
+      effectiveUserNode = lastUser || userNode;
+    }
+
+    if (!effectiveUserNode || effectiveUserNode.threadHiddenSelection) return null;
+
+    const userMessageId = effectiveUserNode.id || '';
     if (!userMessageId) return null;
 
     let userMessageElement = null;
@@ -167,7 +200,7 @@ export function createContextMenuManager(appContext) {
     }
 
     const originalMessageText = userMessageElement?.getAttribute?.('data-original-text')
-      || (typeof userNode.content === 'string' ? userNode.content : '');
+      || (typeof effectiveUserNode.content === 'string' ? effectiveUserNode.content : '');
 
     return {
       userMessageElement,
@@ -185,7 +218,8 @@ export function createContextMenuManager(appContext) {
    *
    * 设计约束：
    * - 必须做到“只替换目标 AI 消息的内容”，不删除/不改动其他消息；
-   * - 发送给模型的上下文应裁剪到对应用户消息（messageId=用户消息ID），避免把后续消息带入上下文。
+   * - 连续 user 消息视作同一“用户片段”：重生成应等价于“最后一条 user -> 下一条 AI”，
+   *   上下文裁剪到该最后 user（messageId=该用户消息ID），以保留同片段内的所有 user 输入。
    *
    * @param {HTMLElement|null} messageElement
    * @returns {{
@@ -230,7 +264,25 @@ export function createContextMenuManager(appContext) {
       return null;
     };
 
-    const userMessageElement = isAi ? findPrevUser(messageElement) : messageElement;
+    const findLastUserInBlock = (start) => {
+      let lastUser = start;
+      let cursor = start;
+      while (cursor && cursor.nextElementSibling) {
+        cursor = cursor.nextElementSibling;
+        if (!cursor.classList || !cursor.classList.contains('message')) continue;
+        if (cursor.classList.contains('user-message')) {
+          lastUser = cursor;
+          continue;
+        }
+        if (cursor.classList.contains('ai-message')) break;
+        break;
+      }
+      return lastUser || start;
+    };
+
+    const baseUserElement = isAi ? findPrevUser(messageElement) : messageElement;
+    // 说明：连续 user 消息时，把“最后一条 user”视为真正触发重生成的消息。
+    const userMessageElement = (!isAi && baseUserElement) ? findLastUserInBlock(baseUserElement) : baseUserElement;
     if (!userMessageElement) return null;
 
     const userMessageId = userMessageElement.getAttribute('data-message-id') || '';
@@ -239,7 +291,7 @@ export function createContextMenuManager(appContext) {
     // 用户消息允许为空（例如纯图片/截图场景），但必须有 messageId 才能裁剪上下文
     if (!userMessageId) return null;
 
-    const targetAiMessageElement = isAi ? messageElement : findNextAi(messageElement);
+    const targetAiMessageElement = isAi ? messageElement : findNextAi(userMessageElement);
     const targetAiMessageId = targetAiMessageElement
       ? (targetAiMessageElement.getAttribute('data-message-id') || null)
       : null;
