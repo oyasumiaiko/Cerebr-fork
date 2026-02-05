@@ -232,6 +232,23 @@ export function createApiManager(appContext) {
     return { ok: true, selection: getRuntimeMultiApiSelection() };
   }
 
+  function setSelectedIndexInternal(index, options = {}) {
+    if (!Number.isFinite(index)) return false;
+    if (index < 0 || index >= apiConfigs.length) return false;
+    selectedConfigIndex = index;
+    const syncRuntime = options.syncRuntime !== false;
+    if (syncRuntime) {
+      const selectedConfig = apiConfigs[index] || null;
+      if (selectedConfig) {
+        setRuntimeMultiApiSingle(selectedConfig);
+      }
+    }
+    saveAPIConfigs(); // 保存选中的索引
+    renderAPICards(); // 更新卡片选中状态
+    renderFavoriteApis(); // 更新收藏列表选中状态
+    return true;
+  }
+
   function compactConfigsForSync(configs) {
     return configs.map(c => ({
       id: c.id,
@@ -1031,16 +1048,13 @@ export function createApiManager(appContext) {
       });
       // 设置当前卡片为选中状态
       template.classList.add('selected');
-      selectedConfigIndex = index;
-      saveAPIConfigs();
+      setSelectedIndexInternal(index, { syncRuntime: true });
       // 关闭面板并回到聊天界面（旧行为：选择后退出设置层）
       if (appContext.services?.chatHistoryUI?.closeChatHistoryPanel) {
         appContext.services.chatHistoryUI.closeChatHistoryPanel();
       } else {
         apiSettingsPanel.classList.remove('visible');
       }
-       // 更新收藏列表状态
-      renderFavoriteApis();
     });
 
     // 点击卡片只展开/折叠表单
@@ -2449,16 +2463,7 @@ export function createApiManager(appContext) {
     },
     getAllConfigs: () => [...apiConfigs], // 返回包含轮询状态的配置副本
     getSelectedIndex: () => selectedConfigIndex,
-    setSelectedIndex: (index) => {
-      if (index >= 0 && index < apiConfigs.length) {
-        selectedConfigIndex = index;
-        saveAPIConfigs(); // 保存选中的索引
-        renderAPICards(); // 更新卡片选中状态
-        renderFavoriteApis(); // 更新收藏列表选中状态
-        return true;
-      }
-      return false;
-    },
+    setSelectedIndex: (index, options = {}) => setSelectedIndexInternal(index, options),
 
     // 添加新配置
     addConfig

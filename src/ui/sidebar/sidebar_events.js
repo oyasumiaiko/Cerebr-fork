@@ -258,7 +258,7 @@ function setupApiMenuWatcher(appContext) {
       const primaryId = selection.primaryConfig?.id;
       if (!primaryId) return;
       const idx = configs.findIndex(cfg => cfg?.id === primaryId);
-      if (idx >= 0) apiManager.setSelectedIndex(idx);
+      if (idx >= 0) apiManager.setSelectedIndex(idx, { syncRuntime: false });
     };
 
     if (favoriteConfigs.length === 0) {
@@ -294,9 +294,11 @@ function setupApiMenuWatcher(appContext) {
           if (result?.selection) ensureActiveConfigInSelection(result.selection);
           return;
         }
-        apiManager.setSelectedIndex(index);
-        const result = apiManager.setRuntimeMultiApiSingle?.(config);
-        if (result?.selection) ensureActiveConfigInSelection(result.selection);
+        const ok = apiManager.setSelectedIndex(index, { syncRuntime: true });
+        if (ok) {
+          const selection = apiManager.getRuntimeMultiApiSelection?.();
+          if (selection) ensureActiveConfigInSelection(selection);
+        }
       });
 
       const controls = document.createElement('div');
