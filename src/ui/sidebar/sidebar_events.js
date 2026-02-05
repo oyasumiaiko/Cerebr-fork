@@ -171,6 +171,9 @@ function setupApiMenuWatcher(appContext) {
       ? apiManager.getRuntimeMultiApiSelection()
       : { entries: [], total: 0, primaryConfig: null };
     const selectionEntries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
+    const historyMode = (typeof apiManager?.getRuntimeHistoryAssistantMode === 'function')
+      ? apiManager.getRuntimeHistoryAssistantMode()
+      : 'primary';
 
     const resolveConfigLabel = (config) => {
       if (!config) return 'API';
@@ -344,6 +347,23 @@ function setupApiMenuWatcher(appContext) {
     });
 
     listEl.appendChild(createDivider());
+    listEl.appendChild(createOption('上下文范围（发送给模型）', null, { variant: 'hint' }));
+
+    const historyModeOptions = [
+      { mode: 'primary', label: '仅主 API 回复' },
+      { mode: 'selected', label: '仅已选 API 回复' },
+      { mode: 'all', label: '全部 API 回复' }
+    ];
+
+    historyModeOptions.forEach((item) => {
+      const active = historyMode === item.mode;
+      const label = `${active ? '[x]' : '[ ]'} ${item.label}`;
+      listEl.appendChild(createOption(label, () => {
+        apiManager.setRuntimeHistoryAssistantMode?.(item.mode);
+      }, { variant: 'action' }));
+    });
+
+    listEl.appendChild(createDivider());
 
     if (hasLock) {
       listEl.appendChild(createOption('取消固定（跟随当前）', () => {
@@ -378,6 +398,7 @@ function setupApiMenuWatcher(appContext) {
   window.addEventListener('apiConfigsUpdated', updateAll);
   document.addEventListener('CONVERSATION_API_CONTEXT_CHANGED', updateAll);
   document.addEventListener('MULTI_API_SELECTION_CHANGED', updateAll);
+  document.addEventListener('MULTI_API_HISTORY_MODE_CHANGED', updateAll);
 }
 
 /**

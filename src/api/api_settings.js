@@ -59,6 +59,8 @@ export function createApiManager(appContext) {
   // 输入区多 API 选择（仅运行时，不持久化）
   const runtimeMultiApiSelection = new Map();
   let runtimePrimaryApiId = null;
+  // 多 API 回复的“上下文采用策略”（仅运行时，不持久化）
+  let runtimeHistoryAssistantMode = 'primary';
 
   const {
     dom,
@@ -120,6 +122,18 @@ export function createApiManager(appContext) {
     try {
       document.dispatchEvent(new CustomEvent('MULTI_API_SELECTION_CHANGED'));
     } catch (_) {}
+  }
+
+  function emitRuntimeHistoryModeChanged() {
+    try {
+      document.dispatchEvent(new CustomEvent('MULTI_API_HISTORY_MODE_CHANGED'));
+    } catch (_) {}
+  }
+
+  function normalizeHistoryAssistantMode(mode) {
+    const safe = (typeof mode === 'string') ? mode.trim() : '';
+    if (safe === 'primary' || safe === 'selected' || safe === 'all') return safe;
+    return 'primary';
   }
 
   function ensureRuntimeMultiApiSelection() {
@@ -230,6 +244,18 @@ export function createApiManager(appContext) {
     ensureRuntimeMultiApiSelection();
     emitRuntimeMultiApiSelectionChanged();
     return { ok: true, selection: getRuntimeMultiApiSelection() };
+  }
+
+  function getRuntimeHistoryAssistantMode() {
+    return normalizeHistoryAssistantMode(runtimeHistoryAssistantMode);
+  }
+
+  function setRuntimeHistoryAssistantMode(mode) {
+    const next = normalizeHistoryAssistantMode(mode);
+    if (next === runtimeHistoryAssistantMode) return { ok: true, mode: next };
+    runtimeHistoryAssistantMode = next;
+    emitRuntimeHistoryModeChanged();
+    return { ok: true, mode: next };
   }
 
   function setSelectedIndexInternal(index, options = {}) {
@@ -2450,6 +2476,8 @@ export function createApiManager(appContext) {
     setRuntimeMultiApiSingle,
     toggleRuntimeMultiApiSelection,
     updateRuntimeMultiApiCount,
+    getRuntimeHistoryAssistantMode,
+    setRuntimeHistoryAssistantMode,
 
     // 获取和设置配置
     getSelectedConfig: () => {

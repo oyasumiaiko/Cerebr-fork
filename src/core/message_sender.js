@@ -2417,6 +2417,42 @@ export function createMessageSender(appContext) {
         || lockConfig
         || apiManager.getSelectedConfig();
       const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
+      let filteredConversationChain = conversationChain;
+      if (sendChatHistoryFlag && Array.isArray(conversationChain)) {
+        const historyMode = (typeof apiManager?.getRuntimeHistoryAssistantMode === 'function')
+          ? apiManager.getRuntimeHistoryAssistantMode()
+          : 'all';
+        if (historyMode !== 'all') {
+          const selectionState = (typeof apiManager?.getRuntimeMultiApiSelection === 'function')
+            ? apiManager.getRuntimeMultiApiSelection()
+            : null;
+          const allowedApiIds = new Set();
+          if (historyMode === 'primary') {
+            const primaryConfig = selectionState?.primaryConfig
+              || apiManager.getSelectedConfig?.()
+              || null;
+            const primaryId = primaryConfig?.id || '';
+            if (primaryId) allowedApiIds.add(primaryId);
+          } else if (historyMode === 'selected') {
+            const entries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
+            entries.forEach((entry) => {
+              const id = entry?.config?.id || '';
+              if (id) allowedApiIds.add(id);
+            });
+          }
+
+          if (allowedApiIds.size > 0) {
+            filteredConversationChain = conversationChain.filter((node) => {
+              const role = String(node?.role || '').toLowerCase();
+              if (role !== 'assistant') return true;
+              const apiId = (typeof node?.apiUuid === 'string') ? node.apiUuid.trim() : '';
+              if (!apiId) return true;
+              return allowedApiIds.has(apiId);
+            });
+          }
+        }
+      }
+
       const messages = composeMessages({
         prompts: promptsConfig,
         injectedSystemMessages,
@@ -2425,7 +2461,7 @@ export function createMessageSender(appContext) {
         currentPromptType,
         regenerateMode,
         messageId,
-        conversationChain,
+        conversationChain: filteredConversationChain,
         sendChatHistory: sendChatHistoryFlag,
         // 旧字段：按总条目数裁剪（向后兼容）
         maxHistory: configForMaxHistory?.maxChatHistory ?? 500,
@@ -2976,13 +3012,15 @@ export function createMessageSender(appContext) {
         }
       };
 
+      const tasks = [];
       const results = [];
       const baseUserMessageBefore = resolveLatestUserMessageId();
       const firstPromise = sendMessageCore(firstOptions);
+      tasks.push(firstPromise);
       const baseUserMessageId = resolveLatestUserMessageId();
-      results.push(await settle(firstPromise));
 
       if (!baseUserMessageId || baseUserMessageId === baseUserMessageBefore) {
+        results.push(await settle(firstPromise));
         return results;
       }
 
@@ -2995,8 +3033,17 @@ export function createMessageSender(appContext) {
           resolvedApiConfig: multiTargets[i],
           aspectRatioOverride: aspectRatio || undefined
         };
-        results.push(await settle(sendMessageCore(extraOptions)));
+        tasks.push(sendMessageCore(extraOptions));
       }
+
+      const settled = await Promise.allSettled(tasks);
+      settled.forEach((item) => {
+        if (item.status === 'fulfilled') {
+          results.push({ status: 'fulfilled', value: item.value });
+        } else {
+          results.push({ status: 'rejected', reason: item.reason });
+        }
+      });
 
       return results;
     }
@@ -3184,6 +3231,44 @@ export function createMessageSender(appContext) {
         console.warn('渲染API footer失败:', e);
       }
     }
+
+    const promoteLoadingMessageToAi = ({ answer, thoughts, groundingMetadata }) => {
+      if (!loadingMessage || !loadingMessage.parentNode) return null;
+      const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
+      if (!shouldRenderDom) return null;
+      const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
+      const historyParentId = threadContext
+        ? (threadContext.parentMessageIdForAi
+          || threadContext.lastMessageId
+          || threadContext.rootMessageId
+          || threadContext.anchorMessageId)
+        : null;
+      const preserveCurrentNode = !!threadContext;
+      let node = null;
+      const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function'
+        && (preserveCurrentNode || historyParentId !== chatHistoryManager.chatHistory.currentNode);
+      if (addWithOptions) {
+        node = chatHistoryManager.addMessageToTreeWithOptions(
+          'assistant',
+          '',
+          historyParentId,
+          { preserveCurrentNode }
+        );
+      } else {
+        node = chatHistoryManager.addMessageToTree('assistant', '', historyParentId);
+      }
+      if (!node) return null;
+      if (threadHistoryPatch && typeof threadHistoryPatch === 'object') {
+        Object.assign(node, threadHistoryPatch);
+      }
+      loadingMessage.setAttribute('data-message-id', node.id);
+      loadingMessage.classList.remove('loading-message');
+      try { loadingMessage.classList.add('ai-message'); } catch (_) {}
+      messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', groundingMetadata);
+      applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
+      updateThreadLastMessage(threadContext, node.id);
+      return node.id;
+    };
     const reader = response.body.getReader();
     let hasStartedResponse = false;
     // 累积 AI 的主回答文本（仅文本部分，包含代码块、内联图片等 Markdown/HTML 内容）
@@ -3515,8 +3600,7 @@ export function createMessageSender(appContext) {
 
 	      const nowHasAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
 	      if (!hasStartedResponse) {
-	        // 首次收到内容（文本或图片）：移除“正在处理...”提示
-	        if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+	        // 首次收到内容（文本或图片）：优先尝试复用 loading 占位，避免并行时乱序
 	        hasStartedResponse = true;
 	        try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
@@ -3548,6 +3632,26 @@ export function createMessageSender(appContext) {
 	        }
 
         if (!currentAiMessageId) {
+          let promotedId = null;
+          if (loadingMessage && loadingMessage.parentNode) {
+            promotedId = promoteLoadingMessageToAi({
+              answer: aiResponse,
+              thoughts: aiThoughtsRaw,
+              groundingMetadata
+            });
+          }
+          if (promotedId) {
+            currentAiMessageId = promotedId;
+            if (attemptState) {
+              attemptState.aiMessageId = currentAiMessageId;
+            }
+          }
+        }
+
+        if (!currentAiMessageId) {
+          if (loadingMessage && loadingMessage.parentNode) {
+            loadingMessage.remove();
+          }
           const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
           const historyParentId = threadContext
             ? (threadContext.parentMessageIdForAi
@@ -3770,9 +3874,6 @@ export function createMessageSender(appContext) {
           // 【关键逻辑】检查这是否是流式响应的第一个数据块
       const nowHasAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
       if (!hasStartedResponse) {
-              // 首次收到可见内容：移除占位 loading 提示（此时 UI 状态已从“等待首 token”切换为正式输出）
-              if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
-              
               // 标记响应已经开始，后续数据块将走更新逻辑
               hasStartedResponse = true;
           // 流式开始：更醒目的输入容器提示
@@ -3806,6 +3907,25 @@ export function createMessageSender(appContext) {
 	              }
 
               if (!currentAiMessageId) {
+                let promotedId = null;
+                if (loadingMessage && loadingMessage.parentNode) {
+                  promotedId = promoteLoadingMessageToAi({
+                    answer: aiResponse,
+                    thoughts: aiThoughtsRaw
+                  });
+                }
+                if (promotedId) {
+                  currentAiMessageId = promotedId;
+                  if (attemptState) {
+                    attemptState.aiMessageId = currentAiMessageId;
+                  }
+                }
+              }
+
+              if (!currentAiMessageId) {
+                if (loadingMessage && loadingMessage.parentNode) {
+                  loadingMessage.remove();
+                }
                 // 【创建消息】调用 appendMessage 来创建新的AI消息DOM元素
                 // 这是获取唯一 messageId 的关键步骤
                 const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
@@ -3984,6 +4104,44 @@ export function createMessageSender(appContext) {
       }
     }
 
+    const promoteLoadingMessageToAi = ({ answer, thoughts }) => {
+      if (!loadingMessage || !loadingMessage.parentNode) return null;
+      const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
+      if (!shouldRenderDom) return null;
+      const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
+      const historyParentId = threadContext
+        ? (threadContext.parentMessageIdForAi
+          || threadContext.lastMessageId
+          || threadContext.rootMessageId
+          || threadContext.anchorMessageId)
+        : null;
+      const preserveCurrentNode = !!threadContext;
+      let node = null;
+      const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function'
+        && (preserveCurrentNode || historyParentId !== chatHistoryManager.chatHistory.currentNode);
+      if (addWithOptions) {
+        node = chatHistoryManager.addMessageToTreeWithOptions(
+          'assistant',
+          '',
+          historyParentId,
+          { preserveCurrentNode }
+        );
+      } else {
+        node = chatHistoryManager.addMessageToTree('assistant', '', historyParentId);
+      }
+      if (!node) return null;
+      if (threadHistoryPatch && typeof threadHistoryPatch === 'object') {
+        Object.assign(node, threadHistoryPatch);
+      }
+      loadingMessage.setAttribute('data-message-id', node.id);
+      loadingMessage.classList.remove('loading-message');
+      try { loadingMessage.classList.add('ai-message'); } catch (_) {}
+      messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', null);
+      applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
+      updateThreadLastMessage(threadContext, node.id);
+      return node.id;
+    };
+
     let answer = '';
     let thoughts = '';
     // 用于承载“推理签名”（Thought Signature / thoughtSignature）：
@@ -4140,8 +4298,7 @@ export function createMessageSender(appContext) {
       thoughts = mergeThoughts(thoughts, thinkExtraction.thoughtText);
     }
 
-    // 移除 loading 并渲染最终消息
-    if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
+    // 优先复用 loading 占位，避免并行场景下乱序
     try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
     // “原地替换”模式：attemptState.aiMessageId 会在 sendMessageCore 阶段预先绑定到目标消息。
@@ -4206,6 +4363,37 @@ export function createMessageSender(appContext) {
         console.warn('非流式原地替换失败，将回退为创建新消息:', e);
       }
     }
+
+    let promotedId = null;
+    if (loadingMessage && loadingMessage.parentNode) {
+      promotedId = promoteLoadingMessageToAi({ answer, thoughts });
+    }
+    if (promotedId) {
+      if (attemptState) {
+        attemptState.aiMessageId = promotedId;
+      }
+      try {
+        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === promotedId);
+        if (node && thoughtSignature) {
+          node.thoughtSignature = thoughtSignature;
+          if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
+          renderApiFooter(loadingMessage, node);
+        }
+        if (!isGeminiApi && node) {
+          if (typeof reasoningContentRaw === 'string' && reasoningContentRaw) {
+            node.reasoning_content = reasoningContentRaw;
+          }
+          if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+            node.tool_calls = toolCalls;
+            node.thoughtSignatureSource = 'openai';
+          }
+        }
+      } catch (e) {
+        console.warn('记录推理签名失败（非流式，复用占位）:', e);
+      }
+      return;
+    }
+    if (loadingMessage && loadingMessage.parentNode) loadingMessage.remove();
 
     // 回退：创建新消息（旧行为）
     const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
