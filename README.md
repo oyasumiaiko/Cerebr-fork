@@ -35,6 +35,14 @@ Born from a need for a clean, efficient browser AI assistant, Cerebr keeps a min
 - 🔧 **Prompt & URL Rules** - System/summary/selection prompts and per-site rules
 - 💾 **Backup & Restore** - Export/import conversations, optional image stripping, auto incremental backup
 
+## 🧩 Differences from yym68686/Cerebr
+
+- 🗃️ **Much richer history system** - IndexedDB persistence, URL+content search, tree branches, image gallery, stats, backup/restore
+- 🧵 **Selection threads** - Threaded follow‑ups on highlighted text with preview bubble + thread panel
+- 🏷️ **Auto conversation titles** - Generate titles for easier history navigation
+- 🧭 **More modes** - Sidebar/dock/fullscreen + standalone chat page
+- ⚙️ **Deeper API config** - Favorites, drag‑sort, custom params/system prompts, user message preprocessor
+
 ## 🎮 User Guide
 
 1. 🔑 **Configure API**
