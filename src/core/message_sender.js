@@ -872,6 +872,24 @@ export function createMessageSender(appContext) {
     return resolveThreadScrollContainer(threadContext);
   }
 
+  // 统一解析“AI 回复的历史父节点”：
+  // - 线程模式：沿用线程上下文指定的 parentId；
+  // - 普通模式：优先使用本次请求锁定的 parentMessageIdForAi，再回退到当前会话指针。
+  function resolveHistoryParentIdForAi(threadContext, attemptState) {
+    if (threadContext) {
+      return threadContext.parentMessageIdForAi
+        || threadContext.lastMessageId
+        || threadContext.rootMessageId
+        || threadContext.anchorMessageId
+        || null;
+    }
+    const explicit = (typeof attemptState?.parentMessageIdForAi === 'string')
+      ? attemptState.parentMessageIdForAi.trim()
+      : '';
+    if (explicit) return explicit;
+    return chatHistoryManager.chatHistory.currentNode || null;
+  }
+
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
   function createThreadAiMessageHistoryOnly(payload) {
     const {
@@ -2276,6 +2294,12 @@ export function createMessageSender(appContext) {
           activeThreadContext.parentMessageIdForAi = activeThreadContext.userMessageId;
         }
         attempt.threadContext = activeThreadContext;
+      } else if (attempt) {
+        // 普通对话：锁定本次 AI 回复应挂载的父节点，避免后续链路断裂。
+        const regenParentId = (regenerateMode && typeof messageId === 'string') ? messageId.trim() : '';
+        const userMessageId = userMessageDiv?.getAttribute?.('data-message-id') || '';
+        const fallbackParentId = chatHistoryManager.chatHistory.currentNode || null;
+        attempt.parentMessageIdForAi = regenParentId || userMessageId || fallbackParentId;
       }
 
       // 清空输入区域
@@ -2417,6 +2441,19 @@ export function createMessageSender(appContext) {
         || lockConfig
         || apiManager.getSelectedConfig();
       const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
+
+      // 兜底：若主链断裂导致上下文过短，回退到“按显示顺序的主聊天记录”。
+      // 典型症状：currentNode 正常，但 parentId 链缺失，getCurrentConversationChain 只返回 1 条。
+      if (!activeThreadContext && sendChatHistoryFlag && Array.isArray(conversationChain) && conversationChain.length <= 1) {
+        const historyMessages = chatHistoryManager?.chatHistory?.messages || [];
+        if (historyMessages.length > conversationChain.length) {
+          const fallback = historyMessages.filter((node) => !node?.threadId && !node?.threadHiddenSelection);
+          if (fallback.length > conversationChain.length) {
+            conversationChain = fallback;
+          }
+        }
+      }
+
       let filteredConversationChain = conversationChain;
       if (sendChatHistoryFlag && Array.isArray(conversationChain)) {
         const historyMode = (typeof apiManager?.getRuntimeHistoryAssistantMode === 'function')
@@ -2616,7 +2653,11 @@ export function createMessageSender(appContext) {
       const wasManualAbort = isAbortError && attempt?.manualAbort;
 
       if (wasManualAbort) {
-        if (loadingMessage && loadingMessage.parentNode) {
+        // 用户手动停止：仅当仍处于“纯占位”状态时移除 loadingMessage，
+        // 若已复用占位并升级为 AI 消息，则保留当前内容，避免直接消失。
+        const hasAiMessage = !!attempt?.aiMessageId
+          || (!!loadingMessage && loadingMessage.classList?.contains('ai-message'));
+        if (!hasAiMessage && loadingMessage && loadingMessage.parentNode) {
           loadingMessage.remove();
         }
         console.log('用户手动停止更新');
@@ -3237,12 +3278,7 @@ export function createMessageSender(appContext) {
       const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
       if (!shouldRenderDom) return null;
       const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
-      const historyParentId = threadContext
-        ? (threadContext.parentMessageIdForAi
-          || threadContext.lastMessageId
-          || threadContext.rootMessageId
-          || threadContext.anchorMessageId)
-        : null;
+      const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
       const preserveCurrentNode = !!threadContext;
       let node = null;
       const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function'
@@ -3655,12 +3691,7 @@ export function createMessageSender(appContext) {
             loadingMessage.remove();
           }
           const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
-          const historyParentId = threadContext
-            ? (threadContext.parentMessageIdForAi
-              || threadContext.lastMessageId
-              || threadContext.rootMessageId
-              || threadContext.anchorMessageId)
-            : null;
+          const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
           const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
           if (threadContext && !shouldRenderDom) {
             const createdNode = createThreadAiMessageHistoryOnly({
@@ -3931,12 +3962,7 @@ export function createMessageSender(appContext) {
                 // 【创建消息】调用 appendMessage 来创建新的AI消息DOM元素
                 // 这是获取唯一 messageId 的关键步骤
                 const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
-                const historyParentId = threadContext
-                  ? (threadContext.parentMessageIdForAi
-                    || threadContext.lastMessageId
-                    || threadContext.rootMessageId
-                    || threadContext.anchorMessageId)
-                  : null;
+                const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
                 const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
                 if (threadContext && !shouldRenderDom) {
                   const createdNode = createThreadAiMessageHistoryOnly({
@@ -4111,12 +4137,7 @@ export function createMessageSender(appContext) {
       const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
       if (!shouldRenderDom) return null;
       const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
-      const historyParentId = threadContext
-        ? (threadContext.parentMessageIdForAi
-          || threadContext.lastMessageId
-          || threadContext.rootMessageId
-          || threadContext.anchorMessageId)
-        : null;
+      const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
       const preserveCurrentNode = !!threadContext;
       let node = null;
       const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function'
@@ -4401,12 +4422,7 @@ export function createMessageSender(appContext) {
 
     // 回退：创建新消息（旧行为）
     const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
-    const historyParentId = threadContext
-      ? (threadContext.parentMessageIdForAi
-        || threadContext.lastMessageId
-        || threadContext.rootMessageId
-        || threadContext.anchorMessageId)
-      : null;
+    const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
     const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
     if (threadContext && !shouldRenderDom) {
       const createdNode = createThreadAiMessageHistoryOnly({
