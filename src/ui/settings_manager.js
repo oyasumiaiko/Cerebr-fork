@@ -1151,10 +1151,17 @@ export function createSettingsManager(appContext) {
       || getComputedStyle(document.documentElement || document.body).getPropertyValue('--cerebr-viewport-width');
     const cssViewportWidth = parseFloat(cssViewportWidthRaw || '');
     if (Number.isFinite(cssViewportWidth) && cssViewportWidth > 0) {
+      // 该变量在 standalone 下已包含缩放校正（含 DPR 维度），不要再重复乘 DPR。
       return cssViewportWidth;
     }
-    const fallback = document.documentElement?.clientWidth || window.innerWidth || 0;
-    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+
+    // 嵌入模式没有 --cerebr-viewport-width 时，回退为“页面可视宽度 × DPR”，
+    // 让滑条最大值与设置项的“物理像素语义”保持一致。
+    const fallbackCssWidth = document.documentElement?.clientWidth || window.innerWidth || 0;
+    if (!Number.isFinite(fallbackCssWidth) || fallbackCssWidth <= 0) return 0;
+    const dpr = Number(window.devicePixelRatio);
+    const safeDpr = (Number.isFinite(dpr) && dpr > 0) ? dpr : 1;
+    return fallbackCssWidth * safeDpr;
   }
 
   function getFullscreenWidthBounds() {
