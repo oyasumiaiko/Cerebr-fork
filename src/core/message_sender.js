@@ -3264,6 +3264,8 @@ export function createMessageSender(appContext) {
       loadingMessage.setAttribute('data-message-id', node.id);
       loadingMessage.classList.remove('loading-message');
       try { loadingMessage.classList.add('ai-message'); } catch (_) {}
+      loadingMessage.textContent = '';
+      loadingMessage.removeAttribute('title');
       messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', groundingMetadata);
       applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
       updateThreadLastMessage(threadContext, node.id);
@@ -4136,6 +4138,8 @@ export function createMessageSender(appContext) {
       loadingMessage.setAttribute('data-message-id', node.id);
       loadingMessage.classList.remove('loading-message');
       try { loadingMessage.classList.add('ai-message'); } catch (_) {}
+      loadingMessage.textContent = '';
+      loadingMessage.removeAttribute('title');
       messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', null);
       applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
       updateThreadLastMessage(threadContext, node.id);
