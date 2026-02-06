@@ -959,6 +959,8 @@ function setupSlashFocusShortcut(appContext) {
 function applyFullscreenMode(appContext, isFullscreen) {
   appContext.state.isFullscreen = !!isFullscreen;
   document.documentElement.classList.toggle('fullscreen-mode', appContext.state.isFullscreen);
+  // 全屏切换时重算并行回答标记，覆盖“旧会话已在当前视图中但尚未重新发送”的场景。
+  appContext.services.messageSender?.refreshParallelAnswerLayout?.();
   updateFullscreenToggleHints(appContext);
 }
 
@@ -1774,7 +1776,7 @@ function scheduleInitialRequests(appContext) {
     }
 
     if (appContext.state.isFullscreen) {
-      document.documentElement.classList.add('fullscreen-mode');
+      applyFullscreenMode(appContext, true);
     }
   }, 500);
 }

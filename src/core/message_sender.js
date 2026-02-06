@@ -890,6 +890,125 @@ export function createMessageSender(appContext) {
     return chatHistoryManager.chatHistory.currentNode || null;
   }
 
+  function getParallelLayoutContainers() {
+    const containers = [];
+    if (chatContainer) containers.push(chatContainer);
+    if (threadContainer && threadContainer !== chatContainer) containers.push(threadContainer);
+    return containers;
+  }
+
+  function clearParallelAnswerLayoutMarker(messageElement) {
+    if (!messageElement || !messageElement.classList) return;
+    messageElement.classList.remove('parallel-answer-item');
+    messageElement.removeAttribute('data-parallel-parent-id');
+    messageElement.removeAttribute('data-parallel-answer-count');
+    try {
+      messageElement.style.removeProperty('--parallel-answer-count');
+      messageElement.style.removeProperty('--parallel-answer-index');
+    } catch (_) {}
+  }
+
+  function clearAllParallelAnswerLayoutMarkers() {
+    const markerSelector = '.message.ai-message.parallel-answer-item, .message.ai-message[data-parallel-parent-id], .message.ai-message[data-parallel-answer-count]';
+    getParallelLayoutContainers().forEach((container) => {
+      container.querySelectorAll(markerSelector).forEach((element) => {
+        clearParallelAnswerLayoutMarker(element);
+      });
+      container.classList.remove('parallel-answer-layout-active');
+    });
+  }
+
+  function resolveMessageElementById(messageId) {
+    const safeId = escapeMessageIdForSelector(messageId);
+    if (!safeId) return null;
+    const selector = `.message[data-message-id="${safeId}"]`;
+    const containers = getParallelLayoutContainers();
+    for (const container of containers) {
+      const element = container.querySelector(selector);
+      if (element) return element;
+    }
+    return null;
+  }
+
+  function syncParallelAnswerLayoutForParent(parentMessageId) {
+    const parentId = (typeof parentMessageId === 'string') ? parentMessageId.trim() : '';
+    if (!parentId) return;
+
+    const messages = chatHistoryManager?.chatHistory?.messages || [];
+    if (!Array.isArray(messages) || messages.length === 0) return;
+
+    const messageLookup = new Map();
+    messages.forEach((node) => {
+      if (node?.id) messageLookup.set(node.id, node);
+    });
+
+    const parentNode = messageLookup.get(parentId) || null;
+    if (!parentNode) return;
+
+    const childIds = Array.isArray(parentNode.children) ? parentNode.children : [];
+    const assistantChildren = childIds
+      .map((childId) => messageLookup.get(childId))
+      .filter((node) => node && node.role === 'assistant' && !node.threadHiddenSelection);
+
+    const total = assistantChildren.length;
+    const validIds = new Set(assistantChildren.map((node) => node.id));
+    const safeParentId = escapeMessageIdForSelector(parentId);
+    const containers = getParallelLayoutContainers();
+
+    if (safeParentId) {
+      const staleSelector = `.message.ai-message[data-parallel-parent-id="${safeParentId}"]`;
+      containers.forEach((container) => {
+        container.querySelectorAll(staleSelector).forEach((element) => {
+          const messageId = element.getAttribute('data-message-id') || '';
+          if (!validIds.has(messageId)) {
+            clearParallelAnswerLayoutMarker(element);
+          }
+        });
+      });
+    }
+
+    assistantChildren.forEach((node, visualIndex) => {
+      const messageElement = resolveMessageElementById(node.id);
+      if (!messageElement) return;
+
+      if (total > 1) {
+        messageElement.classList.add('parallel-answer-item');
+        messageElement.setAttribute('data-parallel-parent-id', parentId);
+        messageElement.setAttribute('data-parallel-answer-count', String(total));
+        try {
+          messageElement.style.setProperty('--parallel-answer-count', String(total));
+          messageElement.style.setProperty('--parallel-answer-index', String(visualIndex));
+        } catch (_) {}
+      } else {
+        clearParallelAnswerLayoutMarker(messageElement);
+      }
+    });
+
+    containers.forEach((container) => {
+      const hasParallel = !!container.querySelector('.message.ai-message.parallel-answer-item');
+      container.classList.toggle('parallel-answer-layout-active', hasParallel);
+    });
+  }
+
+  // 为历史回放、全屏切换等“非发送链路”提供一次性重算入口。
+  function refreshParallelAnswerLayout() {
+    clearAllParallelAnswerLayoutMarkers();
+
+    const messages = chatHistoryManager?.chatHistory?.messages || [];
+    if (!Array.isArray(messages) || messages.length === 0) return;
+
+    const parentIds = new Set();
+    messages.forEach((node) => {
+      if (!node || node.role !== 'assistant' || node.threadHiddenSelection) return;
+      const parentId = (typeof node.parentId === 'string') ? node.parentId.trim() : '';
+      if (parentId) parentIds.add(parentId);
+    });
+
+    parentIds.forEach((parentId) => {
+      syncParallelAnswerLayoutForParent(parentId);
+    });
+  }
+
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
   function createThreadAiMessageHistoryOnly(payload) {
     const {
@@ -3219,6 +3338,9 @@ export function createMessageSender(appContext) {
           node.apiUuid = apiConfig?.id || null;
           node.apiDisplayName = apiConfig?.displayName || '';
           node.apiModelId = apiConfig?.modelName || '';
+          if (node.role === 'assistant' && node.parentId) {
+            syncParallelAnswerLayoutForParent(node.parentId);
+          }
         }
         const safeMessageId = escapeMessageIdForSelector(messageId);
         const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
@@ -4078,6 +4200,9 @@ export function createMessageSender(appContext) {
           node.apiUuid = apiConfig?.id || null;
           node.apiDisplayName = apiConfig?.displayName || '';
           node.apiModelId = apiConfig?.modelName || '';
+          if (node.role === 'assistant' && node.parentId) {
+            syncParallelAnswerLayoutForParent(node.parentId);
+          }
         }
         const safeMessageId = escapeMessageIdForSelector(messageId);
         const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
@@ -4756,6 +4881,7 @@ export function createMessageSender(appContext) {
     getCurrentConversationId,
     getShouldAutoScroll,
     setShouldAutoScroll,
+    refreshParallelAnswerLayout,
     getSlashCommandList,
     getSlashCommandHints
   };

@@ -2658,6 +2658,8 @@ export function createChatHistoryUI(appContext) {
     
     // 通知消息发送器当前会话ID已更新
     services.messageSender.setCurrentConversationId(currentConversationId);
+    // 历史回放后主动重算并行回答标记，确保旧对话/从记录加载的消息也能命中全屏并排布局。
+    services.messageSender.refreshParallelAnswerLayout?.();
     emitConversationApiContextChanged();
 
     if (!skipScrollToBottom) {
