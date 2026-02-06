@@ -524,12 +524,42 @@ body.thread-resize-active #thread-resize-edge-right {
     opacity: 1;
 }
 
-body.thread-resize-active {
+/* 全屏非线程模式：沿用边缘拖拽手势调整全屏内容宽度（左右对称） */
+.fullscreen-mode body:not(.thread-mode-active) #thread-splitter {
+    display: none;
+    pointer-events: none;
+}
+
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left,
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right {
+    display: block;
+    pointer-events: auto;
+    opacity: 0.12;
+}
+
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left {
+    left: calc(50% - (var(--cerebr-fullscreen-width) / 2));
+}
+
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right {
+    left: calc(50% + (var(--cerebr-fullscreen-width) / 2));
+}
+
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left:hover,
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right:hover,
+body.fullscreen-width-resize-active #thread-resize-edge-left,
+body.fullscreen-width-resize-active #thread-resize-edge-right {
+    opacity: 1;
+}
+
+body.thread-resize-active,
+body.fullscreen-width-resize-active {
     cursor: col-resize;
     user-select: none;
 }
 
-body.thread-resize-active * {
+body.thread-resize-active *,
+body.fullscreen-width-resize-active * {
     user-select: none;
 }
 

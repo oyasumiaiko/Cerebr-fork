@@ -532,19 +532,23 @@ export function createSettingsManager(appContext) {
    */
   function setSetting(key, value) {
     if (!(key in DEFAULT_SETTINGS)) return;
-    currentSettings[key] = value;
+    let normalizedValue = value;
+    if (key === 'fullscreenWidth') {
+      normalizedValue = clampFullscreenWidth(value);
+    }
+    currentSettings[key] = normalizedValue;
     // 应用
     const schema = getSchemaMap();
     if (schema[key]?.apply) {
-      schema[key].apply(value);
+      schema[key].apply(normalizedValue);
     }
     // 持久化
-    saveSetting(key, value);
+    saveSetting(key, normalizedValue);
     // 通知订阅者
     const set = subscribers.get(key);
     if (set) {
       set.forEach((cb) => {
-        try { cb(value); } catch (e) { console.error('订阅回调异常', e); }
+        try { cb(normalizedValue); } catch (e) { console.error('订阅回调异常', e); }
       });
     }
   }
@@ -908,6 +912,7 @@ export function createSettingsManager(appContext) {
 
     if (sidebarItem) sidebarItem.style.display = isFullscreenLayout ? 'none' : '';
     if (fullscreenItem) fullscreenItem.style.display = isFullscreenLayout ? '' : 'none';
+    syncFullscreenWidthControlBounds();
   }
 
   /**
@@ -1047,13 +1052,16 @@ export function createSettingsManager(appContext) {
     // 应用所有注册项设置（有 apply 的会被调用），并同步 UI
     getActiveRegistry().forEach(def => {
       const value = currentSettings[def.key] ?? def.defaultValue;
+      const effectiveValue = def.key === 'fullscreenWidth'
+        ? clampFullscreenWidth(value)
+        : value;
       if (typeof def.apply === 'function') {
-        try { def.apply(value); } catch (e) { console.error('应用设置失败', def.key, e); }
+        try { def.apply(effectiveValue); } catch (e) { console.error('应用设置失败', def.key, e); }
       }
       const el = dynamicElements.get(def.key);
       if (el) {
         const entry = generatedSchema[def.key];
-        if (entry?.writeToUI) entry.writeToUI(el, value);
+        if (entry?.writeToUI) entry.writeToUI(el, effectiveValue);
       }
     });
   }
@@ -1138,6 +1146,63 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-viewport-height', `${viewportH * inverseZoom}px`);
   }
 
+  function getCurrentViewportWidthForFullscreenSetting() {
+    const cssViewportWidthRaw = document.documentElement?.style?.getPropertyValue?.('--cerebr-viewport-width')
+      || getComputedStyle(document.documentElement || document.body).getPropertyValue('--cerebr-viewport-width');
+    const cssViewportWidth = parseFloat(cssViewportWidthRaw || '');
+    if (Number.isFinite(cssViewportWidth) && cssViewportWidth > 0) {
+      return cssViewportWidth;
+    }
+    const fallback = document.documentElement?.clientWidth || window.innerWidth || 0;
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+  }
+
+  function getFullscreenWidthBounds() {
+    const fullscreenDef = SETTINGS_REGISTRY.find((def) => def.key === 'fullscreenWidth') || null;
+    const configuredMin = Number(fullscreenDef?.min);
+    const configuredMax = Number(fullscreenDef?.max);
+    const min = Number.isFinite(configuredMin) ? Math.max(0, Math.round(configuredMin)) : 500;
+
+    // 最大值跟随当前页面可见宽度（扣除左右各 15px 内边距），避免出现“视觉上无效”的超大像素值。
+    const viewportWidth = Math.floor(getCurrentViewportWidthForFullscreenSetting());
+    const viewportLimitedMax = viewportWidth - 30;
+    const fallbackMax = Number.isFinite(configuredMax) ? Math.max(min, Math.round(configuredMax)) : Math.max(min, 2400);
+    const max = Number.isFinite(viewportLimitedMax) && viewportLimitedMax > 0
+      ? Math.max(min, viewportLimitedMax)
+      : fallbackMax;
+
+    return { min, max };
+  }
+
+  function clampFullscreenWidth(width) {
+    const { min, max } = getFullscreenWidthBounds();
+    const rawWidth = Number(width);
+    const fallback = Number(currentSettings.fullscreenWidth);
+    const base = Number.isFinite(rawWidth)
+      ? rawWidth
+      : (Number.isFinite(fallback) ? fallback : DEFAULT_SETTINGS.fullscreenWidth);
+    return Math.round(Math.min(max, Math.max(min, base)));
+  }
+
+  function syncFullscreenWidthControlBounds(displayValue) {
+    const fullscreenWidthEl = dynamicElements.get('fullscreenWidth') || document.getElementById('fullscreen-width');
+    if (!fullscreenWidthEl) return;
+
+    const { min, max } = getFullscreenWidthBounds();
+    fullscreenWidthEl.min = String(min);
+    fullscreenWidthEl.max = String(max);
+
+    const targetValue = clampFullscreenWidth(
+      displayValue !== undefined ? displayValue : currentSettings.fullscreenWidth
+    );
+    fullscreenWidthEl.value = String(targetValue);
+
+    const valueSpan = fullscreenWidthEl.closest('.menu-item')?.querySelector('.setting-value');
+    if (valueSpan) {
+      valueSpan.textContent = `${targetValue}px`;
+    }
+  }
+
   // 应用全屏模式内容宽度
   // 说明：全屏布局通过 CSS 变量 --cerebr-fullscreen-width 控制“居中内容列”的最大宽度，
   // 与侧栏实际宽度（--cerebr-sidebar-width）拆分后可分别调整。
@@ -1146,14 +1211,19 @@ export function createSettingsManager(appContext) {
     // - 侧栏宽度在 content.js 中会做缩放校正，确保宽度数值不随 scaleFactor 改变
     // - 全屏布局的内容列宽度如果直接使用 width，会随着 scaleFactor 一起被放大/缩小
     // 因此这里需要用 scaleFactor 进行反向校正，让用户看到/设置的「全屏宽度」保持“绝对像素”语义。
-    const rawWidth = Number(width);
     const effectiveScaleFactor = getSafeScaleFactor(currentSettings.scaleFactor);
-
-    const safeWidth = Number.isFinite(rawWidth) ? rawWidth : DEFAULT_SETTINGS.fullscreenWidth;
+    const safeWidth = clampFullscreenWidth(width);
     const baseScale = isStandalone ? getStandaloneBaseScale() : 1;
     const correctionScale = effectiveScaleFactor * baseScale;
     const correctedWidth = safeWidth / (correctionScale || 1);
     document.documentElement.style.setProperty('--cerebr-fullscreen-width', `${correctedWidth}px`);
+    syncFullscreenWidthControlBounds(safeWidth);
+  }
+
+  function previewFullscreenWidth(width) {
+    const safeWidth = clampFullscreenWidth(width);
+    applyFullscreenWidth(safeWidth);
+    return safeWidth;
   }
   
   // 应用字体大小
@@ -1830,6 +1900,9 @@ export function createSettingsManager(appContext) {
   
   // 设置侧边栏宽度
   function setSidebarWidth(width) { setSetting('sidebarWidth', width); }
+
+  // 设置全屏内容宽度
+  function setFullscreenWidth(width) { setSetting('fullscreenWidth', width); }
   
   // 设置字体大小
   function setFontSize(size) { setSetting('fontSize', size); }
@@ -1897,12 +1970,13 @@ export function createSettingsManager(appContext) {
 
     setupEventListeners();
     setupSystemThemeListener();
-    if (isStandalone) {
-      window.addEventListener('resize', () => {
+    window.addEventListener('resize', () => {
+      if (isStandalone) {
         updateStandaloneScaleStyles(currentSettings.scaleFactor);
-        applyFullscreenWidth(currentSettings.fullscreenWidth);
-      });
-    }
+      }
+      syncFullscreenWidthControlBounds();
+      applyFullscreenWidth(currentSettings.fullscreenWidth);
+    });
     return initSettings();
   }
 
@@ -1920,6 +1994,10 @@ export function createSettingsManager(appContext) {
     subscribe,
     setTheme,
     setSidebarWidth,
+    setFullscreenWidth,
+    previewFullscreenWidth,
+    getFullscreenWidthBounds,
+    clampFullscreenWidth,
     setFontSize,
     setScaleFactor,
     setAutoScroll,

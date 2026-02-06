@@ -23,6 +23,7 @@ export function createSelectionThreadManager(appContext) {
   const chatHistoryUI = services.chatHistoryUI;
   const messageProcessor = services.messageProcessor;
   const messageSender = services.messageSender;
+  const settingsManager = services.settingsManager;
   const promptSettingsManager = services.promptSettingsManager;
   const imageHandler = services.imageHandler;
   const apiManager = services.apiManager;
@@ -72,6 +73,7 @@ export function createSelectionThreadManager(appContext) {
   let threadBannerPeekTimer = null;
   const THREAD_RESIZE_MIN_COLUMN_WIDTH = 240;
   const THREAD_RESIZE_EDGE_PADDING = 30;
+  const FULLSCREEN_RESIZE_MIN_WIDTH = 500;
   const THREAD_LAYOUT_STORAGE_KEY = 'thread_layout_prefs';
   const THREAD_LAYOUT_SYNC_MIN_INTERVAL_MS = 15000;
   const THREAD_LAYOUT_SYNC_DEBOUNCE_MS = 800;
@@ -90,6 +92,13 @@ export function createSelectionThreadManager(appContext) {
     startLeft: 0,
     startTotal: 0,
     ratio: 0.5
+  };
+  const fullscreenResizeState = {
+    active: false,
+    edge: '',
+    startX: 0,
+    startWidth: 0,
+    currentWidth: 0
   };
 
   function clearThreadBannerPeekTimer() {
@@ -2225,6 +2234,7 @@ export function createSelectionThreadManager(appContext) {
   function exitThread(options = {}) {
     const { skipDraftCleanup = false } = options || {};
     stopThreadResize();
+    stopFullscreenWidthResize();
     clearThreadBannerPeekTimer();
     const currentThreadId = state.activeThreadId;
     if (!skipDraftCleanup && currentThreadId) {
@@ -2287,6 +2297,56 @@ export function createSelectionThreadManager(appContext) {
     if (Number.isFinite(cssWidth) && cssWidth > 0) return cssWidth;
     const fallback = document.documentElement?.clientWidth || window.innerWidth || 0;
     return Number.isFinite(fallback) ? fallback : 0;
+  }
+
+  function getFullscreenWidthBounds() {
+    const externalBounds = settingsManager?.getFullscreenWidthBounds?.();
+    if (externalBounds && Number.isFinite(externalBounds.min) && Number.isFinite(externalBounds.max)) {
+      return {
+        min: externalBounds.min,
+        max: Math.max(externalBounds.min, externalBounds.max)
+      };
+    }
+    const viewportWidth = Math.floor(getViewportWidth());
+    const viewportLimitedMax = viewportWidth - 30;
+    const min = FULLSCREEN_RESIZE_MIN_WIDTH;
+    const max = Number.isFinite(viewportLimitedMax) && viewportLimitedMax > 0
+      ? Math.max(min, viewportLimitedMax)
+      : min;
+    return { min, max };
+  }
+
+  function clampFullscreenWidth(value) {
+    if (settingsManager?.clampFullscreenWidth) {
+      return settingsManager.clampFullscreenWidth(value);
+    }
+    const { min, max } = getFullscreenWidthBounds();
+    return Math.round(clampNumber(Number(value), min, max));
+  }
+
+  function getCurrentFullscreenWidth() {
+    const configuredWidth = Number(settingsManager?.getSetting?.('fullscreenWidth'));
+    if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
+      return clampFullscreenWidth(configuredWidth);
+    }
+    const fallback = getDefaultThreadColumnWidth();
+    return clampFullscreenWidth(fallback);
+  }
+
+  function applyFullscreenWidthPreview(width) {
+    const safeWidth = clampFullscreenWidth(width);
+    if (settingsManager?.previewFullscreenWidth) {
+      settingsManager.previewFullscreenWidth(safeWidth);
+    } else {
+      settingsManager?.setFullscreenWidth?.(safeWidth);
+    }
+    return safeWidth;
+  }
+
+  function commitFullscreenWidth(width) {
+    const safeWidth = clampFullscreenWidth(width);
+    settingsManager?.setFullscreenWidth?.(safeWidth);
+    return safeWidth;
   }
 
   function getDefaultThreadColumnWidth() {
@@ -2521,6 +2581,52 @@ export function createSelectionThreadManager(appContext) {
     return !!state.activeThreadId && isFullscreenLayout();
   }
 
+  function isFullscreenWidthResizeEnabled() {
+    return !state.activeThreadId && isFullscreenLayout();
+  }
+
+  function handleFullscreenWidthResizeMove(event) {
+    if (!fullscreenResizeState.active) return;
+    const delta = (event?.clientX ?? 0) - fullscreenResizeState.startX;
+    const direction = fullscreenResizeState.edge === 'edge-right' ? 1 : -1;
+    const nextWidth = fullscreenResizeState.startWidth + delta * 2 * direction;
+    const clampedWidth = applyFullscreenWidthPreview(nextWidth);
+    fullscreenResizeState.currentWidth = clampedWidth;
+  }
+
+  function stopFullscreenWidthResize() {
+    if (!fullscreenResizeState.active) return;
+    const finalWidth = clampFullscreenWidth(
+      fullscreenResizeState.currentWidth || fullscreenResizeState.startWidth
+    );
+    fullscreenResizeState.active = false;
+    fullscreenResizeState.edge = '';
+    document.body.classList.remove('fullscreen-width-resize-active');
+    document.removeEventListener('mousemove', handleFullscreenWidthResizeMove);
+    document.removeEventListener('mouseup', stopFullscreenWidthResize);
+    window.removeEventListener('blur', stopFullscreenWidthResize);
+    commitFullscreenWidth(finalWidth);
+  }
+
+  function startFullscreenWidthResize(event, edge) {
+    if (!event || !isFullscreenWidthResizeEnabled()) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startWidth = getCurrentFullscreenWidth();
+    fullscreenResizeState.active = true;
+    fullscreenResizeState.edge = edge;
+    fullscreenResizeState.startX = event.clientX;
+    fullscreenResizeState.startWidth = startWidth;
+    fullscreenResizeState.currentWidth = startWidth;
+
+    applyFullscreenWidthPreview(startWidth);
+    document.body.classList.add('fullscreen-width-resize-active');
+    document.addEventListener('mousemove', handleFullscreenWidthResizeMove);
+    document.addEventListener('mouseup', stopFullscreenWidthResize);
+    window.addEventListener('blur', stopFullscreenWidthResize);
+  }
+
   function handleThreadResizeMove(event) {
     // 拖动中线只改左右比例；拖动两侧边缘则等比调整总宽度并保持居中。
     if (!threadResizeState.active) return;
@@ -2579,19 +2685,37 @@ export function createSelectionThreadManager(appContext) {
   function bindThreadResizeHandles() {
     if (!threadSplitter || !threadResizeEdgeLeft || !threadResizeEdgeRight) return;
     threadSplitter.addEventListener('mousedown', (event) => {
+      if (!isThreadResizeEnabled()) return;
       startThreadResize(event, 'split');
     });
     threadResizeEdgeLeft.addEventListener('mousedown', (event) => {
-      startThreadResize(event, 'edge-left');
+      if (isThreadResizeEnabled()) {
+        startThreadResize(event, 'edge-left');
+        return;
+      }
+      startFullscreenWidthResize(event, 'edge-left');
     });
     threadResizeEdgeRight.addEventListener('mousedown', (event) => {
-      startThreadResize(event, 'edge-right');
+      if (isThreadResizeEnabled()) {
+        startThreadResize(event, 'edge-right');
+        return;
+      }
+      startFullscreenWidthResize(event, 'edge-right');
     });
   }
 
   function handleThreadResizeViewportChange() {
-    if (!isThreadResizeEnabled()) return;
-    syncThreadLayoutWidths();
+    if (isThreadResizeEnabled()) {
+      syncThreadLayoutWidths();
+    }
+    if (isFullscreenWidthResizeEnabled()) {
+      const currentWidth = getCurrentFullscreenWidth();
+      applyFullscreenWidthPreview(currentWidth);
+      if (fullscreenResizeState.active) {
+        fullscreenResizeState.startWidth = currentWidth;
+        fullscreenResizeState.currentWidth = currentWidth;
+      }
+    }
   }
 
   function isThreadModeActive() {
