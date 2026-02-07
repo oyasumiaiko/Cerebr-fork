@@ -1830,9 +1830,12 @@ export function createChatHistoryUI(appContext) {
   /**
    * 保存或更新当前对话至持久存储
    * @param {boolean} [isUpdate=false] - 是否为更新操作
+   * @param {{ preserveExistingApiLock?: boolean }} [options] - 额外保存选项
+   *   - preserveExistingApiLock: 当内存态未携带 apiLock 时，是否回退继承已存储会话中的 apiLock（默认 true）
    * @returns {Promise<void>}
    */
-  async function saveCurrentConversation(isUpdate = false) {
+  async function saveCurrentConversation(isUpdate = false, options = {}) {
+    const preserveExistingApiLock = options?.preserveExistingApiLock !== false;
     const chatHistory = services.chatHistoryManager.chatHistory;
     const rawMessages = chatHistory.messages;
     if (rawMessages.length === 0) {
@@ -1966,7 +1969,7 @@ export function createChatHistoryUI(appContext) {
             forkedFromMessageIdToSave = existingConversation.forkedFromMessageId.trim();
           }
 
-          if (!apiLockToSave) {
+          if (preserveExistingApiLock && !apiLockToSave) {
             apiLockToSave = normalizeConversationApiLock(existingConversation.apiLock);
           }
           
@@ -2242,7 +2245,7 @@ export function createChatHistoryUI(appContext) {
         if (shouldClear) delete activeConversation.apiLock;
         else activeConversation.apiLock = nextLock;
       }
-      await saveCurrentConversation(true);
+      await saveCurrentConversation(true, { preserveExistingApiLock: false });
     } else {
       const conversation = await getConversationFromCacheOrLoad(targetId);
       if (!conversation) {
@@ -2658,8 +2661,6 @@ export function createChatHistoryUI(appContext) {
     
     // 通知消息发送器当前会话ID已更新
     services.messageSender.setCurrentConversationId(currentConversationId);
-    // 历史回放后主动重算并行回答标记，确保旧对话/从记录加载的消息也能命中全屏并排布局。
-    services.messageSender.refreshParallelAnswerLayout?.();
     emitConversationApiContextChanged();
 
     if (!skipScrollToBottom) {

@@ -56,11 +56,6 @@ export function createApiManager(appContext) {
   // 拖动排序用的临时状态，避免在拖动过程中频繁写入。
   let draggingCardIndex = null;
   const DELETE_CONFIRM_TIMEOUT_MS = 2600;
-  // 输入区多 API 选择（仅运行时，不持久化）
-  const runtimeMultiApiSelection = new Map();
-  let runtimePrimaryApiId = null;
-  // 多 API 回复的“上下文采用策略”（仅运行时，不持久化）
-  let runtimeHistoryAssistantMode = 'primary';
 
   const {
     dom,
@@ -102,173 +97,10 @@ export function createApiManager(appContext) {
     }
   }
 
-  function normalizeRuntimeMultiApiCount(raw) {
-    const num = Math.floor(Number(raw) || 0);
-    if (!Number.isFinite(num)) return 0;
-    return Math.max(0, num);
-  }
-
-  function getRuntimeConfigKey(config) {
-    if (!config || typeof config !== 'object') return '';
-    const id = (typeof config.id === 'string') ? config.id.trim() : '';
-    if (id) return id;
-    const baseUrl = (typeof config.baseUrl === 'string') ? config.baseUrl.trim() : '';
-    const modelName = (typeof config.modelName === 'string') ? config.modelName.trim() : '';
-    if (baseUrl && modelName) return `${baseUrl}|${modelName}`;
-    return '';
-  }
-
-  function emitRuntimeMultiApiSelectionChanged() {
-    try {
-      document.dispatchEvent(new CustomEvent('MULTI_API_SELECTION_CHANGED'));
-    } catch (_) {}
-  }
-
-  function emitRuntimeHistoryModeChanged() {
-    try {
-      document.dispatchEvent(new CustomEvent('MULTI_API_HISTORY_MODE_CHANGED'));
-    } catch (_) {}
-  }
-
-  function normalizeHistoryAssistantMode(mode) {
-    const safe = (typeof mode === 'string') ? mode.trim() : '';
-    if (safe === 'primary' || safe === 'selected' || safe === 'all') return safe;
-    return 'primary';
-  }
-
-  function ensureRuntimeMultiApiSelection() {
-    const validKeys = new Set();
-    apiConfigs.forEach((config) => {
-      const key = getRuntimeConfigKey(config);
-      if (key) validKeys.add(key);
-    });
-
-    for (const [key, value] of runtimeMultiApiSelection.entries()) {
-      if (!validKeys.has(key) || normalizeRuntimeMultiApiCount(value) <= 0) {
-        runtimeMultiApiSelection.delete(key);
-      }
-    }
-
-    if (runtimeMultiApiSelection.size === 0) {
-      const fallback = apiConfigs[selectedConfigIndex] || apiConfigs[0] || null;
-      const fallbackKey = getRuntimeConfigKey(fallback);
-      if (fallbackKey) {
-        runtimeMultiApiSelection.set(fallbackKey, 1);
-        runtimePrimaryApiId = fallbackKey;
-      }
-    }
-
-    if (runtimePrimaryApiId && runtimeMultiApiSelection.has(runtimePrimaryApiId)) {
-      return;
-    }
-
-    for (const [key] of runtimeMultiApiSelection.entries()) {
-      runtimePrimaryApiId = key;
-      break;
-    }
-  }
-
-  function getRuntimeMultiApiSelection() {
-    ensureRuntimeMultiApiSelection();
-    const entries = [];
-    let total = 0;
-    apiConfigs.forEach((config) => {
-      const key = getRuntimeConfigKey(config);
-      if (!key) return;
-      const count = normalizeRuntimeMultiApiCount(runtimeMultiApiSelection.get(key));
-      if (count <= 0) return;
-      entries.push({
-        key,
-        config,
-        count,
-        isPrimary: key === runtimePrimaryApiId
-      });
-      total += count;
-    });
-    let primaryConfig = null;
-    if (runtimePrimaryApiId) {
-      primaryConfig = entries.find(entry => entry.key === runtimePrimaryApiId)?.config || null;
-    }
-    if (!primaryConfig && entries.length > 0) {
-      primaryConfig = entries[0].config;
-    }
-    return {
-      entries,
-      total,
-      primaryId: runtimePrimaryApiId,
-      primaryConfig
-    };
-  }
-
-  function setRuntimeMultiApiSingle(config) {
-    const key = getRuntimeConfigKey(config);
-    if (!key) return { ok: false };
-    runtimeMultiApiSelection.clear();
-    runtimeMultiApiSelection.set(key, 1);
-    runtimePrimaryApiId = key;
-    ensureRuntimeMultiApiSelection();
-    emitRuntimeMultiApiSelectionChanged();
-    return { ok: true, selection: getRuntimeMultiApiSelection() };
-  }
-
-  function toggleRuntimeMultiApiSelection(config) {
-    const key = getRuntimeConfigKey(config);
-    if (!key) return { ok: false };
-    if (runtimeMultiApiSelection.has(key)) {
-      if (runtimeMultiApiSelection.size <= 1) {
-        return { ok: false, reason: 'min_one' };
-      }
-      runtimeMultiApiSelection.delete(key);
-      if (runtimePrimaryApiId === key) runtimePrimaryApiId = null;
-    } else {
-      runtimeMultiApiSelection.set(key, 1);
-    }
-    ensureRuntimeMultiApiSelection();
-    emitRuntimeMultiApiSelectionChanged();
-    return { ok: true, selection: getRuntimeMultiApiSelection() };
-  }
-
-  function updateRuntimeMultiApiCount(config, count) {
-    const key = getRuntimeConfigKey(config);
-    if (!key) return { ok: false };
-    const normalized = normalizeRuntimeMultiApiCount(count);
-    if (normalized <= 0) {
-      if (runtimeMultiApiSelection.size <= 1) {
-        return { ok: false, reason: 'min_one' };
-      }
-      runtimeMultiApiSelection.delete(key);
-      if (runtimePrimaryApiId === key) runtimePrimaryApiId = null;
-    } else {
-      runtimeMultiApiSelection.set(key, normalized);
-    }
-    ensureRuntimeMultiApiSelection();
-    emitRuntimeMultiApiSelectionChanged();
-    return { ok: true, selection: getRuntimeMultiApiSelection() };
-  }
-
-  function getRuntimeHistoryAssistantMode() {
-    return normalizeHistoryAssistantMode(runtimeHistoryAssistantMode);
-  }
-
-  function setRuntimeHistoryAssistantMode(mode) {
-    const next = normalizeHistoryAssistantMode(mode);
-    if (next === runtimeHistoryAssistantMode) return { ok: true, mode: next };
-    runtimeHistoryAssistantMode = next;
-    emitRuntimeHistoryModeChanged();
-    return { ok: true, mode: next };
-  }
-
-  function setSelectedIndexInternal(index, options = {}) {
+  function setSelectedIndexInternal(index) {
     if (!Number.isFinite(index)) return false;
     if (index < 0 || index >= apiConfigs.length) return false;
     selectedConfigIndex = index;
-    const syncRuntime = options.syncRuntime !== false;
-    if (syncRuntime) {
-      const selectedConfig = apiConfigs[index] || null;
-      if (selectedConfig) {
-        setRuntimeMultiApiSingle(selectedConfig);
-      }
-    }
     saveAPIConfigs(); // 保存选中的索引
     renderAPICards(); // 更新卡片选中状态
     renderFavoriteApis(); // 更新收藏列表选中状态
@@ -1074,7 +906,7 @@ export function createApiManager(appContext) {
       });
       // 设置当前卡片为选中状态
       template.classList.add('selected');
-      setSelectedIndexInternal(index, { syncRuntime: true });
+      setSelectedIndexInternal(index);
       // 关闭面板并回到聊天界面（旧行为：选择后退出设置层）
       if (appContext.services?.chatHistoryUI?.closeChatHistoryPanel) {
         appContext.services.chatHistoryUI.closeChatHistoryPanel();
@@ -2472,12 +2304,6 @@ export function createApiManager(appContext) {
     getModelConfig,
     getApiConfigFromPartial,
     resolveApiParam,
-    getRuntimeMultiApiSelection,
-    setRuntimeMultiApiSingle,
-    toggleRuntimeMultiApiSelection,
-    updateRuntimeMultiApiCount,
-    getRuntimeHistoryAssistantMode,
-    setRuntimeHistoryAssistantMode,
 
     // 获取和设置配置
     getSelectedConfig: () => {
@@ -2491,7 +2317,7 @@ export function createApiManager(appContext) {
     },
     getAllConfigs: () => [...apiConfigs], // 返回包含轮询状态的配置副本
     getSelectedIndex: () => selectedConfigIndex,
-    setSelectedIndex: (index, options = {}) => setSelectedIndexInternal(index, options),
+    setSelectedIndex: (index) => setSelectedIndexInternal(index),
 
     // 添加新配置
     addConfig

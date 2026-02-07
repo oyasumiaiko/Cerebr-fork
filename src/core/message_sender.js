@@ -178,13 +178,13 @@ export function createMessageSender(appContext) {
   let isProcessingMessage = false;
   let shouldAutoScroll = true;
   /**
-   * 当前所有进行中的请求尝试集合（支持并行生成）
+   * 当前所有进行中的请求尝试集合（支持并发请求）
    * key 为内部 attemptId，value 为尝试状态对象：
    * { id, controller, manualAbort, finished, loadingMessage, aiMessageId }
-   * 
+   *
    * 设计说明：
-   * - 之前只维护单一 activeAttempt，无法区分多路并行流式响应；
-   * - 现在将每一路请求视为独立 attempt，便于实现“按消息粒度的停止生成 / 自动重试”。
+   * - 之前只维护单一 activeAttempt，无法区分不同请求生命周期；
+   * - 现在将每一次请求视为独立 attempt，便于实现“按消息粒度的停止生成 / 自动重试”。
    */
   const activeAttempts = new Map();
   let isTemporaryMode = false;
@@ -888,290 +888,6 @@ export function createMessageSender(appContext) {
       : '';
     if (explicit) return explicit;
     return chatHistoryManager.chatHistory.currentNode || null;
-  }
-
-  function getParallelLayoutContainers() {
-    const containers = [];
-    if (chatContainer) containers.push(chatContainer);
-    if (threadContainer && threadContainer !== chatContainer) containers.push(threadContainer);
-    return containers;
-  }
-
-  function refreshParallelLayoutContainerState() {
-    getParallelLayoutContainers().forEach((container) => {
-      const hasParallel = !!container.querySelector('.message.ai-message.parallel-answer-item');
-      container.classList.toggle('parallel-answer-layout-active', hasParallel);
-    });
-  }
-
-  function clearParallelAnswerLayoutMarker(messageElement) {
-    if (!messageElement || !messageElement.classList) return;
-    messageElement.classList.remove('parallel-answer-item');
-    messageElement.removeAttribute('data-parallel-parent-id');
-    messageElement.removeAttribute('data-parallel-answer-count');
-    messageElement.removeAttribute('data-parallel-answer-index');
-    try {
-      messageElement.style.removeProperty('--parallel-answer-count');
-      messageElement.style.removeProperty('--parallel-answer-index');
-      messageElement.style.removeProperty('--parallel-answer-is-last');
-    } catch (_) {}
-  }
-
-  function markParallelAnswerLayoutMarker(messageElement, parentId, total, visualIndex) {
-    if (!messageElement || !messageElement.classList || total <= 1 || !parentId) {
-      clearParallelAnswerLayoutMarker(messageElement);
-      return;
-    }
-
-    const normalizedIndex = Math.max(0, Math.min(total - 1, Number.isFinite(visualIndex) ? Math.floor(visualIndex) : 0));
-    messageElement.classList.add('parallel-answer-item');
-    messageElement.setAttribute('data-parallel-parent-id', parentId);
-    messageElement.setAttribute('data-parallel-answer-count', String(total));
-    messageElement.setAttribute('data-parallel-answer-index', String(normalizedIndex));
-    try {
-      messageElement.style.setProperty('--parallel-answer-count', String(total));
-      messageElement.style.setProperty('--parallel-answer-index', String(normalizedIndex));
-      messageElement.style.setProperty('--parallel-answer-is-last', normalizedIndex === total - 1 ? '1' : '0');
-    } catch (_) {}
-  }
-
-  function clearAllParallelAnswerLayoutMarkers() {
-    const markerSelector = '.message.ai-message.parallel-answer-item, .message.ai-message[data-parallel-parent-id], .message.ai-message[data-parallel-answer-count]';
-    getParallelLayoutContainers().forEach((container) => {
-      container.querySelectorAll(markerSelector).forEach((element) => {
-        clearParallelAnswerLayoutMarker(element);
-      });
-      container.classList.remove('parallel-answer-layout-active');
-    });
-  }
-
-  function resolveMessageElementsById(messageId) {
-    const safeId = escapeMessageIdForSelector(messageId);
-    if (!safeId) return [];
-    const selector = `.message[data-message-id="${safeId}"]`;
-    const elements = [];
-    getParallelLayoutContainers().forEach((container) => {
-      container.querySelectorAll(selector).forEach((element) => {
-        elements.push(element);
-      });
-    });
-    return elements;
-  }
-
-  function readParallelAnswerIndexFromElement(messageElement) {
-    if (!messageElement) return null;
-    const styleIndex = messageElement.style?.getPropertyValue?.('--parallel-answer-index') || '';
-    const attrIndex = messageElement.getAttribute('data-parallel-answer-index') || '';
-    const rawIndex = styleIndex || attrIndex;
-    const parsed = Number(rawIndex);
-    if (!Number.isFinite(parsed) || parsed < 0) return null;
-    return Math.floor(parsed);
-  }
-
-  function readParallelAnswerCountFromElement(messageElement) {
-    if (!messageElement) return null;
-    const styleCount = messageElement.style?.getPropertyValue?.('--parallel-answer-count') || '';
-    const attrCount = messageElement.getAttribute('data-parallel-answer-count') || '';
-    const rawCount = styleCount || attrCount;
-    const parsed = Number(rawCount);
-    if (!Number.isFinite(parsed) || parsed <= 1) return null;
-    return Math.floor(parsed);
-  }
-
-  function normalizeParallelAnswerCount(value) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return null;
-    const normalized = Math.floor(parsed);
-    if (normalized <= 1) return null;
-    return normalized;
-  }
-
-  function normalizeParallelAnswerIndex(value, total = null) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return null;
-    let normalized = Math.floor(parsed);
-    if (normalized < 0) return null;
-    if (Number.isFinite(total) && total > 0) {
-      normalized = Math.max(0, Math.min(total - 1, normalized));
-    }
-    return normalized;
-  }
-
-  function readParallelAnswerCountFromNode(node) {
-    if (!node || typeof node !== 'object') return null;
-    return normalizeParallelAnswerCount(node.parallelAnswerCount);
-  }
-
-  function readParallelAnswerIndexFromNode(node, total = null) {
-    if (!node || typeof node !== 'object') return null;
-    return normalizeParallelAnswerIndex(node.parallelAnswerIndex, total);
-  }
-  // Persist parallel layout slot metadata on history nodes for stable reload behavior.
-  function applyParallelAnswerLayoutMetaToNode(node, total, index) {
-    if (!node || typeof node !== 'object') return;
-    const normalizedTotal = normalizeParallelAnswerCount(total);
-    const normalizedIndex = normalizeParallelAnswerIndex(index, normalizedTotal || undefined);
-    if (normalizedTotal && Number.isFinite(normalizedIndex)) {
-      node.parallelAnswerCount = normalizedTotal;
-      node.parallelAnswerIndex = normalizedIndex;
-    } else {
-      delete node.parallelAnswerCount;
-      delete node.parallelAnswerIndex;
-    }
-  }
-
-  function resolveParallelAnswerGroupTotal(parentId, assistantCount, containers) {
-    const safeParentId = escapeMessageIdForSelector(parentId);
-    if (!safeParentId) return assistantCount;
-
-    let maxTotal = Math.max(assistantCount, 0);
-    const selector = `.message.ai-message[data-parallel-parent-id="${safeParentId}"]`;
-    containers.forEach((container) => {
-      const elements = container.querySelectorAll(selector);
-      if (elements.length > maxTotal) {
-        maxTotal = elements.length;
-      }
-      elements.forEach((element) => {
-        const parsed = readParallelAnswerCountFromElement(element);
-        if (Number.isFinite(parsed) && parsed > maxTotal) {
-          maxTotal = parsed;
-        }
-      });
-    });
-    return maxTotal;
-  }
-
-  function syncParallelAnswerLayoutForParent(parentMessageId) {
-    const parentId = (typeof parentMessageId === 'string') ? parentMessageId.trim() : '';
-    if (!parentId) return;
-
-    const messages = chatHistoryManager?.chatHistory?.messages || [];
-    if (!Array.isArray(messages) || messages.length === 0) return;
-
-    const messageLookup = new Map();
-    messages.forEach((node) => {
-      if (node?.id) messageLookup.set(node.id, node);
-    });
-
-    const parentNode = messageLookup.get(parentId) || null;
-    if (!parentNode) return;
-
-    const childIds = Array.isArray(parentNode.children) ? parentNode.children : [];
-    const assistantChildren = childIds
-      .map((childId, orderIndex) => ({ node: messageLookup.get(childId), orderIndex }))
-      .filter((item) => item.node && item.node.role === 'assistant' && !item.node.threadHiddenSelection);
-
-    const validIds = new Set(assistantChildren.map((item) => item.node.id));
-    const safeParentId = escapeMessageIdForSelector(parentId);
-    const containers = getParallelLayoutContainers();
-
-    const total = resolveParallelAnswerGroupTotal(parentId, assistantChildren.length, containers);
-
-    if (safeParentId) {
-      const staleSelector = `.message.ai-message[data-parallel-parent-id="${safeParentId}"]`;
-      containers.forEach((container) => {
-        container.querySelectorAll(staleSelector).forEach((element) => {
-          const messageId = element.getAttribute('data-message-id') || '';
-          if (messageId && validIds.has(messageId)) return;
-          const keepPendingLoading = !messageId && total > 1 && element.classList.contains('loading-message');
-          if (keepPendingLoading) return;
-          clearParallelAnswerLayoutMarker(element);
-        });
-      });
-    }
-
-    const items = assistantChildren.map((item) => {
-      const elements = resolveMessageElementsById(item.node.id);
-      const nodePreferredIndex = readParallelAnswerIndexFromNode(item.node, total);
-      let preferredIndex = Number.isFinite(nodePreferredIndex) ? nodePreferredIndex : null;
-      if (!Number.isFinite(preferredIndex)) {
-        for (const element of elements) {
-          const currentIndex = readParallelAnswerIndexFromElement(element);
-          if (Number.isFinite(currentIndex)) {
-            preferredIndex = currentIndex;
-            break;
-          }
-        }
-      }
-      return {
-        node: item.node,
-        orderIndex: item.orderIndex,
-        elements,
-        preferredIndex
-      };
-    });
-
-    const allocatedIndexes = new Set();
-    const nodeIndexMap = new Map();
-    const clampIndex = (value) => {
-      if (total <= 0) return 0;
-      return Math.max(0, Math.min(total - 1, value));
-    };
-
-    items
-      .filter((item) => Number.isFinite(item.preferredIndex))
-      .sort((a, b) => {
-        if (a.preferredIndex !== b.preferredIndex) return a.preferredIndex - b.preferredIndex;
-        return a.orderIndex - b.orderIndex;
-      })
-      .forEach((item) => {
-        let next = clampIndex(Math.floor(item.preferredIndex));
-        while (allocatedIndexes.has(next) && next < total - 1) {
-          next += 1;
-        }
-        while (allocatedIndexes.has(next) && next > 0) {
-          next -= 1;
-        }
-        if (allocatedIndexes.has(next)) return;
-        allocatedIndexes.add(next);
-        nodeIndexMap.set(item.node.id, next);
-      });
-
-    let cursor = 0;
-    items
-      .filter((item) => !nodeIndexMap.has(item.node.id))
-      .sort((a, b) => a.orderIndex - b.orderIndex)
-      .forEach((item) => {
-        while (allocatedIndexes.has(cursor) && cursor < total) {
-          cursor += 1;
-        }
-        const next = cursor < total ? cursor : clampIndex(total - 1);
-        allocatedIndexes.add(next);
-        nodeIndexMap.set(item.node.id, next);
-      });
-
-    items.forEach((item) => {
-      const visualIndex = nodeIndexMap.get(item.node.id) ?? clampIndex(item.orderIndex);
-      applyParallelAnswerLayoutMetaToNode(item.node, total, visualIndex);
-      if (!item.elements.length) return;
-      item.elements.forEach((element) => {
-        if (total > 1) {
-          markParallelAnswerLayoutMarker(element, parentId, total, visualIndex);
-        } else {
-          clearParallelAnswerLayoutMarker(element);
-        }
-      });
-    });
-
-    refreshParallelLayoutContainerState();
-  }
-  // Recompute parallel layout markers for non-send flows (history replay/fullscreen toggle).
-  function refreshParallelAnswerLayout() {
-    clearAllParallelAnswerLayoutMarkers();
-
-    const messages = chatHistoryManager?.chatHistory?.messages || [];
-    if (!Array.isArray(messages) || messages.length === 0) return;
-
-    const parentIds = new Set();
-    messages.forEach((node) => {
-      if (!node || node.role !== 'assistant' || node.threadHiddenSelection) return;
-      const parentId = (typeof node.parentId === 'string') ? node.parentId.trim() : '';
-      if (parentId) parentIds.add(parentId);
-    });
-
-    parentIds.forEach((parentId) => {
-      syncParallelAnswerLayoutForParent(parentId);
-    });
   }
 
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
@@ -2218,8 +1934,8 @@ export function createMessageSender(appContext) {
    * Core single-request send logic.
    *
    * 说明：
-   * - Public callers should use sendMessage (below), which handles multi-API parallel dispatch when needed;
-   * - sendMessageCore 始终只处理“一次对话请求”，方便自动重试逻辑直接复用，而不会重复拆分并行。
+   * - Public callers should use sendMessage (below);
+   * - sendMessageCore 始终只处理“一次对话请求”，方便自动重试逻辑直接复用。
    *
    * @private
    * @param {Object} [options] - 可选参数对象
@@ -2252,16 +1968,8 @@ export function createMessageSender(appContext) {
       resolvedApiConfig = null,
       pageContentSnapshot = null,
       conversationSnapshot = null,
-      aspectRatioOverride: externalAspectRatioOverride = null,
-      __parallelAnswerCount = null,
-      __parallelAnswerIndex = null
+      aspectRatioOverride: externalAspectRatioOverride = null
     } = options;
-
-    const requestedParallelAnswerCount = normalizeParallelAnswerCount(__parallelAnswerCount);
-    const requestedParallelAnswerIndex = normalizeParallelAnswerIndex(
-      __parallelAnswerIndex,
-      requestedParallelAnswerCount || undefined
-    );
 
     const conversationApiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
       ? chatHistoryUI.resolveActiveConversationApiConfig()
@@ -2486,14 +2194,6 @@ export function createMessageSender(appContext) {
       // 开始处理消息：为本次请求注册 attempt，并在必要时开启全局“正在处理”状态
       attempt = beginAttempt();
       const signal = attempt.controller.signal;
-      // Keep a fixed slot index for each parallel request to avoid position swapping under concurrent updates.
-      if (requestedParallelAnswerCount && Number.isFinite(requestedParallelAnswerIndex)) {
-        attempt.parallelAnswerCount = requestedParallelAnswerCount;
-        attempt.parallelAnswerIndex = requestedParallelAnswerIndex;
-      } else {
-        attempt.parallelAnswerCount = 1;
-        attempt.parallelAnswerIndex = null;
-      }
 
       // 如果已有注入的系统消息，则使用它；否则从消息文本中提取
       const injectedSystemMessages = existingInjectedSystemMessages.length > 0 ? 
@@ -2619,28 +2319,11 @@ export function createMessageSender(appContext) {
               || (threadContainer ? threadContainer.querySelector(selector) : null))
             : null;
           const isAssistantNode = !!(node && node.role === 'assistant');
-          const isAiElement = !!(el && el.classList && el.classList.contains('ai-message'));
           // 允许“仅历史节点存在但 DOM 缺失”的场景继续原地替换，避免线程切换时误追加新消息。
           canUpdateExistingAiMessage = !!isAssistantNode;
 
           if (canUpdateExistingAiMessage) {
             // 绑定 attempt 到目标 AI 消息，便于“停止更新”按消息粒度工作
-            const nodeParallelCount = readParallelAnswerCountFromNode(node);
-            const elementParallelCount = readParallelAnswerCountFromElement(el);
-            const resolvedParallelCount = nodeParallelCount || elementParallelCount;
-            const nodeParallelIndex = readParallelAnswerIndexFromNode(node, resolvedParallelCount || undefined);
-            const elementParallelIndex = readParallelAnswerIndexFromElement(el);
-            const resolvedParallelIndex = Number.isFinite(nodeParallelIndex)
-              ? nodeParallelIndex
-              : normalizeParallelAnswerIndex(elementParallelIndex, resolvedParallelCount || undefined);
-
-            if ((!attempt.parallelAnswerCount || attempt.parallelAnswerCount <= 1)
-              && resolvedParallelCount
-              && Number.isFinite(resolvedParallelIndex)) {
-              attempt.parallelAnswerCount = resolvedParallelCount;
-              attempt.parallelAnswerIndex = resolvedParallelIndex;
-            }
-
             attempt.aiMessageId = normalizedTargetAiMessageId;
             // 阅读位置锁定：仅对“原地替换”重新生成开启。
             // - preserveTargetMessageId 用于在流式/非流式更新时判断是否需要做滚动补偿；
@@ -2683,14 +2366,6 @@ export function createMessageSender(appContext) {
           loadingMessage.classList.add('loading-message');
           // 让“等待回复”占位消息也带有 updating 状态，便于右键菜单显示“停止更新”
           loadingMessage.classList.add('updating');
-
-          const parallelCount = normalizeParallelAnswerCount(attempt.parallelAnswerCount);
-          const parallelIndex = normalizeParallelAnswerIndex(attempt.parallelAnswerIndex, parallelCount || undefined);
-          const parallelParentId = resolveHistoryParentIdForAi(activeThreadContext, attempt);
-          if (parallelParentId && parallelCount && Number.isFinite(parallelIndex)) {
-            markParallelAnswerLayoutMarker(loadingMessage, parallelParentId, parallelCount, parallelIndex);
-            refreshParallelLayoutContainerState();
-          }
         }
       } else {
         loadingMessage = null;
@@ -2778,41 +2453,7 @@ export function createMessageSender(appContext) {
         }
       }
 
-      let filteredConversationChain = conversationChain;
-      if (sendChatHistoryFlag && Array.isArray(conversationChain)) {
-        const historyMode = (typeof apiManager?.getRuntimeHistoryAssistantMode === 'function')
-          ? apiManager.getRuntimeHistoryAssistantMode()
-          : 'all';
-        if (historyMode !== 'all') {
-          const selectionState = (typeof apiManager?.getRuntimeMultiApiSelection === 'function')
-            ? apiManager.getRuntimeMultiApiSelection()
-            : null;
-          const allowedApiIds = new Set();
-          if (historyMode === 'primary') {
-            const primaryConfig = selectionState?.primaryConfig
-              || apiManager.getSelectedConfig?.()
-              || null;
-            const primaryId = primaryConfig?.id || '';
-            if (primaryId) allowedApiIds.add(primaryId);
-          } else if (historyMode === 'selected') {
-            const entries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
-            entries.forEach((entry) => {
-              const id = entry?.config?.id || '';
-              if (id) allowedApiIds.add(id);
-            });
-          }
-
-          if (allowedApiIds.size > 0) {
-            filteredConversationChain = conversationChain.filter((node) => {
-              const role = String(node?.role || '').toLowerCase();
-              if (role !== 'assistant') return true;
-              const apiId = (typeof node?.apiUuid === 'string') ? node.apiUuid.trim() : '';
-              if (!apiId) return true;
-              return allowedApiIds.has(apiId);
-            });
-          }
-        }
-      }
+      const filteredConversationChain = conversationChain;
 
       const messages = composeMessages({
         prompts: promptsConfig,
@@ -3012,17 +2653,13 @@ export function createMessageSender(appContext) {
         conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : null,
         aspectRatioOverride,
         __skipUserMessagePreprocess: skipNextPreprocess,
-        __parallelAnswerCount: attempt?.parallelAnswerCount || requestedParallelAnswerCount || null,
-        __parallelAnswerIndex: Number.isFinite(attempt?.parallelAnswerIndex)
-          ? attempt.parallelAnswerIndex
-          : (Number.isFinite(requestedParallelAnswerIndex) ? requestedParallelAnswerIndex : null),
         // 透传外部策略决定的API（若有）
         resolvedApiConfig,
         api
       };
       const retry = (delayMs = 0, override = {}) => new Promise((resolve) => {
         setTimeout(async () => {
-          // Retry uses core logic directly to avoid duplicate parallel dispatch.
+          // 重试直接复用核心发送逻辑，避免重复解析 UI 输入状态。
           resolve(await sendMessageCore({ ...retryHint, ...override }));
         }, Math.max(0, delayMs));
       });
@@ -3137,7 +2774,7 @@ export function createMessageSender(appContext) {
    * - Parsing stops on unknown or duplicate markers to avoid trimming normal text accidentally.
    *
    * @param {string} text
-   * @returns {{ baseText: string, parallelCount: number, aspectRatio: string|null }}
+   * @returns {{ baseText: string, aspectRatio: string|null }}
    */
   function extractTrailingControlMarkers(text) {
     let raw = (text || '').trimEnd();
@@ -3171,48 +2808,19 @@ export function createMessageSender(appContext) {
 
     return {
       baseText: raw,
-      // Backward-compatible shape: [xN] no longer controls parallel responses.
-      parallelCount: 1,
       aspectRatio: aspectRatio || null
     };
   }
-  function resolveLatestUserMessageId() {
-    try {
-      const history = chatHistoryManager.chatHistory;
-      const currentId = history?.currentNode;
-      const currentNode = history?.messages?.find(m => m.id === currentId);
-      if (currentNode && currentNode.role === 'user') {
-        return currentNode.id;
-      }
-      if (Array.isArray(history?.messages)) {
-        const reversed = history.messages.slice().reverse();
-        const lastUser = reversed.find(m => m.role === 'user');
-        return lastUser ? lastUser.id : null;
-      }
-    } catch (e) {
-      console.warn('解析最新用户消息失败:', e);
-    }
-    return null;
-  }
-
   /**
    * Public send entry:
-   * - Handles slash commands and trailing control markers;
-   * - Uses current runtime multi-API selection for parallel dispatch when enabled;
-   * - Inserts user message once and attaches additional parallel answers to that same user node.
+   * - Handles slash commands and trailing control markers.
    *
    * @public
    * @param {Object} [options] - See sendMessageCore params.
-   * @returns {Promise<any>} - Single route returns sendMessageCore result; parallel route returns Promise.allSettled-like array.
+   * @returns {Promise<any>}
    */
   async function sendMessage(options = {}) {
     const opts = options || {};
-
-    // Internal retry/recursive branch: bypass parallel expansion and run core directly.
-    if (opts.__skipParallelExpansion) {
-      const { __skipParallelExpansion, ...rest } = opts;
-      return sendMessageCore(rest);
-    }
 
     // Resolve source text with the following precedence:
     // 1) regenerate target node data-original-text;
@@ -3282,110 +2890,6 @@ export function createMessageSender(appContext) {
     const baseText = markerInfo.baseText;
     const aspectRatio = markerInfo.aspectRatio;
 
-    const isFollowCurrentApiParam = (apiParam) => {
-      if (typeof apiParam !== 'string') return false;
-      const key = apiParam.trim().toLowerCase();
-      return key === 'follow_current' || key === 'selected';
-    };
-
-    const hasExplicitApiOverride = !!opts.resolvedApiConfig
-      || (opts.api != null && !isFollowCurrentApiParam(opts.api));
-
-    const allowMultiApi = !opts.regenerateMode
-      && !opts.forceSendFullHistory
-      && !hasExplicitApiOverride
-      && !(typeof opts.targetAiMessageId === 'string' && opts.targetAiMessageId.trim());
-
-    const selectionState = allowMultiApi && typeof apiManager?.getRuntimeMultiApiSelection === 'function'
-      ? apiManager.getRuntimeMultiApiSelection()
-      : null;
-
-    const selectionEntries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
-    const selectionTotal = Number(selectionState?.total) || 0;
-
-    if (allowMultiApi && selectionTotal > 1 && selectionEntries.length > 0) {
-      const expandedTargets = [];
-      selectionEntries.forEach((entry) => {
-        const count = Number.isFinite(entry?.count) ? entry.count : 0;
-        if (!entry?.config || count <= 0) return;
-        for (let i = 0; i < count; i += 1) {
-          expandedTargets.push(entry.config);
-        }
-      });
-
-      let multiTargets = expandedTargets;
-      if (multiTargets.length > 0) {
-        const validTargets = multiTargets.filter(config => config?.baseUrl && hasValidApiKey(config.apiKey));
-        if (validTargets.length !== multiTargets.length && typeof showNotification === 'function') {
-          showNotification({ message: '部分 API 配置无效，已自动跳过', type: 'warning', duration: 1800 });
-        }
-        multiTargets = validTargets;
-      }
-
-      if (multiTargets.length === 0) {
-        return sendMessageCore({ ...opts, originalMessageText: baseText, aspectRatioOverride: aspectRatio || undefined });
-      }
-
-      const firstOptions = {
-        ...opts,
-        originalMessageText: baseText,
-        resolvedApiConfig: multiTargets[0],
-        aspectRatioOverride: aspectRatio || undefined,
-        __parallelAnswerCount: multiTargets.length,
-        __parallelAnswerIndex: 0
-      };
-
-      if (multiTargets.length === 1) {
-        return sendMessageCore(firstOptions);
-      }
-
-      const settle = async (promise) => {
-        try {
-          const value = await promise;
-          return { status: 'fulfilled', value };
-        } catch (error) {
-          return { status: 'rejected', reason: error };
-        }
-      };
-
-      const tasks = [];
-      const results = [];
-      const baseUserMessageBefore = resolveLatestUserMessageId();
-      const firstPromise = sendMessageCore(firstOptions);
-      tasks.push(firstPromise);
-      const baseUserMessageId = resolveLatestUserMessageId();
-
-      if (!baseUserMessageId || baseUserMessageId === baseUserMessageBefore) {
-        results.push(await settle(firstPromise));
-        return results;
-      }
-
-      for (let i = 1; i < multiTargets.length; i += 1) {
-        const extraOptions = {
-          ...opts,
-          originalMessageText: baseText,
-          regenerateMode: true,
-          messageId: baseUserMessageId,
-          resolvedApiConfig: multiTargets[i],
-          aspectRatioOverride: aspectRatio || undefined,
-          __parallelAnswerCount: multiTargets.length,
-          __parallelAnswerIndex: i
-        };
-        tasks.push(sendMessageCore(extraOptions));
-      }
-
-      const settled = await Promise.allSettled(tasks);
-      settled.forEach((item) => {
-        if (item.status === 'fulfilled') {
-          results.push({ status: 'fulfilled', value: item.value });
-        } else {
-          results.push({ status: 'rejected', reason: item.reason });
-        }
-      });
-
-      return results;
-    }
-
     const singleOpts = { ...opts };
     if (baseText !== rawText) {
       singleOpts.originalMessageText = baseText;
@@ -3429,9 +2933,6 @@ export function createMessageSender(appContext) {
           node.apiUuid = apiConfig?.id || null;
           node.apiDisplayName = apiConfig?.displayName || '';
           node.apiModelId = apiConfig?.modelName || '';
-          if (node.role === 'assistant' && node.parentId) {
-            syncParallelAnswerLayoutForParent(node.parentId);
-          }
         }
         const safeMessageId = escapeMessageIdForSelector(messageId);
         const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
@@ -3851,7 +3352,7 @@ export function createMessageSender(appContext) {
 
 	      const nowHasAnswerContent = (typeof aiResponse === 'string') && aiResponse.trim() !== '';
 	      if (!hasStartedResponse) {
-	        // 首次收到内容（文本或图片）：优先尝试复用 loading 占位，避免并行时乱序
+	        // 首次收到内容（文本或图片）：优先尝试复用 loading 占位，避免占位升级与新建消息交错导致顺序异常
 	        hasStartedResponse = true;
 	        try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
@@ -4291,9 +3792,6 @@ export function createMessageSender(appContext) {
           node.apiUuid = apiConfig?.id || null;
           node.apiDisplayName = apiConfig?.displayName || '';
           node.apiModelId = apiConfig?.modelName || '';
-          if (node.role === 'assistant' && node.parentId) {
-            syncParallelAnswerLayoutForParent(node.parentId);
-          }
         }
         const safeMessageId = escapeMessageIdForSelector(messageId);
         const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
@@ -4539,7 +4037,7 @@ export function createMessageSender(appContext) {
       thoughts = mergeThoughts(thoughts, thinkExtraction.thoughtText);
     }
 
-    // 优先复用 loading 占位，避免并行场景下乱序
+    // 优先复用 loading 占位，避免占位升级与新建消息交错导致顺序异常
     try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
 
     // “原地替换”模式：attemptState.aiMessageId 会在 sendMessageCore 阶段预先绑定到目标消息。
@@ -4972,7 +4470,6 @@ export function createMessageSender(appContext) {
     getCurrentConversationId,
     getShouldAutoScroll,
     setShouldAutoScroll,
-    refreshParallelAnswerLayout,
     getSlashCommandList,
     getSlashCommandHints
   };

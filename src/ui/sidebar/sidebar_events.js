@@ -167,37 +167,13 @@ function setupApiMenuWatcher(appContext) {
     const favoriteConfigs = configs
       .map((config, index) => ({ config, index }))
       .filter(item => item.config && item.config.isFavorite);
-    const selectionState = (typeof apiManager?.getRuntimeMultiApiSelection === 'function')
-      ? apiManager.getRuntimeMultiApiSelection()
-      : { entries: [], total: 0, primaryConfig: null };
-    const selectionEntries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
-    const historyMode = (typeof apiManager?.getRuntimeHistoryAssistantMode === 'function')
-      ? apiManager.getRuntimeHistoryAssistantMode()
-      : 'primary';
 
     const resolveConfigLabel = (config) => {
       if (!config) return 'API';
       return config.displayName || config.modelName || config.baseUrl || 'API';
     };
 
-    const buildSelectionLabel = (entries) => {
-      if (!Array.isArray(entries) || entries.length === 0) return '';
-      const parts = [];
-      entries.forEach((entry) => {
-        const label = resolveConfigLabel(entry?.config);
-        if (!label) return;
-        const count = Number.isFinite(entry?.count) ? entry.count : 0;
-        if (count > 1) {
-          parts.push(`${label}×${count}`);
-        } else {
-          parts.push(label);
-        }
-      });
-      return parts.join('、');
-    };
-
-    const selectionLabel = buildSelectionLabel(selectionEntries);
-    const currentName = selectionLabel || resolveConfigLabel(displayConfig);
+    const currentName = resolveConfigLabel(displayConfig);
     currentEl.textContent = '';
     const textSpan = document.createElement('span');
     textSpan.className = 'input-api-current-text';
@@ -240,128 +216,32 @@ function setupApiMenuWatcher(appContext) {
       return divider;
     };
 
-    listEl.appendChild(createOption('提示：单击切换，Ctrl 多选，右侧 + / - 调整次数', null, { variant: 'hint' }));
-    listEl.appendChild(createDivider());
-
-    const selectionMap = new Map();
-    selectionEntries.forEach((entry) => {
-      if (entry?.key) selectionMap.set(entry.key, entry);
-    });
-
-    const resolveConfigKey = (config) => {
-      if (!config) return '';
-      return (config.id || `${config.baseUrl || ''}|${config.modelName || ''}`).trim();
-    };
-
-    const ensureActiveConfigInSelection = (selection) => {
-      const selected = apiManager.getSelectedConfig?.();
-      const selectedKey = selected?.id || '';
-      const selectedKeys = new Set(selection.entries.map(entry => entry?.config?.id).filter(Boolean));
-      if (selectedKey && selectedKeys.has(selectedKey)) return;
-      const primaryId = selection.primaryConfig?.id;
-      if (!primaryId) return;
-      const idx = configs.findIndex(cfg => cfg?.id === primaryId);
-      if (idx >= 0) apiManager.setSelectedIndex(idx, { syncRuntime: false });
-    };
-
     if (favoriteConfigs.length === 0) {
       listEl.appendChild(createOption('暂无收藏 API', null, { variant: 'hint' }));
+    } else {
+      favoriteConfigs.forEach((item) => {
+        const config = item.config;
+        const index = item.index;
+        if (!config) return;
+        const label = resolveConfigLabel(config);
+        const isSelected = !!(
+          selectedConfig
+          && (
+            (selectedConfig.id && config.id && selectedConfig.id === config.id)
+            || (
+              !selectedConfig.id
+              && !config.id
+              && selectedConfig.baseUrl === config.baseUrl
+              && selectedConfig.modelName === config.modelName
+            )
+          )
+        );
+        const displayLabel = isSelected ? `✓ ${label}` : label;
+        listEl.appendChild(createOption(displayLabel, () => {
+          apiManager.setSelectedIndex(index);
+        }, { variant: 'action', title: label }));
+      });
     }
-
-    favoriteConfigs.forEach((item) => {
-      const config = item.config;
-      const index = item.index;
-      if (!config) return;
-      const key = resolveConfigKey(config);
-      const entryState = selectionMap.get(key) || null;
-      const count = Number.isFinite(entryState?.count) ? entryState.count : 0;
-      const isSelected = count > 0;
-
-      const row = document.createElement('div');
-      row.className = 'input-api-option input-api-option--multi';
-      if (isSelected) row.classList.add('current');
-      if (entryState?.isPrimary) row.classList.add('primary');
-
-      const main = document.createElement('div');
-      main.className = 'input-api-option-main';
-      main.textContent = resolveConfigLabel(config);
-      main.title = main.textContent;
-      main.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isCtrl = e.ctrlKey || e.metaKey;
-        if (isCtrl) {
-          const result = apiManager.toggleRuntimeMultiApiSelection?.(config);
-          if (result?.ok === false && result?.reason === 'min_one') {
-            showNotification?.({ message: '至少保留一个 API', type: 'warning', duration: 1600 });
-          }
-          if (result?.selection) ensureActiveConfigInSelection(result.selection);
-          return;
-        }
-        const ok = apiManager.setSelectedIndex(index, { syncRuntime: true });
-        if (ok) {
-          const selection = apiManager.getRuntimeMultiApiSelection?.();
-          if (selection) ensureActiveConfigInSelection(selection);
-        }
-      });
-
-      const controls = document.createElement('div');
-      controls.className = 'input-api-option-controls';
-
-      const minusBtn = document.createElement('button');
-      minusBtn.type = 'button';
-      minusBtn.className = 'input-api-count-btn';
-      minusBtn.innerHTML = '<i class="fa-solid fa-minus"></i>';
-      minusBtn.disabled = (count <= 0) || (count <= 1 && selectionEntries.length <= 1);
-      minusBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const next = count - 1;
-        const result = apiManager.updateRuntimeMultiApiCount?.(config, next);
-        if (result?.ok === false && result?.reason === 'min_one') {
-          showNotification?.({ message: '至少保留一个 API', type: 'warning', duration: 1600 });
-        }
-        if (result?.selection) ensureActiveConfigInSelection(result.selection);
-      });
-
-      const countText = document.createElement('span');
-      countText.className = 'input-api-count-text';
-      countText.textContent = String(count);
-
-      const plusBtn = document.createElement('button');
-      plusBtn.type = 'button';
-      plusBtn.className = 'input-api-count-btn';
-      plusBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
-      plusBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const next = (count > 0 ? count : 0) + 1;
-        const result = apiManager.updateRuntimeMultiApiCount?.(config, next);
-        if (result?.selection) ensureActiveConfigInSelection(result.selection);
-      });
-
-      controls.appendChild(minusBtn);
-      controls.appendChild(countText);
-      controls.appendChild(plusBtn);
-
-      row.appendChild(main);
-      row.appendChild(controls);
-      listEl.appendChild(row);
-    });
-
-    listEl.appendChild(createDivider());
-    listEl.appendChild(createOption('上下文范围（发送给模型）', null, { variant: 'hint' }));
-
-    const historyModeOptions = [
-      { mode: 'primary', label: '仅主 API 回复' },
-      { mode: 'selected', label: '仅已选 API 回复' },
-      { mode: 'all', label: '全部 API 回复' }
-    ];
-
-    historyModeOptions.forEach((item) => {
-      const active = historyMode === item.mode;
-      const label = `${active ? '[x]' : '[ ]'} ${item.label}`;
-      listEl.appendChild(createOption(label, () => {
-        apiManager.setRuntimeHistoryAssistantMode?.(item.mode);
-      }, { variant: 'action' }));
-    });
 
     listEl.appendChild(createDivider());
 
@@ -397,8 +277,6 @@ function setupApiMenuWatcher(appContext) {
   updateAll();
   window.addEventListener('apiConfigsUpdated', updateAll);
   document.addEventListener('CONVERSATION_API_CONTEXT_CHANGED', updateAll);
-  document.addEventListener('MULTI_API_SELECTION_CHANGED', updateAll);
-  document.addEventListener('MULTI_API_HISTORY_MODE_CHANGED', updateAll);
 }
 
 /**
@@ -959,8 +837,6 @@ function setupSlashFocusShortcut(appContext) {
 function applyFullscreenMode(appContext, isFullscreen) {
   appContext.state.isFullscreen = !!isFullscreen;
   document.documentElement.classList.toggle('fullscreen-mode', appContext.state.isFullscreen);
-  // 全屏切换时重算并行回答标记，覆盖“旧会话已在当前视图中但尚未重新发送”的场景。
-  appContext.services.messageSender?.refreshParallelAnswerLayout?.();
   updateFullscreenToggleHints(appContext);
 }
 

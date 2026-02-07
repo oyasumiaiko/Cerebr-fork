@@ -80,53 +80,6 @@ export function createContextMenuManager(appContext) {
   }
 
   /**
-   * 从历史树中收集某条用户消息后“同一层”的所有 AI 回复（用于并行重生成）。
-   *
-   * 说明：
-   * - 仅收集直接 children，避免误把后续轮次的 AI 回复混入当前批次；
-   * - 若历史链暂时不完整，会用 fallbackAiMessageId 兜底，确保至少能重生成当前目标。
-   *
-   * @param {string} userMessageId
-   * @param {string|null} [fallbackAiMessageId=null]
-   * @returns {Array<string>}
-   */
-  function collectParallelAiMessageIdsForUser(userMessageId, fallbackAiMessageId = null) {
-    const userNode = findHistoryMessageById(userMessageId);
-    const fallbackId = (typeof fallbackAiMessageId === 'string') ? fallbackAiMessageId.trim() : '';
-    if (!userNode) {
-      return fallbackId ? [fallbackId] : [];
-    }
-
-    const childIds = Array.isArray(userNode.children) ? userNode.children : [];
-    const threadId = userNode.threadId || null;
-    const aiChildren = childIds
-      .map((childId, index) => {
-        const node = findHistoryMessageById(childId);
-        if (!node || node.role !== 'assistant') return null;
-        if (threadId && node.threadId !== threadId) return null;
-        if (node.threadHiddenSelection) return null;
-        return {
-          id: node.id,
-          timestamp: Number(node.timestamp) || 0,
-          order: index
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-        return a.order - b.order;
-      })
-      .map(item => item.id)
-      .filter(Boolean);
-
-    if (fallbackId && !aiChildren.includes(fallbackId)) {
-      aiChildren.push(fallbackId);
-    }
-
-    return aiChildren;
-  }
-
-  /**
    * 在线程容器内，优先使用历史链路解析“重新生成”的目标，避免 DOM 被隐藏/重排时误判。
    * @param {HTMLElement} messageElement
    * @param {HTMLElement|null} container
@@ -256,9 +209,7 @@ export function createContextMenuManager(appContext) {
     const originalMessageText = userMessageElement?.getAttribute?.('data-original-text')
       || (typeof effectiveUserNode.content === 'string' ? effectiveUserNode.content : '');
     const targetAiMessageId = targetAiNode ? targetAiNode.id : (targetAiMessageElement?.getAttribute?.('data-message-id') || null);
-    const targetAiMessageIds = isAi
-      ? (targetAiMessageId ? [targetAiMessageId] : [])
-      : collectParallelAiMessageIdsForUser(userMessageId, targetAiMessageId);
+    const targetAiMessageIds = targetAiMessageId ? [targetAiMessageId] : [];
 
     return {
       sourceRole: isAi ? 'assistant' : 'user',
@@ -359,9 +310,7 @@ export function createContextMenuManager(appContext) {
     const targetAiMessageId = targetAiMessageElement
       ? (targetAiMessageElement.getAttribute('data-message-id') || null)
       : null;
-    const targetAiMessageIds = isAi
-      ? (targetAiMessageId ? [targetAiMessageId] : [])
-      : collectParallelAiMessageIdsForUser(userMessageId, targetAiMessageId);
+    const targetAiMessageIds = targetAiMessageId ? [targetAiMessageId] : [];
 
     return {
       sourceRole: isAi ? 'assistant' : 'user',
@@ -453,38 +402,6 @@ export function createContextMenuManager(appContext) {
     return configMap;
   }
 
-  function getRuntimeRegenerateApiGroupEntries() {
-    const selectionState = (typeof apiManager?.getRuntimeMultiApiSelection === 'function')
-      ? apiManager.getRuntimeMultiApiSelection()
-      : null;
-    const selectionEntries = Array.isArray(selectionState?.entries) ? selectionState.entries : [];
-    const grouped = [];
-
-    selectionEntries.forEach((entry) => {
-      const config = entry?.config || null;
-      if (!config) return;
-      const rawCount = Number(entry?.count);
-      const count = Number.isFinite(rawCount) ? Math.max(1, Math.floor(rawCount)) : 1;
-      grouped.push({ config, count });
-    });
-
-    if (grouped.length > 0) return grouped;
-
-    const selectedConfig = apiManager?.getSelectedConfig?.() || null;
-    return selectedConfig ? [{ config: selectedConfig, count: 1 }] : [];
-  }
-
-  function getRuntimeRegenerateApiExpandedTargets() {
-    const grouped = getRuntimeRegenerateApiGroupEntries();
-    const expanded = [];
-    grouped.forEach((item) => {
-      for (let i = 0; i < item.count; i += 1) {
-        expanded.push(item.config);
-      }
-    });
-    return { grouped, expanded };
-  }
-
   function resolvePromptPreferredApiParam(originalMessageText) {
     let apiParam = 'follow_current';
     try {
@@ -553,15 +470,6 @@ export function createContextMenuManager(appContext) {
   }
 
   function buildRegenerateApiHintLabel(regenTarget) {
-    if (regenTarget?.sourceRole === 'user') {
-      const grouped = getRuntimeRegenerateApiGroupEntries();
-      if (grouped.length > 0) {
-        return grouped
-          .map((item) => `${getApiDisplayName(item.config)}${item.count > 1 ? ` x${item.count}` : ''}`)
-          .join('\n');
-      }
-    }
-
     const config = resolveRegenerateDisplayConfig(regenTarget);
     return getApiDisplayName(config);
   }
@@ -796,7 +704,6 @@ export function createContextMenuManager(appContext) {
     }
 
     const {
-      sourceRole,
       userMessageId,
       originalMessageText,
       targetAiMessageId
@@ -804,25 +711,6 @@ export function createContextMenuManager(appContext) {
     const targetAiMessageIds = getRegenerateTargetAiIds(regenTarget);
 
     try {
-      const shouldUseRuntimeApiGroup = apiOverride == null && sourceRole === 'user';
-
-      if (shouldUseRuntimeApiGroup) {
-        const runtimeTargets = getRuntimeRegenerateApiExpandedTargets();
-        if (runtimeTargets.expanded.length > 0) {
-          runtimeTargets.expanded.forEach((apiConfig, index) => {
-            const currentAiMessageId = targetAiMessageIds[index] || null;
-            messageSender.sendMessage({
-              originalMessageText,
-              regenerateMode: true,
-              messageId: userMessageId,
-              targetAiMessageId: currentAiMessageId,
-              api: apiConfig
-            });
-          });
-          return;
-        }
-      }
-
       const apiParam = resolveRegenerateApiParam(regenTarget, apiOverride);
 
       // 关键：指定 targetAiMessageId，让发送层“原地替换”目标 AI 消息内容（不删除/不新增其他消息）
