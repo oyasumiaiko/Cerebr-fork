@@ -2820,13 +2820,14 @@ export function createSelectionThreadManager(appContext) {
     event.preventDefault();
     event.stopPropagation();
     const threadIds = parseThreadIdsFromHighlight(target);
-    const threadId = threadIds[0] || '';
+    const threadInfos = threadIds
+      .map(id => findThreadById(id))
+      .filter(info => info?.annotation);
+    const primaryThread = pickPrimaryThread(threadInfos.map(info => info.annotation));
+    const threadId = primaryThread?.id || threadIds[0] || '';
     if (!threadId) return;
     hideBubble(true);
-    if (threadIds.length > 1) {
-      showPreviewBubbleForHighlight(target, { pinned: true });
-      return;
-    }
+    // 多线程高亮点击时优先进入“最近活跃”的线程，避免点击无反馈。
     if (state.activeThreadId && state.activeThreadId === threadId) {
       exitThread();
       return;
