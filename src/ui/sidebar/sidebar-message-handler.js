@@ -69,6 +69,7 @@
         lastMessageCount: 0,
         lastMessageMode: MINIMAP_MESSAGE_MODE_PROPORTIONAL,
         dragSession: null,
+        dragCaptureTarget: null,
         renderContext: null,
         wheelDeltaAccumulator: 0,
         wheelResetTimer: null,
@@ -325,6 +326,10 @@
 
       root.addEventListener('pointerdown', (event) => handleMinimapPointerDown(state, event));
       root.addEventListener('wheel', (event) => handleMinimapWheel(state, event), { passive: false });
+      root.addEventListener('pointermove', (event) => handleMinimapRootPointerMove(state, event));
+      root.addEventListener('pointerup', (event) => finishMinimapRootDrag(state, event));
+      root.addEventListener('pointercancel', (event) => finishMinimapRootDrag(state, event));
+      root.addEventListener('lostpointercapture', (event) => finishMinimapRootDrag(state, event));
       thumb.addEventListener('pointerdown', (event) => handleMinimapThumbPointerDown(state, event));
       thumb.addEventListener('pointermove', (event) => handleMinimapThumbPointerMove(state, event));
       thumb.addEventListener('pointerup', (event) => finishMinimapThumbDrag(state, event));
@@ -665,6 +670,7 @@
       if (!visible) {
         state.root.classList.remove('chat-scroll-minimap--dragging');
         state.dragSession = null;
+        state.dragCaptureTarget = null;
         state.renderContext = null;
         resetMinimapWheelAccumulator(state);
       }
@@ -713,6 +719,22 @@
       const maxScroll = Math.max(0, (state.container.scrollHeight || 0) - (state.container.clientHeight || 0));
       if (maxScroll <= 0) return;
       state.container.scrollTop = ratio * maxScroll;
+    }
+
+    function beginMinimapDrag(state, pointerId, offsetY, options = {}) {
+      if (!state?.root || !state?.thumb) return;
+      const captureTarget = options.captureTarget || state.thumb;
+      state.dragSession = {
+        pointerId,
+        offsetY: Number.isFinite(offsetY) ? offsetY : 0
+      };
+      state.dragCaptureTarget = captureTarget;
+      state.root.classList.add('chat-scroll-minimap--dragging');
+      if (captureTarget && typeof captureTarget.setPointerCapture === 'function') {
+        try {
+          captureTarget.setPointerCapture(pointerId);
+        } catch (_) {}
+      }
     }
 
     function normalizeWheelDeltaToStepUnits(event) {
@@ -913,7 +935,12 @@
       if (event.button !== 0) return;
       if (event.target === state.thumb) return;
       event.preventDefault();
-      scrollContainerFromMinimapClientY(state, event.clientY, { centerViewport: true });
+      const rootRect = state.root.getBoundingClientRect();
+      const thumbHeight = Math.max(0, state.thumb?.offsetHeight || 0);
+      const dragOffset = thumbHeight > 0 ? (thumbHeight / 2) : 0;
+      beginMinimapDrag(state, event.pointerId, dragOffset, { captureTarget: state.root });
+      const rawTop = event.clientY - rootRect.top - dragOffset;
+      scrollContainerByThumbTop(state, rawTop);
       if (state.key === 'chat') scheduleReadingAnchorCapture();
       scheduleMinimapRender();
     }
@@ -925,14 +952,17 @@
       event.stopPropagation();
       stopMinimapWheelAnimation(state);
       const thumbRect = state.thumb.getBoundingClientRect();
-      state.dragSession = {
-        pointerId: event.pointerId,
-        offsetY: event.clientY - thumbRect.top
-      };
-      state.root.classList.add('chat-scroll-minimap--dragging');
-      try {
-        state.thumb.setPointerCapture(event.pointerId);
-      } catch (_) {}
+      beginMinimapDrag(state, event.pointerId, event.clientY - thumbRect.top, { captureTarget: state.thumb });
+    }
+
+    function handleMinimapRootPointerMove(state, event) {
+      if (!state?.dragSession || state.dragCaptureTarget !== state.root) return;
+      handleMinimapThumbPointerMove(state, event);
+    }
+
+    function finishMinimapRootDrag(state, event) {
+      if (!state?.dragSession || state.dragCaptureTarget !== state.root) return;
+      finishMinimapThumbDrag(state, event);
     }
 
     function handleMinimapThumbPointerMove(state, event) {
@@ -952,12 +982,21 @@
     function finishMinimapThumbDrag(state, event) {
       if (!state?.root || !state?.thumb || !state.dragSession) return;
       if (event && event.pointerId != null && event.pointerId !== state.dragSession.pointerId) return;
+      const captureTarget = state.dragCaptureTarget || state.thumb;
       state.dragSession = null;
+      state.dragCaptureTarget = null;
       state.root.classList.remove('chat-scroll-minimap--dragging');
       if (event && event.pointerId != null) {
-        try {
-          state.thumb.releasePointerCapture(event.pointerId);
-        } catch (_) {}
+        if (captureTarget && typeof captureTarget.releasePointerCapture === 'function') {
+          try {
+            captureTarget.releasePointerCapture(event.pointerId);
+          } catch (_) {}
+        }
+        if (state.root && captureTarget !== state.root && typeof state.root.releasePointerCapture === 'function') {
+          try {
+            state.root.releasePointerCapture(event.pointerId);
+          } catch (_) {}
+        }
       }
     }
 
@@ -1424,6 +1463,7 @@
         state.canvas = null;
         state.thumb = null;
         state.dragSession = null;
+        state.dragCaptureTarget = null;
         state.renderContext = null;
         resetMinimapWheelAccumulator(state);
       });
