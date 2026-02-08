@@ -541,20 +541,47 @@
       const innerWidth = Math.max(2, width - innerPadding * 2);
       const useFixedMessageHeight = messageDisplayMode === MINIMAP_MESSAGE_MODE_FIXED;
       const safeMessageCount = Math.max(1, messages.length);
+      const messageGap = 1;
+      const messageCornerRadius = 2;
+      let previousBarBottom = -messageGap;
+
+      function fillRoundedRect(x, y, w, h, radius) {
+        const safeRadius = Math.max(0, Math.min(radius, w / 2, h / 2));
+        if (safeRadius < 0.5) {
+          ctx.fillRect(x, y, w, h);
+          return;
+        }
+        if (typeof ctx.roundRect === 'function') {
+          ctx.beginPath();
+          ctx.roundRect(x, y, w, h, safeRadius);
+          ctx.fill();
+          return;
+        }
+        // 兼容 roundRect 不可用的环境，手动构造圆角路径。
+        ctx.beginPath();
+        ctx.moveTo(x + safeRadius, y);
+        ctx.lineTo(x + w - safeRadius, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + safeRadius);
+        ctx.lineTo(x + w, y + h - safeRadius);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - safeRadius, y + h);
+        ctx.lineTo(x + safeRadius, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - safeRadius);
+        ctx.lineTo(x, y + safeRadius);
+        ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+        ctx.closePath();
+        ctx.fill();
+      }
 
       for (let index = 0; index < messages.length; index += 1) {
         const el = messages[index];
         let y = 0;
         let h = 1;
         if (useFixedMessageHeight) {
-          // 固定消息高度模式：每条消息占据等长槽位，仅保留 1px 间隙提升可读性。
+          // 固定消息高度模式：先分配等长槽位，随后统一走“间距+圆角”规则。
           const slotTop = Math.floor((index / safeMessageCount) * height);
           const slotBottom = Math.ceil(((index + 1) / safeMessageCount) * height);
-          const slotHeight = Math.max(1, slotBottom - slotTop);
-          const barHeight = Math.max(1, slotHeight - 1);
-          const barTop = slotTop + Math.floor((slotHeight - barHeight) / 2);
-          y = Math.max(0, Math.min(height - 1, barTop));
-          h = Math.max(1, Math.min(height - y, barHeight));
+          y = Math.max(0, Math.min(height - 1, slotTop));
+          h = Math.max(1, slotBottom - slotTop);
         } else {
           const topRatio = (el.offsetTop || 0) / contentHeight;
           const heightRatio = (el.offsetHeight || 0) / contentHeight;
@@ -566,10 +593,20 @@
         const x = isUser ? innerPadding + 2 : innerPadding;
         const w = Math.max(2, innerWidth - (isUser ? 2 : 0));
 
+        // 统一加 1px 竖向间距，确保连续同类型消息也有分界。
+        if (index > 0) {
+          const minTop = previousBarBottom + messageGap;
+          if (y < minTop) y = minTop;
+        }
+        if (y >= height) break;
+        h = Math.max(1, Math.min(height - y, h));
+
         ctx.fillStyle = isError
           ? 'rgba(245, 87, 87, 0.78)'
           : (isUser ? 'rgba(98, 165, 255, 0.66)' : 'rgba(182, 182, 196, 0.52)');
-        ctx.fillRect(x, y, w, h);
+        const radius = Math.min(messageCornerRadius, Math.floor((Math.min(w, h) - 1) / 2));
+        fillRoundedRect(x, y, w, h, radius);
+        previousBarBottom = y + h;
       }
     }
 
