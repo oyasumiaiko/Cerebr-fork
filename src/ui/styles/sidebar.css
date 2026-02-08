@@ -29,6 +29,10 @@ input, textarea, select {
     --cerebr-background-image-intensity: 0;
     --cerebr-background-image-opacity: 1;
     --cerebr-chat-background-color: var(--cerebr-bg-color);
+    --cerebr-panel-blur-radius: 18px;
+    --cerebr-panel-surface-bg: var(--cerebr-bg-color);
+    --cerebr-panel-surface-bg-strong: var(--cerebr-bg-color);
+    --cerebr-panel-inline-bg: var(--cerebr-input-bg);
     --cerebr-fullscreen-bg-size: contain;
     --cerebr-fullscreen-blur-opacity: 1;
     --cerebr-scroll-minimap-enabled: 1;
@@ -1040,13 +1044,13 @@ body.fullscreen-width-resize-active * {
     font-size: calc(var(--cerebr-font-size, 14px) * 0.8);
     line-height: 1.4;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 55%, transparent);
+    background: var(--cerebr-panel-inline-bg, var(--cerebr-input-bg));
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
     color: var(--cerebr-text-color);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    backdrop-filter: blur(var(--cerebr-blur-radius)) saturate(1.2);
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     box-shadow:
       0 6px 14px rgba(0, 0, 0, 0.12),
       inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
@@ -1084,11 +1088,11 @@ body.fullscreen-width-resize-active * {
     max-width: 280px;
     max-height: 240px;
     overflow-y: auto;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 65%, transparent);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-input-bg));
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 50%, transparent);
     border-radius: 12px;
     padding: 6px;
-    backdrop-filter: blur(var(--cerebr-blur-radius)) saturate(1.2);
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     box-shadow:
       0 14px 26px rgba(0, 0, 0, 0.2),
       inset 0 0 0 1px color-mix(in srgb, #fff 14%, transparent);
@@ -1184,8 +1188,8 @@ body.fullscreen-width-resize-active * {
     padding: 10px 12px;
     border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
-    background: color-mix(in srgb, var(--cerebr-input-bg) 70%, transparent);
-    backdrop-filter: blur(var(--cerebr-blur-radius)) saturate(1.2);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-input-bg));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     box-shadow:
       0 12px 22px rgba(0, 0, 0, 0.18),
       inset 0 0 0 1px color-mix(in srgb, #fff 12%, transparent);
@@ -1383,14 +1387,14 @@ body.fullscreen-width-resize-active * {
     position: absolute;
     bottom: 100%;
     right: 8px;
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     padding: 8px;
     width: max-content;
     margin-bottom: 8px;
     transform-origin: bottom right;
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     opacity: 0;
     visibility: hidden;
     transform: translateY(4px);
@@ -1507,9 +1511,9 @@ body.fullscreen-width-resize-active * {
     min-width: 220px;
     border-radius: 8px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
-    background: color-mix(in srgb, var(--cerebr-bg-color) 95%, transparent);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
-    backdrop-filter: blur(calc(var(--cerebr-blur-radius) / 4));
+    backdrop-filter: blur(calc(var(--cerebr-panel-blur-radius) * 0.55));
     z-index: 30;
 }
 
@@ -1695,12 +1699,12 @@ input:checked + .slider::before {
     left: 0;
     right: 0;
     bottom: var(--input-container-height, 0px); /* 预留输入区高度 */
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-panel-surface-bg-strong, var(--cerebr-bg-color));
     display: flex;
     flex-direction: column;
     padding: 20px;
     overflow-y: auto;
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
     visibility: hidden;
@@ -3011,14 +3015,14 @@ input:checked + .slider::before {
 /* 右键菜单样式 */
 #context-menu {
     position: fixed;
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     border-radius: 8px;
     padding: 6px;
     min-width: 140px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     z-index: 2000;
     display: none;
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -3098,10 +3102,10 @@ input:checked + .slider::before {
     min-width: 180px;
     padding: 6px;
     border-radius: 8px;
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     opacity: 0;
     visibility: hidden;
     transform: translateX(4px);
@@ -4105,13 +4109,13 @@ body.temporary-mode::after {
     left: 0;
     right: 0;
     bottom: var(--input-container-height, 0px); /* 预留输入区高度 */
-    background: var(--cerebr-bg-color);
+    background: var(--cerebr-panel-surface-bg-strong, var(--cerebr-bg-color));
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 16px 18px 12px;
     overflow-y: auto;
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
     visibility: hidden;
@@ -4640,7 +4644,7 @@ body.temporary-mode::after {
     border-radius: 8px;
     padding: 16px;
     /* z-index: 9999; */
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     box-shadow: 0 0px 20px 4px rgba(0, 0, 0, 0.2);
     overflow: hidden;
     display: flex;
@@ -4744,12 +4748,12 @@ body.temporary-mode::after {
     position: fixed;
     z-index: 10000;
     width: min(560px, calc(100vw - 24px));
-    background: var(--cerebr-tooltip-bg);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-tooltip-bg));
     border: 1px solid var(--cerebr-border-color);
     border-radius: 14px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
     padding: 14px 16px;
-    backdrop-filter: blur(var(--cerebr-blur-radius));
+    backdrop-filter: blur(var(--cerebr-panel-blur-radius));
     opacity: 0;
     visibility: hidden;
     transform: translateY(2px);
@@ -4770,7 +4774,7 @@ body.temporary-mode::after {
     position: absolute;
     width: 12px;
     height: 12px;
-    background: var(--cerebr-tooltip-bg);
+    background: var(--cerebr-panel-surface-bg, var(--cerebr-tooltip-bg));
     border: 1px solid var(--cerebr-border-color);
     transform: rotate(45deg);
     top: var(--arrow-top, 20px);
@@ -5347,7 +5351,7 @@ body.temporary-mode::after {
 #chat-history-panel .settings-tab-content {
     padding: 12px;
     gap: 10px;
-    background: color-mix(in srgb, var(--cerebr-bg-color) 94%, var(--cerebr-message-ai-bg));
+    background: var(--cerebr-bg-color);
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
     border-radius: 10px;
 }

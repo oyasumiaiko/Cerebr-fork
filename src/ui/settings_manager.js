@@ -1389,9 +1389,26 @@ export function createSettingsManager(appContext) {
     };
   }
 
+  function resolveCssVarTokens(rawValue, computedStyle, depth = 0) {
+    const source = String(rawValue || '').trim();
+    if (!source || !source.includes('var(') || depth > 6) {
+      return source;
+    }
+    const resolved = source.replace(/var\(\s*(--[a-zA-Z0-9-_]+)\s*(?:,\s*([^)]+))?\)/g, (_, variableName, fallbackValue = '') => {
+      const variableRaw = computedStyle?.getPropertyValue(variableName)?.trim();
+      if (variableRaw) return variableRaw;
+      return String(fallbackValue || '').trim();
+    });
+    if (!resolved.includes('var(')) {
+      return resolved;
+    }
+    return resolveCssVarTokens(resolved, computedStyle, depth + 1);
+  }
+
   function parseCssColorChannels(colorValue, fallbackColor = '#000000') {
     const fallback = hexToRgbChannels(fallbackColor);
     if (!colorParseCtx) return fallback;
+    const rootComputedStyle = getComputedStyle(document.documentElement);
     const safeFallback = normalizeHexColor(fallbackColor, '#000000');
     colorParseCtx.clearRect(0, 0, 1, 1);
     try {
@@ -1399,7 +1416,9 @@ export function createSettingsManager(appContext) {
     } catch (_) {
       colorParseCtx.fillStyle = '#000000';
     }
-    const candidate = String(colorValue || '').trim();
+    // 主题变量里大量使用 var(--xxx) 嵌套写法，canvas 不能直接解析 var()。
+    // 这里先把变量解析成最终颜色字符串，再交给 canvas 提取 rgb 通道。
+    const candidate = resolveCssVarTokens(colorValue, rootComputedStyle);
     if (candidate) {
       try {
         colorParseCtx.fillStyle = candidate;
@@ -1476,6 +1495,17 @@ export function createSettingsManager(appContext) {
     root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, elementOpacity, '#3e4451'));
     root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, elementOpacity, '#2c313c'));
     root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, elementOpacity, '#21252b'));
+    // 玻璃态面板使用单独的“稳定底色”变量，避免 backdrop-filter 在明暗背景图上出现
+    // “亮区过实 / 暗区过透”的视觉漂移。
+    // 这里不再用“固定最小值”硬钳制，而是按 elementOpacity 做线性抬升：
+    // - elementOpacity 越低，越需要一点保底遮罩来稳定观感；
+    // - elementOpacity 越高，面板透明度越接近用户原始设置，保证“跟手”。
+    const panelSurfaceOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.35, elementOpacity);
+    const panelSurfaceStrongOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.45, elementOpacity);
+    const panelInlineOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.28, elementOpacity);
+    root.style.setProperty('--cerebr-panel-surface-bg', composeRgbaFromCssColor(bgColor, panelSurfaceOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-panel-surface-bg-strong', composeRgbaFromCssColor(bgColor, panelSurfaceStrongOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-panel-inline-bg', composeRgbaFromCssColor(inputColor, panelInlineOpacity, '#21252b'));
   }
 
   function applyCustomThemeColorOverrides() {
