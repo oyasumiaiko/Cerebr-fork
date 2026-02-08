@@ -2918,6 +2918,7 @@ export function createMessageSender(appContext) {
    */
   function createResponseUiBindings({ threadContext, attemptState, loadingMessage, usedApiConfig }) {
     const getUiContainer = () => {
+      // 线程场景优先线程容器，普通会话回退到主聊天容器，确保滚动/锚点逻辑统一。
       if (threadContext) return resolveThreadUiContainer(threadContext);
       return chatContainer;
     };
@@ -2935,6 +2936,7 @@ export function createMessageSender(appContext) {
         let label = '';
         let matchedConfig = null;
         if (nodeLike.apiUuid) {
+          // 优先按 uuid 回查配置，避免 displayName/modelName 被后续重命名后展示漂移。
           matchedConfig = allConfigs.find(c => c.id === nodeLike.apiUuid) || null;
         }
         if (!label && matchedConfig && typeof matchedConfig.displayName === 'string' && matchedConfig.displayName.trim()) {
@@ -2966,6 +2968,7 @@ export function createMessageSender(appContext) {
     function applyApiMetaToMessage(messageId, apiConfig, messageDiv) {
       try {
         if (!messageId) return;
+        // 先写历史节点，后续无论 DOM 是否可见（线程折叠/虚拟列表）都能保留元信息。
         const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
         if (node) {
           node.apiUuid = apiConfig?.id || null;
@@ -2987,6 +2990,7 @@ export function createMessageSender(appContext) {
     function promoteLoadingMessageToAi({ answer, thoughts }) {
       if (!loadingMessage || !loadingMessage.parentNode) return null;
       const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
+      // 线程 UI 不可见时，不做 DOM 升级，交由“仅历史节点”分支处理，避免无意义渲染。
       if (!shouldRenderDom) return null;
       const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
       const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
@@ -3006,6 +3010,7 @@ export function createMessageSender(appContext) {
       }
       if (!node) return null;
       if (threadHistoryPatch && typeof threadHistoryPatch === 'object') {
+        // 把线程关联字段一次性打到新节点，保持树结构与 UI 渲染来源一致。
         Object.assign(node, threadHistoryPatch);
       }
       loadingMessage.setAttribute('data-message-id', node.id);
@@ -3168,6 +3173,7 @@ export function createMessageSender(appContext) {
       }
 
       if (!currentAiMessageId) {
+        // 次优路径：把“正在处理...”占位升级为正式 AI 消息，减少 DOM 抖动与顺序跳跃。
         let promotedId = null;
         if (loadingMessage && loadingMessage.parentNode) {
           promotedId = promoteLoadingMessageToAi({
@@ -3184,6 +3190,7 @@ export function createMessageSender(appContext) {
       }
 
       if (!currentAiMessageId) {
+        // 最终兜底：无法原地替换且无法复用占位时，创建新的 AI 消息节点。
         if (loadingMessage && loadingMessage.parentNode) {
           loadingMessage.remove();
         }
@@ -3238,6 +3245,7 @@ export function createMessageSender(appContext) {
 
         const scrollContainer = getUiContainer();
         if (scrollContainer) {
+          // 首帧创建新节点时才主动滚动，后续增量滚动由 updateAIMessage 内部处理。
           scrollToBottom(scrollContainer);
         }
       }
@@ -3263,6 +3271,7 @@ export function createMessageSender(appContext) {
         return;
       }
       if (transition.action === 'update_existing' && currentAiMessageId) {
+        // 高频 token 增量统一走节流器，避免每个分片都触发 Markdown/代码高亮重渲染。
         uiUpdateThrottler.enqueue(
           {
             messageId: currentAiMessageId,
@@ -3523,6 +3532,7 @@ export function createMessageSender(appContext) {
         aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
       }
 
+      // Gemini 事件也走统一状态机，避免与 OpenAI 分支出现“首帧/增量”行为偏差。
       applyStreamingRenderTransition({ hasDelta: hasTextDelta });
     }
 
@@ -3661,6 +3671,7 @@ export function createMessageSender(appContext) {
             aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
           }
 
+          // OpenAI 兼容事件同样复用统一状态机，减少分支重复维护成本。
           applyStreamingRenderTransition({ hasDelta: hasAnyDelta });
       }
     }

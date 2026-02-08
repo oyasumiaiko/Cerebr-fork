@@ -9,6 +9,7 @@
  */
 
 function normalizeApiBase(value) {
+  // 统一做 trim + lowercase，避免调用方传入 " GenAI " 等大小写/空白差异导致规则分叉。
   return (typeof value === 'string') ? value.trim().toLowerCase() : '';
 }
 
@@ -27,9 +28,11 @@ export function resolveResponseHandlingMode(input = {}) {
   const geminiUseStreaming = input?.geminiUseStreaming !== false;
   const requestBodyStream = input?.requestBodyStream === true;
 
+  // Gemini 族接口不依赖 requestBody.stream，而是沿用配置项 useStreaming 作为单一真源。
   if (apiBase === 'genai') {
     return geminiUseStreaming ? 'stream' : 'non_stream';
   }
+  // 其余 OpenAI 兼容接口统一按 requestBody.stream 判定。
   return requestBodyStream ? 'stream' : 'non_stream';
 }
 
@@ -62,6 +65,7 @@ export function planStreamingRenderTransition(input = {}) {
   const hasAnswerContent = input?.hasAnswerContent === true;
   const hasEverShownAnswerContent = input?.hasEverShownAnswerContent === true;
 
+  // 空事件：不触发任何渲染副作用，状态保持不变（常见于仅携带控制字段/心跳的数据块）。
   if (!hasDelta) {
     return {
       action: 'noop',
@@ -74,6 +78,7 @@ export function planStreamingRenderTransition(input = {}) {
   }
 
   if (!hasStartedResponse) {
+    // 首帧：交由调用方执行“原地替换 / 占位升级 / 新建消息”三段式兜底。
     return {
       action: 'first_chunk',
       forceUiUpdate: false,
@@ -86,6 +91,7 @@ export function planStreamingRenderTransition(input = {}) {
 
   const nextHasEverShownAnswerContent = hasEverShownAnswerContent || hasAnswerContent;
   if (!hasMessageId) {
+    // 已有增量但目标消息尚未就绪：先推进状态，避免后续重复按“首帧”路径执行副作用。
     return {
       action: 'wait_for_message',
       forceUiUpdate: false,
@@ -96,6 +102,7 @@ export function planStreamingRenderTransition(input = {}) {
     };
   }
 
+  // 增量更新：当“正文首次出现”时返回 forceUiUpdate=true，确保 UI 立即落地，减少“只看到思考块”的错觉。
   const forceUiUpdate = hasAnswerContent && !hasEverShownAnswerContent;
   return {
     action: 'update_existing',
