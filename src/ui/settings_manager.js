@@ -130,6 +130,9 @@ export function createSettingsManager(appContext) {
     enableDollarMath: true,
     // 是否在输入框 placeholder 中显示当前模型名
     showModelNameInPlaceholder: true,
+    // 主题透明度拆分：背景层与元素层独立控制
+    backgroundOpacity: 0.8,
+    elementOpacity: 0.8,
     // 是否启用“自定义配色覆盖主题”
     enableCustomThemeColors: false,
     customThemeBgColor: '#262b33',
@@ -235,6 +238,32 @@ export function createSettingsManager(appContext) {
       options: () => (themeManager.getAvailableThemes?.() || []).map(t => ({ label: t.name, value: t.id })),
       defaultValue: DEFAULT_SETTINGS.theme,
       apply: (v) => applyTheme(v)
+    },
+    {
+      key: 'backgroundOpacity',
+      type: 'range',
+      id: 'theme-background-opacity',
+      label: '背景透明度',
+      group: 'theme',
+      min: 0.2,
+      max: 1,
+      step: 0.05,
+      defaultValue: DEFAULT_SETTINGS.backgroundOpacity,
+      apply: () => applyThemeOpacityOverrides(),
+      formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
+    },
+    {
+      key: 'elementOpacity',
+      type: 'range',
+      id: 'theme-element-opacity',
+      label: '元素透明度',
+      group: 'theme',
+      min: 0.2,
+      max: 1,
+      step: 0.05,
+      defaultValue: DEFAULT_SETTINGS.elementOpacity,
+      apply: () => applyThemeOpacityOverrides(),
+      formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
     },
     {
       key: 'enableCustomThemeColors',
@@ -358,7 +387,7 @@ export function createSettingsManager(appContext) {
       key: 'backgroundImageIntensity',
       type: 'range',
       id: 'background-image-intensity',
-      label: '图片浓度',
+      label: '图片氛围(模糊)',
       group: 'background',
       min: 0,
       max: 1,
@@ -371,7 +400,7 @@ export function createSettingsManager(appContext) {
       key: 'backgroundOverallOpacity',
       type: 'range',
       id: 'background-overall-opacity',
-      label: '背景透明度',
+      label: '图片透明度',
       group: 'background',
       min: 0,
       max: 1,
@@ -732,6 +761,9 @@ export function createSettingsManager(appContext) {
    * @param {any} value - 新值
    */
   function normalizeSettingValue(key, value) {
+    if (key === 'backgroundOpacity' || key === 'elementOpacity') {
+      return clamp01(value, DEFAULT_SETTINGS[key]);
+    }
     if (key === 'enableCustomThemeColors') {
       return !!value;
     }
@@ -1326,6 +1358,16 @@ export function createSettingsManager(appContext) {
     });
   }
 
+  const colorParseCanvas = document.createElement('canvas');
+  colorParseCanvas.width = 1;
+  colorParseCanvas.height = 1;
+  let colorParseCtx = null;
+  try {
+    colorParseCtx = colorParseCanvas.getContext('2d', { willReadFrequently: true });
+  } catch (_) {
+    colorParseCtx = colorParseCanvas.getContext('2d');
+  }
+
   function normalizeHexColor(value, fallback = '#000000') {
     const fallbackColor = String(fallback || '#000000').trim().toLowerCase();
     const raw = String(value || '').trim().toLowerCase();
@@ -1347,9 +1389,42 @@ export function createSettingsManager(appContext) {
     };
   }
 
-  function toOpacityColor(hexColor, alphaToken = 'var(--cerebr-opacity)') {
+  function parseCssColorChannels(colorValue, fallbackColor = '#000000') {
+    const fallback = hexToRgbChannels(fallbackColor);
+    if (!colorParseCtx) return fallback;
+    const safeFallback = normalizeHexColor(fallbackColor, '#000000');
+    colorParseCtx.clearRect(0, 0, 1, 1);
+    try {
+      colorParseCtx.fillStyle = safeFallback;
+    } catch (_) {
+      colorParseCtx.fillStyle = '#000000';
+    }
+    const candidate = String(colorValue || '').trim();
+    if (candidate) {
+      try {
+        colorParseCtx.fillStyle = candidate;
+      } catch (_) {
+        // 忽略非法颜色值，回退到 fallback。
+      }
+    }
+    colorParseCtx.fillRect(0, 0, 1, 1);
+    const data = colorParseCtx.getImageData(0, 0, 1, 1).data;
+    return {
+      r: data[0],
+      g: data[1],
+      b: data[2]
+    };
+  }
+
+  function toOpacityColor(hexColor, alphaToken = '1') {
     const { r, g, b } = hexToRgbChannels(hexColor);
     return `rgba(${r}, ${g}, ${b}, ${alphaToken})`;
+  }
+
+  function composeRgbaFromCssColor(colorValue, alphaValue, fallbackColor = '#000000') {
+    const { r, g, b } = parseCssColorChannels(colorValue, fallbackColor);
+    const alpha = clamp01(alphaValue, 1);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   function computeRelativeLuminanceFromHex(hexColor) {
@@ -1371,6 +1446,38 @@ export function createSettingsManager(appContext) {
     root.classList.remove('custom-theme-colors-enabled');
   }
 
+  function applyThemeOpacityOverrides() {
+    const root = document.documentElement;
+    if (!root || !root.style) return;
+    const computed = getComputedStyle(root);
+
+    const backgroundOpacity = clamp01(
+      currentSettings.backgroundOpacity,
+      DEFAULT_SETTINGS.backgroundOpacity
+    );
+    const elementOpacity = clamp01(
+      currentSettings.elementOpacity,
+      DEFAULT_SETTINGS.elementOpacity
+    );
+
+    const bgColor = computed.getPropertyValue('--cerebr-bg-color').trim() || '#262b33';
+    const userColor = computed.getPropertyValue('--cerebr-message-user-bg').trim() || '#3e4451';
+    const aiColor = computed.getPropertyValue('--cerebr-message-ai-bg').trim() || '#2c313c';
+    const inputColor = computed.getPropertyValue('--cerebr-input-bg').trim() || '#21252b';
+
+    // 背景透明度仅控制“整张聊天背景底板”（可透出 iframe 后网页），
+    // 不直接影响消息/输入框等前景 UI 元素。
+    root.style.setProperty(
+      '--cerebr-chat-background-color',
+      composeRgbaFromCssColor(bgColor, backgroundOpacity, '#262b33')
+    );
+    // 元素透明度单独控制 UI 组件层，包括消息气泡、输入框、面板等。
+    root.style.setProperty('--cerebr-bg-color', composeRgbaFromCssColor(bgColor, elementOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, elementOpacity, '#3e4451'));
+    root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, elementOpacity, '#2c313c'));
+    root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, elementOpacity, '#21252b'));
+  }
+
   function applyCustomThemeColorOverrides() {
     const root = document.documentElement;
     if (!root || !root.style) return;
@@ -1381,6 +1488,7 @@ export function createSettingsManager(appContext) {
         // 关闭自定义配色后立即恢复当前主题变量，避免出现“透明度变化了但主题色没回来”。
         themeManager.applyTheme(currentSettings.theme || DEFAULT_SETTINGS.theme);
       }
+      applyThemeOpacityOverrides();
       return;
     }
 
@@ -1413,6 +1521,7 @@ export function createSettingsManager(appContext) {
     root.style.setProperty('--cerebr-code-bg', codeBgColor);
     root.style.setProperty('--cerebr-code-color', codeTextColor);
     root.style.setProperty('--cerebr-code-border', borderColor);
+    applyThemeOpacityOverrides();
   }
 
   function getThemeType(themeId) {
@@ -1973,12 +2082,14 @@ export function createSettingsManager(appContext) {
 
   function applyBackgroundImageIntensity(value) {
     const numeric = clamp01(value, DEFAULT_SETTINGS.backgroundImageIntensity);
+    // 语义：控制背景图“模糊氛围层”的强度，而非主体图片透明度。
     document.documentElement.style.setProperty('--cerebr-background-image-intensity', numeric);
   }
 
   function applyBackgroundOverallOpacity(value) {
     const numeric = clamp01(value, DEFAULT_SETTINGS.backgroundOverallOpacity);
-    document.documentElement.style.setProperty('--cerebr-background-total-opacity', numeric);
+    // 仅控制“背景图片层”透明度，避免与主题面板里的“背景透明度”语义重叠。
+    document.documentElement.style.setProperty('--cerebr-background-image-opacity', numeric);
   }
 
   /**
