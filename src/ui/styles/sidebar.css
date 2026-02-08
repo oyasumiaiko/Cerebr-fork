@@ -36,6 +36,7 @@ input, textarea, select {
     --cerebr-scroll-minimap-idle-opacity: 0;
     --cerebr-scroll-minimap-autohide: 0;
     --cerebr-scroll-minimap-message-mode: proportional;
+    --cerebr-reading-tail-space: 85vh;
     
     --cerebr-bg-color: rgba(255, 255, 255, var(--cerebr-opacity));
     --cerebr-text-color: #222;
@@ -5112,8 +5113,9 @@ body.temporary-mode::after {
     transition: opacity 0.5s ease;
 }
 
+/* 不再通过“最后一条消息巨大 margin”制造尾部留白，避免破坏滚动与缩略图映射。 */
 .message:nth-last-child(1) {
-    margin-bottom: calc(90vh - 48px);
+    margin-bottom: 0;
 }
 
 #input-container.auto-scroll-glow::after {
@@ -6625,6 +6627,11 @@ html.fullscreen-mode::before {
   padding-right: max(15px, calc((var(--cerebr-viewport-width, 100vw) - var(--cerebr-fullscreen-width)) / 2));
 }
 
+/* 全屏阅读尾部留白：保留“滚过末尾”的阅读手感，避免最后一段贴在输入区上方。 */
+.fullscreen-mode #chat-container {
+  padding-bottom: calc(15px + var(--cerebr-reading-tail-space, 90vh));
+}
+
 /* 全屏下同样需要扣掉滚动条（或 scrollbar-gutter 占位）的宽度，避免右侧出现“额外空白”。 */
 .fullscreen-mode #chat-container.has-scrollbar {
   padding-right: calc(
@@ -6681,7 +6688,7 @@ html.fullscreen-mode::before {
 
 .fullscreen-mode body.thread-mode-active #thread-container {
   padding-top: 15px;
-  padding-bottom: 15px;
+  padding-bottom: calc(15px + var(--cerebr-reading-tail-space, 90vh));
   padding-left: 0;
   padding-right: 0px;
   scrollbar-gutter: stable;
