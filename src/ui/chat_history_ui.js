@@ -2650,21 +2650,24 @@ export function createChatHistoryUI(appContext) {
     emitConversationApiContextChanged();
 
     if (!skipScrollToBottom) {
-      // 滚动到底部
-      requestAnimationFrame(() => {
-        const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
-        if (aiMessages.length > 0) {
-          const latestAiMessage = aiMessages[aiMessages.length - 1];
-          const rect = latestAiMessage.getBoundingClientRect();
-          const computedStyle = window.getComputedStyle(latestAiMessage);
-          const marginBottom = parseInt(computedStyle.marginBottom, 10);
-          const scrollTop = latestAiMessage.offsetTop + rect.height - marginBottom;
-          chatContainer.scrollTo({
-            top: scrollTop,
-            behavior: 'instant'
-          });
-        }
-      });
+      const jumped = await jumpToLatestConversationMessage(fullConversation);
+      if (!jumped) {
+        // 兜底：若无法定位最新消息，则回退到主聊天区最后一条 AI 消息。
+        requestAnimationFrame(() => {
+          const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
+          if (aiMessages.length > 0) {
+            const latestAiMessage = aiMessages[aiMessages.length - 1];
+            const rect = latestAiMessage.getBoundingClientRect();
+            const computedStyle = window.getComputedStyle(latestAiMessage);
+            const marginBottom = parseInt(computedStyle.marginBottom, 10);
+            const scrollTop = latestAiMessage.offsetTop + rect.height - marginBottom;
+            chatContainer.scrollTo({
+              top: scrollTop,
+              behavior: 'instant'
+            });
+          }
+        });
+      }
     }
   }
 
@@ -5316,6 +5319,47 @@ export function createChatHistoryUI(appContext) {
     }
 
     return { threadId, focusMessageId };
+  }
+
+  function resolveConversationMessageTimestamp(message) {
+    const ts = Number(message?.timestamp);
+    if (Number.isFinite(ts) && ts > 0) return ts;
+    const idTs = extractTimestampFromMessageId(message?.id);
+    if (Number.isFinite(idTs) && idTs > 0) return idTs;
+    return 0;
+  }
+
+  function resolveLatestVisibleConversationMessage(conversation) {
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    if (!messages.length) return null;
+    let latestMessage = null;
+    let latestTimestamp = -1;
+    let latestIndex = -1;
+    for (let index = 0; index < messages.length; index++) {
+      const msg = messages[index];
+      if (!msg?.id || msg?.threadHiddenSelection) continue;
+      const ts = resolveConversationMessageTimestamp(msg);
+      if (!latestMessage || ts > latestTimestamp || (ts === latestTimestamp && index > latestIndex)) {
+        latestMessage = msg;
+        latestTimestamp = ts;
+        latestIndex = index;
+      }
+    }
+    return latestMessage;
+  }
+
+  async function jumpToLatestConversationMessage(conversation) {
+    const latestMessage = resolveLatestVisibleConversationMessage(conversation);
+    if (!latestMessage?.id) return false;
+    const threadInfo = resolveThreadInfoFromMessage(conversation, latestMessage.id);
+    if (threadInfo?.threadId && services.selectionThreadManager?.enterThread) {
+      await services.selectionThreadManager.enterThread(threadInfo.threadId, {
+        focusMessageId: threadInfo.focusMessageId || latestMessage.id
+      });
+      return true;
+    }
+    jumpToMessageById(latestMessage.id);
+    return true;
   }
 
   async function openConversationFromSearchResult(conversationId, messageId) {
