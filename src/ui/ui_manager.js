@@ -283,6 +283,80 @@ export function createUIManager(appContext) {
   function setupScrollableContainerEventListeners(container) {
     const AUTO_SCROLL_THRESHOLD = 100;
     const ALT_SCROLL_MULTIPLIER = 5; // 固定 5 倍滚动速度，避免动态加速带来的不可控跳跃；如需调节手感只改这里。
+    const ALT_SCROLL_ANIMATION_MS = 110; // Alt+滚轮平滑动画时长（ms），兼顾 120Hz 下的顺滑与响应速度。
+    let altScrollAnimRaf = null;
+    let altScrollAnimStartAt = 0;
+    let altScrollAnimFromTop = 0;
+    let altScrollAnimFromLeft = 0;
+    let altScrollAnimToTop = 0;
+    let altScrollAnimToLeft = 0;
+
+    const clampNumber = (value, min, max) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return min;
+      return Math.min(max, Math.max(min, numeric));
+    };
+
+    const stopAltScrollAnimation = () => {
+      if (altScrollAnimRaf) {
+        cancelAnimationFrame(altScrollAnimRaf);
+        altScrollAnimRaf = null;
+      }
+      altScrollAnimStartAt = 0;
+      const currentTop = Math.max(0, container.scrollTop || 0);
+      const currentLeft = Math.max(0, container.scrollLeft || 0);
+      altScrollAnimFromTop = currentTop;
+      altScrollAnimFromLeft = currentLeft;
+      altScrollAnimToTop = currentTop;
+      altScrollAnimToLeft = currentLeft;
+    };
+
+    const runAltScrollAnimationFrame = (timestamp) => {
+      if (!altScrollAnimRaf) return;
+      if (!altScrollAnimStartAt) altScrollAnimStartAt = timestamp;
+      const elapsed = timestamp - altScrollAnimStartAt;
+      const progress = clampNumber(elapsed / ALT_SCROLL_ANIMATION_MS, 0, 1);
+      // 使用缓出曲线，起步快、收尾稳，避免“黏滞感”。
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const nextTop = altScrollAnimFromTop + (altScrollAnimToTop - altScrollAnimFromTop) * eased;
+      const nextLeft = altScrollAnimFromLeft + (altScrollAnimToLeft - altScrollAnimFromLeft) * eased;
+      container.scrollTop = nextTop;
+      container.scrollLeft = nextLeft;
+
+      if (progress >= 1 || (Math.abs(altScrollAnimToTop - nextTop) < 0.5 && Math.abs(altScrollAnimToLeft - nextLeft) < 0.5)) {
+        container.scrollTop = altScrollAnimToTop;
+        container.scrollLeft = altScrollAnimToLeft;
+        altScrollAnimRaf = null;
+        altScrollAnimStartAt = 0;
+        altScrollAnimFromTop = altScrollAnimToTop;
+        altScrollAnimFromLeft = altScrollAnimToLeft;
+        return;
+      }
+
+      altScrollAnimRaf = requestAnimationFrame(runAltScrollAnimationFrame);
+    };
+
+    const animateAltScrollBy = (deltaY, deltaX) => {
+      const currentTop = Math.max(0, container.scrollTop || 0);
+      const currentLeft = Math.max(0, container.scrollLeft || 0);
+      const maxTop = Math.max(0, (container.scrollHeight || 0) - (container.clientHeight || 0));
+      const maxLeft = Math.max(0, (container.scrollWidth || 0) - (container.clientWidth || 0));
+      // 连续滚轮时以“当前计划终点”为基准累加，避免动画进行中丢输入。
+      const baseTop = altScrollAnimRaf ? altScrollAnimToTop : currentTop;
+      const baseLeft = altScrollAnimRaf ? altScrollAnimToLeft : currentLeft;
+      const targetTop = clampNumber(baseTop + (Number.isFinite(deltaY) ? deltaY : 0), 0, maxTop);
+      const targetLeft = clampNumber(baseLeft + (Number.isFinite(deltaX) ? deltaX : 0), 0, maxLeft);
+
+      altScrollAnimFromTop = currentTop;
+      altScrollAnimFromLeft = currentLeft;
+      altScrollAnimToTop = targetTop;
+      altScrollAnimToLeft = targetLeft;
+      altScrollAnimStartAt = 0;
+      if (!altScrollAnimRaf) {
+        altScrollAnimRaf = requestAnimationFrame(runAltScrollAnimationFrame);
+      }
+      return targetTop;
+    };
 
     /**
      * 将滚轮事件的 delta 值统一转换为像素单位
@@ -310,22 +384,18 @@ export function createUIManager(appContext) {
     // 按住 Alt 时使用加速滚动，提高浏览长对话的效率
     container.addEventListener('wheel', (e) => {
       let effectiveDeltaY = e.deltaY;
+      let projectedScrollTop = Math.max(0, container.scrollTop || 0);
 
       if (e.altKey) {
         e.preventDefault();
         const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
         const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
 
-        if (acceleratedDeltaY) {
-          container.scrollTop += acceleratedDeltaY;
-          effectiveDeltaY = acceleratedDeltaY;
-        } else {
-          effectiveDeltaY = 0;
-        }
-
-        if (acceleratedDeltaX) {
-          container.scrollLeft += acceleratedDeltaX;
-        }
+        projectedScrollTop = animateAltScrollBy(acceleratedDeltaY, acceleratedDeltaX);
+        effectiveDeltaY = acceleratedDeltaY || 0;
+      } else if (altScrollAnimRaf) {
+        // 非 Alt 滚动接管时立即中断 Alt 动画，避免双通道滚动叠加。
+        stopAltScrollAnimation();
       }
 
       if (effectiveDeltaY < 0) {
@@ -334,7 +404,8 @@ export function createUIManager(appContext) {
       }
 
       if (effectiveDeltaY > 0) {
-        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        const effectiveScrollTop = e.altKey ? projectedScrollTop : Math.max(0, container.scrollTop || 0);
+        const distanceFromBottom = container.scrollHeight - effectiveScrollTop - container.clientHeight;
         if (distanceFromBottom < AUTO_SCROLL_THRESHOLD) {
           messageSender.setShouldAutoScroll(true);
         } else if (e.altKey) {
@@ -344,6 +415,7 @@ export function createUIManager(appContext) {
     }, { passive: false });
 
     container.addEventListener('mousedown', (e) => {
+      stopAltScrollAnimation();
       if (e.offsetX < container.clientWidth) { 
          messageSender.setShouldAutoScroll(false);
       }
