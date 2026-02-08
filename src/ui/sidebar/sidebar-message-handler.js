@@ -50,8 +50,9 @@
     const MINIMAP_THUMB_MIN_HEIGHT = 28;
     const MINIMAP_MESSAGE_MODE_PROPORTIONAL = 'proportional';
     const MINIMAP_MESSAGE_MODE_FIXED = 'fixed';
-    const MINIMAP_WHEEL_STEP_PX = 56;
+    const MINIMAP_WHEEL_STEP_UNIT = 1;
     const MINIMAP_WHEEL_IDLE_RESET_MS = 180;
+    const MINIMAP_WHEEL_ANIMATION_MS = 120;
 
     function createMinimapState(key, container, side) {
       if (!container) return null;
@@ -70,7 +71,11 @@
         dragSession: null,
         renderContext: null,
         wheelDeltaAccumulator: 0,
-        wheelResetTimer: null
+        wheelResetTimer: null,
+        wheelAnimationRaf: null,
+        wheelAnimationFromTop: 0,
+        wheelAnimationToTop: 0,
+        wheelAnimationStartAt: 0
       };
     }
 
@@ -654,6 +659,7 @@
 
     function scrollContainerFromMinimapClientY(state, clientY, options = {}) {
       if (!state?.root || !state?.container) return;
+      stopMinimapWheelAnimation(state);
       const centerViewport = options.centerViewport !== false;
       const rect = state.root.getBoundingClientRect();
       const y = clampNumber(clientY - rect.top, 0, Math.max(1, rect.height));
@@ -675,6 +681,7 @@
 
     function scrollContainerByThumbTop(state, thumbTop) {
       if (!state?.root || !state?.thumb || !state?.container) return;
+      stopMinimapWheelAnimation(state);
       const trackHeight = Math.max(1, state.root.clientHeight || 0);
       const thumbHeight = Math.max(0, state.thumb.offsetHeight || 0);
       const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
@@ -695,12 +702,95 @@
       state.container.scrollTop = ratio * maxScroll;
     }
 
-    function normalizeWheelDeltaToPixels(event, pageSize) {
+    function normalizeWheelDeltaToStepUnits(event) {
       const mode = Number(event?.deltaMode) || 0;
       const rawDelta = Number(event?.deltaY) || 0;
-      if (mode === 1) return rawDelta * 16;
-      if (mode === 2) return rawDelta * Math.max(1, pageSize);
-      return rawDelta;
+      if (!rawDelta) return 0;
+      if (mode === 1) {
+        // 行模式常见于部分平台浏览器：3 行约等于一个滚轮刻度。
+        return rawDelta / 3;
+      }
+      if (mode === 2) {
+        // 页模式直接按“页数”理解，通常一页对应一个步进。
+        return rawDelta;
+      }
+
+      const absDelta = Math.abs(rawDelta);
+      if (absDelta >= 40) {
+        // 离散滚轮事件（普通鼠标）通常是 100/120 或其倍数；
+        // 这里按“接近多少个刻度”归一化，确保一格≈一条消息。
+        const coarseSteps = Math.max(1, Math.round(absDelta / 100));
+        return Math.sign(rawDelta) * coarseSteps;
+      }
+
+      // 触控板小增量路径：累计到 1 个步进后再翻一条消息。
+      return rawDelta / 100;
+    }
+
+    function stopMinimapWheelAnimation(state) {
+      if (!state) return;
+      if (state.wheelAnimationRaf) {
+        cancelAnimationFrame(state.wheelAnimationRaf);
+        state.wheelAnimationRaf = null;
+      }
+      const currentTop = Math.max(0, state.container?.scrollTop || 0);
+      state.wheelAnimationFromTop = currentTop;
+      state.wheelAnimationToTop = currentTop;
+      state.wheelAnimationStartAt = 0;
+    }
+
+    function runMinimapWheelAnimationFrame(state, timestamp) {
+      if (!state?.container) {
+        stopMinimapWheelAnimation(state);
+        return;
+      }
+
+      if (!state.wheelAnimationStartAt) state.wheelAnimationStartAt = timestamp;
+      const elapsed = timestamp - state.wheelAnimationStartAt;
+      const progress = clampNumber(elapsed / MINIMAP_WHEEL_ANIMATION_MS, 0, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const fromTop = Number(state.wheelAnimationFromTop) || 0;
+      const toTop = Number(state.wheelAnimationToTop) || 0;
+      const nextTop = fromTop + (toTop - fromTop) * eased;
+      state.container.scrollTop = nextTop;
+
+      if (progress >= 1 || Math.abs(toTop - nextTop) < 0.5) {
+        state.container.scrollTop = toTop;
+        state.wheelAnimationRaf = null;
+        state.wheelAnimationFromTop = toTop;
+        state.wheelAnimationStartAt = 0;
+        if (state.key === 'chat') scheduleReadingAnchorCapture();
+        scheduleMinimapRender();
+        return;
+      }
+
+      state.wheelAnimationRaf = requestAnimationFrame((nextTs) => runMinimapWheelAnimationFrame(state, nextTs));
+    }
+
+    function animateMinimapScrollTo(state, targetTop) {
+      if (!state?.container || !Number.isFinite(targetTop)) return;
+      const context = state.renderContext;
+      const maxScroll = Math.max(
+        0,
+        context?.maxScroll || ((state.container.scrollHeight || 0) - (state.container.clientHeight || 0))
+      );
+      const clampedTop = clampNumber(targetTop, 0, maxScroll);
+      const currentTop = Math.max(0, state.container.scrollTop || 0);
+      state.wheelAnimationFromTop = currentTop;
+      state.wheelAnimationToTop = clampedTop;
+      state.wheelAnimationStartAt = 0;
+      if (!state.wheelAnimationRaf) {
+        state.wheelAnimationRaf = requestAnimationFrame((nextTs) => runMinimapWheelAnimationFrame(state, nextTs));
+      }
+    }
+
+    function getMessageStepBaseTop(state) {
+      if (!state) return 0;
+      if (state.wheelAnimationRaf) {
+        const plannedTop = Number(state.wheelAnimationToTop);
+        if (Number.isFinite(plannedTop)) return Math.max(0, plannedTop);
+      }
+      return Math.max(0, state.container?.scrollTop || 0);
     }
 
     function findFirstVisibleMessageLayoutIndex(layout, scrollTop) {
@@ -722,36 +812,39 @@
       return clampNumber(answer, 0, layout.length - 1);
     }
 
-    function scrollContainerByMessageStep(state, stepCount) {
-      if (!state?.container) return;
+    function resolveMessageStepTargetTop(state, stepCount) {
+      if (!state?.container || !Number.isFinite(stepCount) || stepCount === 0) return null;
       const context = state.renderContext;
       const layout = context?.messageLayout;
       const total = context?.messageCount || 0;
-      if (!Array.isArray(layout) || total <= 0 || !Number.isFinite(stepCount) || stepCount === 0) return;
+      if (!Array.isArray(layout) || total <= 0) return null;
 
-      const currentTop = Math.max(0, state.container.scrollTop || 0);
-      const currentIdx = findFirstVisibleMessageLayoutIndex(layout, currentTop);
-      if (currentIdx < 0) return;
+      const baseTop = getMessageStepBaseTop(state);
+      const currentIdx = findFirstVisibleMessageLayoutIndex(layout, baseTop);
+      if (currentIdx < 0) return null;
 
       let targetIdx = currentIdx + stepCount;
-      if (stepCount < 0 && currentTop > (layout[currentIdx]?.top || 0) + 1) {
+      if (stepCount < 0 && baseTop > (layout[currentIdx]?.top || 0) + 1) {
         // 向上滚动时，若当前视口落在消息中间，先对齐到当前消息顶部，再继续按消息步进。
         targetIdx += 1;
       }
       targetIdx = clampNumber(targetIdx, 0, total - 1);
 
-      const rawTargetTop = layout[targetIdx]?.top || 0;
       const maxScroll = Math.max(0, context?.maxScroll || 0);
-      const targetTop = clampNumber(rawTargetTop, 0, maxScroll);
-
-      try {
-        state.container.scrollTo({
-          top: targetTop,
-          behavior: 'smooth'
-        });
-      } catch (_) {
-        state.container.scrollTop = targetTop;
+      // 只要当前已进入最后一条消息，再向下滚都直接落到底部。
+      // 这样既能解决“最后一条顶部卡住”，也避免到底后再向下滚时回弹到最后一条顶部。
+      if (stepCount > 0 && currentIdx === total - 1) {
+        return maxScroll;
       }
+
+      const rawTargetTop = layout[targetIdx]?.top || 0;
+      return clampNumber(rawTargetTop, 0, maxScroll);
+    }
+
+    function scrollContainerByMessageStep(state, stepCount) {
+      const targetTop = resolveMessageStepTargetTop(state, stepCount);
+      if (targetTop == null) return;
+      animateMinimapScrollTo(state, targetTop);
     }
 
     function resetMinimapWheelAccumulator(state) {
@@ -761,6 +854,7 @@
         clearTimeout(state.wheelResetTimer);
         state.wheelResetTimer = null;
       }
+      stopMinimapWheelAnimation(state);
     }
 
     function scheduleMinimapWheelAccumulatorReset(state) {
@@ -774,8 +868,8 @@
 
     function handleMinimapWheel(state, event) {
       if (!state?.root || !state?.thumb || !state.root.classList.contains('chat-scroll-minimap--active')) return;
-      const deltaPx = normalizeWheelDeltaToPixels(event, state.root.clientHeight || 120);
-      if (Math.abs(deltaPx) < 0.01) return;
+      const deltaUnits = normalizeWheelDeltaToStepUnits(event);
+      if (Math.abs(deltaUnits) < 0.001) return;
 
       event.preventDefault();
       event.stopPropagation();
@@ -783,22 +877,21 @@
 
       const currentAcc = Number(state.wheelDeltaAccumulator) || 0;
       const currentSign = Math.sign(currentAcc);
-      const deltaSign = Math.sign(deltaPx);
+      const deltaSign = Math.sign(deltaUnits);
       if (currentSign !== 0 && deltaSign !== 0 && currentSign !== deltaSign) {
         state.wheelDeltaAccumulator = 0;
       }
-      state.wheelDeltaAccumulator += deltaPx;
+      state.wheelDeltaAccumulator += deltaUnits;
       scheduleMinimapWheelAccumulatorReset(state);
 
       const accumulator = Number(state.wheelDeltaAccumulator) || 0;
-      const steps = Math.trunc(Math.abs(accumulator) / MINIMAP_WHEEL_STEP_PX);
+      const steps = Math.trunc(Math.abs(accumulator) / MINIMAP_WHEEL_STEP_UNIT);
       if (steps <= 0) return;
 
       const direction = accumulator > 0 ? 1 : -1;
-      const residual = accumulator - direction * steps * MINIMAP_WHEEL_STEP_PX;
+      const residual = accumulator - direction * steps * MINIMAP_WHEEL_STEP_UNIT;
       state.wheelDeltaAccumulator = residual;
       scrollContainerByMessageStep(state, direction * steps);
-      if (state.key === 'chat') scheduleReadingAnchorCapture();
       scheduleMinimapRender();
     }
 
@@ -817,6 +910,7 @@
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
+      stopMinimapWheelAnimation(state);
       const thumbRect = state.thumb.getBoundingClientRect();
       state.dragSession = {
         pointerId: event.pointerId,
