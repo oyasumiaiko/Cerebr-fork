@@ -126,6 +126,79 @@ function setupApiMenuWatcher(appContext) {
   const apiManager = appContext.services.apiManager;
   const chatHistoryUI = appContext.services.chatHistoryUI;
   const showNotification = appContext.utils?.showNotification;
+  const messageInput = appContext.dom?.messageInput || null;
+
+  const resolveConfigLabel = (config) => {
+    if (!config) return 'API';
+    return config.displayName || config.modelName || config.baseUrl || 'API';
+  };
+
+  const getFavoriteConfigItems = () => {
+    const configs = apiManager.getAllConfigs?.() || [];
+    return configs
+      .map((config, index) => ({ config, index }))
+      .filter(item => item.config && item.config.isFavorite);
+  };
+
+  const isEditableElement = (element) => {
+    if (!element || !(element instanceof Element)) return false;
+    if (element === messageInput) return false;
+    if (element.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return true;
+    return element.getAttribute?.('contenteditable') === 'plaintext-only';
+  };
+
+  // Ctrl+↑ / Ctrl+↓ 在“收藏 API”集合里循环切换当前默认 API。
+  // 规则：
+  // - 仅在当前焦点不位于其它可编辑控件时触发（消息输入框除外）；
+  // - 若当前 API 不在收藏中，向下从第一个开始，向上从最后一个开始；
+  // - 始终按收藏列表顺序循环，避免用户感知与列表显示不一致。
+  const cycleFavoriteApiSelection = (direction) => {
+    const favoriteItems = getFavoriteConfigItems();
+    if (!favoriteItems.length) return false;
+
+    const normalizedDirection = direction > 0 ? 1 : -1;
+    const selectedIndex = apiManager.getSelectedIndex?.();
+    const currentFavoriteIndex = favoriteItems.findIndex(item => item.index === selectedIndex);
+    const nextFavoriteIndex = (currentFavoriteIndex < 0)
+      ? (normalizedDirection > 0 ? 0 : favoriteItems.length - 1)
+      : (currentFavoriteIndex + normalizedDirection + favoriteItems.length) % favoriteItems.length;
+
+    const targetItem = favoriteItems[nextFavoriteIndex];
+    if (!targetItem) return false;
+    const switched = apiManager.setSelectedIndex?.(targetItem.index);
+    if (!switched) return false;
+
+    const apiInfo = resolveConversationApiUiInfo().apiInfo;
+    const apiLabel = resolveConfigLabel(targetItem.config);
+    if (apiInfo?.hasLock) {
+      showNotification?.({
+        message: `已切换默认 API：${apiLabel}（当前对话已固定）`,
+        type: 'info',
+        duration: 1600
+      });
+    } else {
+      showNotification?.({
+        message: `已切换 API：${apiLabel}`,
+        type: 'info',
+        duration: 1200
+      });
+    }
+    return true;
+  };
+
+  const handleFavoriteApiCycleShortcut = (e) => {
+    if (!e || appContext.state.isComposing) return;
+    if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+    const activeElement = document.activeElement;
+    if (isEditableElement(activeElement)) return;
+
+    const handled = cycleFavoriteApiSelection(e.key === 'ArrowDown' ? 1 : -1);
+    if (!handled) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   const resolveConversationApiUiInfo = () => {
     const apiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
@@ -163,15 +236,7 @@ function setupApiMenuWatcher(appContext) {
     const hasLock = !!apiInfo?.hasLock;
     const isLockValid = !!apiInfo?.isLockValid;
 
-    const configs = apiManager.getAllConfigs?.() || [];
-    const favoriteConfigs = configs
-      .map((config, index) => ({ config, index }))
-      .filter(item => item.config && item.config.isFavorite);
-
-    const resolveConfigLabel = (config) => {
-      if (!config) return 'API';
-      return config.displayName || config.modelName || config.baseUrl || 'API';
-    };
+    const favoriteConfigs = getFavoriteConfigItems();
 
     const currentName = resolveConfigLabel(displayConfig);
     currentEl.textContent = '';
@@ -277,6 +342,7 @@ function setupApiMenuWatcher(appContext) {
   updateAll();
   window.addEventListener('apiConfigsUpdated', updateAll);
   document.addEventListener('CONVERSATION_API_CONTEXT_CHANGED', updateAll);
+  document.addEventListener('keydown', handleFavoriteApiCycleShortcut);
 }
 
 /**
