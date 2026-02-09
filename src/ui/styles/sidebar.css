@@ -35,6 +35,7 @@ input, textarea, select {
     --cerebr-panel-surface-bg: var(--cerebr-bg-color);
     --cerebr-panel-surface-bg-strong: var(--cerebr-bg-color);
     --cerebr-panel-inline-bg: var(--cerebr-input-bg);
+    --cerebr-chat-input-blur-radius: 0px;
     --cerebr-fullscreen-bg-size: contain;
     --cerebr-fullscreen-blur-opacity: 1;
     --cerebr-scroll-minimap-enabled: 1;
@@ -915,6 +916,8 @@ body.fullscreen-width-resize-active * {
     animation: messageAppear 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
     will-change: transform, opacity;
     /* backdrop-filter: blur(var(--cerebr-blur-radius)); */
+    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
     transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                 box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
@@ -926,6 +929,8 @@ body.fullscreen-width-resize-active * {
     visibility: hidden;
     box-shadow: none;
     background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     pointer-events: none;
 }
 
@@ -990,6 +995,8 @@ body.fullscreen-width-resize-active * {
 #input-container {
     padding: 0;
     background-color: var(--cerebr-input-bg);
+    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
     display: flex;
     flex-direction: column;
     align-items: flex-start;

@@ -133,6 +133,8 @@ export function createSettingsManager(appContext) {
     // 主题透明度拆分：背景层与元素层独立控制
     backgroundOpacity: 0.8,
     elementOpacity: 0.8,
+    // 聊天消息气泡与输入框的背景模糊强度（单位 px）
+    chatInputBlurRadius: 0,
     // 是否启用“自定义配色覆盖主题”
     enableCustomThemeColors: false,
     customThemeBgColor: '#262b33',
@@ -264,6 +266,19 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.elementOpacity,
       apply: () => applyThemeOpacityOverrides(),
       formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
+    },
+    {
+      key: 'chatInputBlurRadius',
+      type: 'range',
+      id: 'theme-chat-input-blur-radius',
+      label: '聊天/输入模糊',
+      group: 'theme',
+      min: 0,
+      max: 36,
+      step: 1,
+      defaultValue: DEFAULT_SETTINGS.chatInputBlurRadius,
+      apply: (v) => applyChatInputBlurRadius(v),
+      formatValue: (value) => `${Math.round(Math.max(0, Math.min(36, Number(value) || 0)))}px`
     },
     {
       key: 'enableCustomThemeColors',
@@ -763,6 +778,9 @@ export function createSettingsManager(appContext) {
   function normalizeSettingValue(key, value) {
     if (key === 'backgroundOpacity' || key === 'elementOpacity') {
       return clamp01(value, DEFAULT_SETTINGS[key]);
+    }
+    if (key === 'chatInputBlurRadius') {
+      return clampChatInputBlurRadius(value);
     }
     if (key === 'enableCustomThemeColors') {
       return !!value;
@@ -2142,6 +2160,12 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-background-image-opacity', numeric);
   }
 
+  function applyChatInputBlurRadius(value) {
+    const radius = clampChatInputBlurRadius(value);
+    // 聊天消息气泡与输入框统一使用该变量，保持视觉强度一致。
+    document.documentElement.style.setProperty('--cerebr-chat-input-blur-radius', `${radius}px`);
+  }
+
   /**
    * 全屏模式背景铺满开关：
    * - 关闭：主图保持 contain
@@ -2190,6 +2214,12 @@ export function createSettingsManager(appContext) {
     const n = Number(input);
     if (Number.isNaN(n)) return fallback;
     return Math.min(1, Math.max(0, n));
+  }
+
+  function clampChatInputBlurRadius(input) {
+    const n = Number(input);
+    if (!Number.isFinite(n)) return DEFAULT_SETTINGS.chatInputBlurRadius;
+    return Math.round(Math.min(36, Math.max(0, n)));
   }
 
   function getScrollMinimapWidthBounds() {
