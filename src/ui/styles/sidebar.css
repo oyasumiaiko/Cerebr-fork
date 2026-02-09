@@ -31,6 +31,15 @@ input, textarea, select {
     --cerebr-chat-background-color: var(--cerebr-bg-color);
     /* 始终不透明的聊天底板色，用于彻底隔离 iframe 后网页内容。 */
     --cerebr-chat-background-solid-color: #262b33;
+    /* 透明度职责拆分：先由 settings_manager 统一写入，再由各模块按需使用。 */
+    --cerebr-opacity-background-base-strength: 0.8;
+    --cerebr-opacity-element: 0.8;
+    --cerebr-opacity-message-user: var(--cerebr-opacity-element);
+    --cerebr-opacity-message-ai: var(--cerebr-opacity-element);
+    --cerebr-opacity-input: var(--cerebr-opacity-element);
+    --cerebr-opacity-panel-surface: 0.87;
+    --cerebr-opacity-panel-surface-strong: 0.91;
+    --cerebr-opacity-panel-inline: 0.84;
     --cerebr-panel-blur-radius: 18px;
     --cerebr-panel-surface-bg: var(--cerebr-bg-color);
     --cerebr-panel-surface-bg-strong: var(--cerebr-bg-color);

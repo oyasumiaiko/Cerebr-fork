@@ -1484,6 +1484,47 @@ export function createSettingsManager(appContext) {
     return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
   }
 
+  function computeThemeOpacityProfile({ backgroundOpacity, elementOpacity }) {
+    const baseStrength = clamp01(
+      backgroundOpacity,
+      DEFAULT_SETTINGS.backgroundOpacity
+    );
+    const uiOpacity = clamp01(
+      elementOpacity,
+      DEFAULT_SETTINGS.elementOpacity
+    );
+    // 当前阶段先保持消息/输入与元素透明度一致；
+    // 后续接入 RGBA Picker 时可独立替换这些值而不影响其他模块。
+    const messageUserOpacity = uiOpacity;
+    const messageAiOpacity = uiOpacity;
+    const inputOpacity = uiOpacity;
+    // 面板保持轻微“保底抬升”以提升 blur 可读性。
+    const panelSurfaceOpacity = clamp01(uiOpacity + (1 - uiOpacity) * 0.35, uiOpacity);
+    const panelSurfaceStrongOpacity = clamp01(uiOpacity + (1 - uiOpacity) * 0.45, uiOpacity);
+    const panelInlineOpacity = clamp01(uiOpacity + (1 - uiOpacity) * 0.28, uiOpacity);
+    return {
+      baseStrength,
+      uiOpacity,
+      messageUserOpacity,
+      messageAiOpacity,
+      inputOpacity,
+      panelSurfaceOpacity,
+      panelSurfaceStrongOpacity,
+      panelInlineOpacity
+    };
+  }
+
+  function applyThemeOpacityProfileVariables(root, profile) {
+    root.style.setProperty('--cerebr-opacity-background-base-strength', String(profile.baseStrength));
+    root.style.setProperty('--cerebr-opacity-element', String(profile.uiOpacity));
+    root.style.setProperty('--cerebr-opacity-message-user', String(profile.messageUserOpacity));
+    root.style.setProperty('--cerebr-opacity-message-ai', String(profile.messageAiOpacity));
+    root.style.setProperty('--cerebr-opacity-input', String(profile.inputOpacity));
+    root.style.setProperty('--cerebr-opacity-panel-surface', String(profile.panelSurfaceOpacity));
+    root.style.setProperty('--cerebr-opacity-panel-surface-strong', String(profile.panelSurfaceStrongOpacity));
+    root.style.setProperty('--cerebr-opacity-panel-inline', String(profile.panelInlineOpacity));
+  }
+
   function computeRelativeLuminanceFromHex(hexColor) {
     const { r, g, b } = hexToRgbChannels(hexColor);
     const toLinear = (channel) => {
@@ -1508,14 +1549,11 @@ export function createSettingsManager(appContext) {
     if (!root || !root.style) return;
     const computed = getComputedStyle(root);
 
-    const backgroundOpacity = clamp01(
-      currentSettings.backgroundOpacity,
-      DEFAULT_SETTINGS.backgroundOpacity
-    );
-    const elementOpacity = clamp01(
-      currentSettings.elementOpacity,
-      DEFAULT_SETTINGS.elementOpacity
-    );
+    const opacityProfile = computeThemeOpacityProfile({
+      backgroundOpacity: currentSettings.backgroundOpacity,
+      elementOpacity: currentSettings.elementOpacity
+    });
+    applyThemeOpacityProfileVariables(root, opacityProfile);
 
     const bgColor = computed.getPropertyValue('--cerebr-bg-color').trim() || '#262b33';
     const userColor = computed.getPropertyValue('--cerebr-message-user-bg').trim() || '#3e4451';
@@ -1524,25 +1562,22 @@ export function createSettingsManager(appContext) {
 
     // 背景底色改为“始终不透明”，避免 iframe 后网页参与合成导致的清晰透出问题。
     // 该滑条语义调整为“底色强度”：控制主题底色的显著程度，不再控制 alpha 透出。
-    const opaqueBaseColor = composeOpaqueBaseColor(bgColor, backgroundOpacity, '#262b33');
+    const opaqueBaseColor = composeOpaqueBaseColor(bgColor, opacityProfile.baseStrength, '#262b33');
     root.style.setProperty('--cerebr-chat-background-color', opaqueBaseColor);
     root.style.setProperty('--cerebr-chat-background-solid-color', opaqueBaseColor);
     // 元素透明度单独控制 UI 组件层，包括消息气泡、输入框、面板等。
-    root.style.setProperty('--cerebr-bg-color', composeRgbaFromCssColor(bgColor, elementOpacity, '#262b33'));
-    root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, elementOpacity, '#3e4451'));
-    root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, elementOpacity, '#2c313c'));
-    root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, elementOpacity, '#21252b'));
+    root.style.setProperty('--cerebr-bg-color', composeRgbaFromCssColor(bgColor, opacityProfile.uiOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, opacityProfile.messageUserOpacity, '#3e4451'));
+    root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, opacityProfile.messageAiOpacity, '#2c313c'));
+    root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, opacityProfile.inputOpacity, '#21252b'));
     // 玻璃态面板使用单独的“稳定底色”变量，避免 backdrop-filter 在明暗背景图上出现
     // “亮区过实 / 暗区过透”的视觉漂移。
     // 这里不再用“固定最小值”硬钳制，而是按 elementOpacity 做线性抬升：
     // - elementOpacity 越低，越需要一点保底遮罩来稳定观感；
     // - elementOpacity 越高，面板透明度越接近用户原始设置，保证“跟手”。
-    const panelSurfaceOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.35, elementOpacity);
-    const panelSurfaceStrongOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.45, elementOpacity);
-    const panelInlineOpacity = clamp01(elementOpacity + (1 - elementOpacity) * 0.28, elementOpacity);
-    root.style.setProperty('--cerebr-panel-surface-bg', composeRgbaFromCssColor(bgColor, panelSurfaceOpacity, '#262b33'));
-    root.style.setProperty('--cerebr-panel-surface-bg-strong', composeRgbaFromCssColor(bgColor, panelSurfaceStrongOpacity, '#262b33'));
-    root.style.setProperty('--cerebr-panel-inline-bg', composeRgbaFromCssColor(inputColor, panelInlineOpacity, '#21252b'));
+    root.style.setProperty('--cerebr-panel-surface-bg', composeRgbaFromCssColor(bgColor, opacityProfile.panelSurfaceOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-panel-surface-bg-strong', composeRgbaFromCssColor(bgColor, opacityProfile.panelSurfaceStrongOpacity, '#262b33'));
+    root.style.setProperty('--cerebr-panel-inline-bg', composeRgbaFromCssColor(inputColor, opacityProfile.panelInlineOpacity, '#21252b'));
   }
 
   function applyCustomThemeColorOverrides() {
