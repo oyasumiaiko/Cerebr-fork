@@ -163,6 +163,12 @@ export function createSettingsManager(appContext) {
     'customThemeCodeBgColor',
     'customThemeCodeTextColor'
   ]);
+  // 这三项支持 RGBA（含 Alpha）调色，Alpha 直接作为控件最终透明度使用。
+  const CUSTOM_THEME_RGBA_SETTING_KEYS = new Set([
+    'customThemeUserMessageColor',
+    'customThemeAiMessageColor',
+    'customThemeInputColor'
+  ]);
 
   const CUSTOM_THEME_OVERRIDE_VARIABLES = [
     '--cerebr-bg-color',
@@ -255,19 +261,6 @@ export function createSettingsManager(appContext) {
       formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
     },
     {
-      key: 'elementOpacity',
-      type: 'range',
-      id: 'theme-element-opacity',
-      label: '元素透明度',
-      group: 'theme',
-      min: 0.2,
-      max: 1,
-      step: 0.05,
-      defaultValue: DEFAULT_SETTINGS.elementOpacity,
-      apply: () => applyThemeOpacityOverrides(),
-      formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
-    },
-    {
       key: 'chatInputBlurRadius',
       type: 'range',
       id: 'theme-chat-input-blur-radius',
@@ -299,6 +292,19 @@ export function createSettingsManager(appContext) {
       apply: () => applyCustomThemeColorOverrides()
     },
     {
+      key: 'elementOpacity',
+      type: 'range',
+      id: 'theme-element-opacity',
+      label: '主背景透明度',
+      group: 'theme',
+      min: 0.2,
+      max: 1,
+      step: 0.05,
+      defaultValue: DEFAULT_SETTINGS.elementOpacity,
+      apply: () => applyThemeOpacityOverrides(),
+      formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
+    },
+    {
       key: 'customThemeTextColor',
       type: 'color',
       id: 'custom-theme-text-color',
@@ -314,6 +320,7 @@ export function createSettingsManager(appContext) {
       label: '用户消息色',
       group: 'theme',
       defaultValue: DEFAULT_SETTINGS.customThemeUserMessageColor,
+      alphaEnabled: true,
       apply: () => applyCustomThemeColorOverrides()
     },
     {
@@ -323,6 +330,7 @@ export function createSettingsManager(appContext) {
       label: 'AI消息色',
       group: 'theme',
       defaultValue: DEFAULT_SETTINGS.customThemeAiMessageColor,
+      alphaEnabled: true,
       apply: () => applyCustomThemeColorOverrides()
     },
     {
@@ -332,6 +340,7 @@ export function createSettingsManager(appContext) {
       label: '输入框底色',
       group: 'theme',
       defaultValue: DEFAULT_SETTINGS.customThemeInputColor,
+      alphaEnabled: true,
       apply: () => applyCustomThemeColorOverrides()
     },
     {
@@ -750,12 +759,17 @@ export function createSettingsManager(appContext) {
         if (def.type === 'toggle') return !!el.checked;
         if (def.type === 'range') return parseFloat(el.value);
         if (def.type === 'select') return el.value;
+        if (def.type === 'color') return readColorControlValue(def, el);
         return el.value;
       },
       writeToUI: (el, v) => {
         if (!el) return;
         if (typeof def.writeToUI === 'function') { def.writeToUI(el, v); }
-        else if (def.type === 'toggle') el.checked = !!v; else el.value = v;
+        else if (def.type === 'toggle') el.checked = !!v;
+        else if (def.type === 'color') {
+          writeColorControlValue(def, el, v);
+          return;
+        } else el.value = v;
         // 同步右侧显示值
         const valueSpan = el.closest('.menu-item')?.querySelector('.setting-value');
         if (valueSpan) {
@@ -786,6 +800,9 @@ export function createSettingsManager(appContext) {
       return !!value;
     }
     if (CUSTOM_THEME_COLOR_SETTING_KEYS.has(key)) {
+      if (CUSTOM_THEME_RGBA_SETTING_KEYS.has(key)) {
+        return normalizeRgbaColor(value, DEFAULT_SETTINGS[key] || '#000000');
+      }
       return normalizeHexColor(value, DEFAULT_SETTINGS[key] || '#000000');
     }
     if (key === 'fullscreenWidth') {
@@ -809,10 +826,157 @@ export function createSettingsManager(appContext) {
     return value;
   }
 
+  function hasExplicitAlphaInColorText(value) {
+    const source = String(value || '').trim().toLowerCase();
+    if (!source) return false;
+    if (source.startsWith('rgba(')) return true;
+    if (source.startsWith('hsla(')) return true;
+    if (source.startsWith('#') && (source.length === 5 || source.length === 9)) return true;
+    if (source.startsWith('color(') && source.includes('/')) return true;
+    if (source.startsWith('rgb(') && source.includes('/')) return true;
+    if (source.startsWith('hsl(') && source.includes('/')) return true;
+    return false;
+  }
+
+  let nativeColorPickerAlphaSupport = null;
+  function supportsNativeColorPickerAlpha() {
+    if (nativeColorPickerAlphaSupport !== null) return nativeColorPickerAlphaSupport;
+    const probe = document.createElement('input');
+    probe.type = 'color';
+    probe.setAttribute('alpha', '');
+    probe.setAttribute('colorspace', 'srgb');
+    let supported = false;
+    try {
+      probe.value = 'rgba(17, 34, 51, 0.4)';
+      supported = hasExplicitAlphaInColorText(probe.value);
+    } catch (_) {
+      supported = false;
+    }
+    if (!supported) {
+      try {
+        probe.value = '#11223366';
+        supported = hasExplicitAlphaInColorText(probe.value) || String(probe.value || '').toLowerCase() === '#11223366';
+      } catch (_) {
+        supported = false;
+      }
+    }
+    nativeColorPickerAlphaSupport = supported;
+    return supported;
+  }
+
+  function getLinkedColorAlphaInput(colorInput) {
+    if (!colorInput) return null;
+    const container = colorInput.closest('.menu-item');
+    if (container) {
+      const scopedInput = container.querySelector('.settings-color-alpha');
+      if (scopedInput) return scopedInput;
+    }
+    return null;
+  }
+
+  function getLinkedColorAlphaValueLabel(colorInput) {
+    if (!colorInput) return null;
+    const container = colorInput.closest('.menu-item');
+    if (container) {
+      const scopedLabel = container.querySelector('.settings-color-alpha-value');
+      if (scopedLabel) return scopedLabel;
+    }
+    return null;
+  }
+
+  function isColorInputNativeAlphaEnabled(colorInput) {
+    return colorInput?.dataset?.nativeAlpha === 'true';
+  }
+
+  function formatAlphaPercent(alpha) {
+    const numeric = clamp01(alpha, 1);
+    return `${Math.round(numeric * 100)}%`;
+  }
+
+  function readColorControlValue(def, colorInput) {
+    if (!colorInput) return currentSettings[def.key];
+    const fallbackColor = def.defaultValue || '#000000';
+    const baseHex = normalizeHexColor(colorInput.value, fallbackColor);
+    if (!def.alphaEnabled) return baseHex;
+    const parsedInput = parseCssColorRgbaChannels(colorInput.value, fallbackColor);
+    const rawInputValue = String(colorInput.value || '');
+    if (isColorInputNativeAlphaEnabled(colorInput)) {
+      const fallbackAlpha = parseCssColorRgbaChannels(currentSettings[def.key], fallbackColor).a;
+      const storedAlpha = parseCssAlphaToken(colorInput.dataset.alphaValue, fallbackAlpha);
+      const alpha = hasExplicitAlphaInColorText(rawInputValue) ? parsedInput.a : storedAlpha;
+      colorInput.dataset.alphaValue = formatCssAlpha(alpha);
+      return `rgba(${parsedInput.r}, ${parsedInput.g}, ${parsedInput.b}, ${formatCssAlpha(alpha)})`;
+    }
+    const alphaInput = getLinkedColorAlphaInput(colorInput);
+    const alphaValue = alphaInput ? alphaInput.value : colorInput.dataset.alphaValue;
+    const alpha = parseCssAlphaToken(alphaValue, parsedInput.a);
+    colorInput.dataset.alphaValue = formatCssAlpha(alpha);
+    const alphaValueLabel = getLinkedColorAlphaValueLabel(colorInput);
+    if (alphaValueLabel) alphaValueLabel.textContent = formatAlphaPercent(alpha);
+    return `rgba(${parsedInput.r}, ${parsedInput.g}, ${parsedInput.b}, ${formatCssAlpha(alpha)})`;
+  }
+
+  function writeColorControlValue(def, colorInput, value) {
+    if (!colorInput) return;
+    const fallbackColor = def.defaultValue || '#000000';
+    if (!def.alphaEnabled) {
+      const normalizedHex = normalizeHexColor(value, fallbackColor);
+      colorInput.value = normalizedHex;
+      const valueSpan = colorInput.closest('.menu-item')?.querySelector('.setting-value');
+      if (valueSpan) valueSpan.textContent = normalizedHex.toUpperCase();
+      return;
+    }
+    const normalizedColor = normalizeRgbaColor(value, fallbackColor);
+    const parsedChannels = parseCssColorRgbaChannels(normalizedColor, fallbackColor);
+    let normalizedAlpha = parsedChannels.a;
+    if (isColorInputNativeAlphaEnabled(colorInput)) {
+      // 原生 RGBA color picker：让浏览器自己维护颜色与 alpha。
+      colorInput.value = normalizedColor;
+      const parsedFromInput = parseCssColorRgbaChannels(colorInput.value, fallbackColor);
+      normalizedAlpha = hasExplicitAlphaInColorText(colorInput.value)
+        ? parsedFromInput.a
+        : parsedChannels.a;
+    } else {
+      // 兼容回退：浏览器只支持 RGB 时，alpha 通过旁路滑条维护。
+      colorInput.value = rgbChannelsToHex(parsedChannels);
+      const alphaInput = getLinkedColorAlphaInput(colorInput);
+      if (alphaInput) alphaInput.value = String(clamp01(parsedChannels.a, 1));
+      const alphaValueLabel = getLinkedColorAlphaValueLabel(colorInput);
+      if (alphaValueLabel) alphaValueLabel.textContent = formatAlphaPercent(parsedChannels.a);
+    }
+    colorInput.dataset.alphaValue = formatCssAlpha(normalizedAlpha);
+    const valueSpan = colorInput.closest('.menu-item')?.querySelector('.setting-value');
+    if (valueSpan) {
+      valueSpan.textContent = `rgba(${parsedChannels.r}, ${parsedChannels.g}, ${parsedChannels.b}, ${formatCssAlpha(normalizedAlpha)})`;
+    }
+  }
+
+  function applyDirectRgbaThemeVariable(settingKey, colorValue) {
+    const root = document.documentElement;
+    if (!root || !root.style) return;
+    const normalized = normalizeRgbaColor(colorValue, DEFAULT_SETTINGS[settingKey] || '#000000');
+    if (settingKey === 'customThemeUserMessageColor') {
+      root.style.setProperty('--cerebr-message-user-bg', normalized);
+      return;
+    }
+    if (settingKey === 'customThemeAiMessageColor') {
+      root.style.setProperty('--cerebr-message-ai-bg', normalized);
+      return;
+    }
+    if (settingKey === 'customThemeInputColor') {
+      root.style.setProperty('--cerebr-input-bg', normalized);
+      root.style.setProperty('--cerebr-panel-inline-bg', normalized);
+    }
+  }
+
   function setSetting(key, value) {
     if (!(key in DEFAULT_SETTINGS)) return;
     const normalizedValue = normalizeSettingValue(key, value);
     currentSettings[key] = normalizedValue;
+    if (currentSettings.enableCustomThemeColors && CUSTOM_THEME_RGBA_SETTING_KEYS.has(key)) {
+      // 在主流程之外增加一次直接变量写入，确保拖动 alpha 时视觉反馈立即可见。
+      applyDirectRgbaThemeVariable(key, normalizedValue);
+    }
     // 应用
     const schema = getSchemaMap();
     if (schema[key]?.apply) {
@@ -840,17 +1004,39 @@ export function createSettingsManager(appContext) {
       const el = def.element?.();
       if (!el) return;
       const registryDef = registryMap.get(key);
+      const ensureCustomThemeColorModeEnabled = () => {
+        if (registryDef?.type !== 'color') return;
+        if (!CUSTOM_THEME_COLOR_SETTING_KEYS.has(key)) return;
+        if (currentSettings.enableCustomThemeColors) return;
+        setSetting('enableCustomThemeColors', true);
+      };
       // 避免重复绑定：先移除已存在的监听（若实现上无此需求，可忽略）
       el.addEventListener('change', (e) => {
+        ensureCustomThemeColorModeEnabled();
         const newValue = def.readFromUI ? def.readFromUI(el) : e.target?.value;
         setSetting(key, newValue);
       });
       if (registryDef?.type === 'color') {
         // 颜色选择器在拖动/取色时持续触发 input，使用实时应用可明显提升调色反馈。
         el.addEventListener('input', (e) => {
+          ensureCustomThemeColorModeEnabled();
           const newValue = def.readFromUI ? def.readFromUI(el) : e.target?.value;
           setSetting(key, newValue);
+          if (def.writeToUI) def.writeToUI(el, newValue);
         });
+        if (registryDef.alphaEnabled) {
+          const alphaInput = getLinkedColorAlphaInput(el);
+          if (alphaInput) {
+            const syncAlphaColor = () => {
+              ensureCustomThemeColorModeEnabled();
+              const newValue = def.readFromUI ? def.readFromUI(el) : readColorControlValue(registryDef, el);
+              setSetting(key, newValue);
+              if (def.writeToUI) def.writeToUI(el, newValue);
+            };
+            alphaInput.addEventListener('input', syncAlphaColor);
+            alphaInput.addEventListener('change', syncAlphaColor);
+          }
+        }
       }
       // 初始 UI 同步
       if (def.writeToUI) def.writeToUI(el, currentSettings[key]);
@@ -1049,23 +1235,42 @@ export function createSettingsManager(appContext) {
         const input = document.createElement('input');
         input.type = 'color';
         input.id = def.id || `setting-${def.key}`;
-        const initialValue = normalizeHexColor(
-          currentSettings[def.key] ?? def.defaultValue,
-          '#000000'
-        );
-        input.value = initialValue;
 
         const valueSpan = document.createElement('span');
         valueSpan.className = 'setting-value';
-        valueSpan.textContent = initialValue.toUpperCase();
-        input.addEventListener('input', () => {
-          valueSpan.textContent = String(input.value || '').toUpperCase();
-        });
-
+        if (def.alphaEnabled) {
+          const useNativeAlphaPicker = supportsNativeColorPickerAlpha();
+          input.dataset.nativeAlpha = useNativeAlphaPicker ? 'true' : 'false';
+          if (useNativeAlphaPicker) {
+            // 支持时优先使用浏览器原生 RGBA 取色面板（单控件完成颜色+透明度）。
+            input.setAttribute('alpha', '');
+            input.setAttribute('colorspace', 'srgb');
+          } else {
+            // 回退到“颜色 + Alpha 滑条”组合，确保旧浏览器也能调透明度。
+            item.classList.add('menu-item--color-rgba');
+            const alphaInput = document.createElement('input');
+            alphaInput.type = 'range';
+            alphaInput.min = '0';
+            alphaInput.max = '1';
+            alphaInput.step = '0.01';
+            alphaInput.className = 'settings-color-alpha';
+            const alphaValue = document.createElement('span');
+            alphaValue.className = 'settings-color-alpha-value';
+            item.appendChild(input);
+            item.appendChild(alphaInput);
+            item.appendChild(alphaValue);
+            item.appendChild(valueSpan);
+            targetSection.appendChild(item);
+            dynamicElements.set(def.key, input);
+            writeColorControlValue(def, input, currentSettings[def.key] ?? def.defaultValue);
+            continue;
+          }
+        }
         item.appendChild(input);
         item.appendChild(valueSpan);
         targetSection.appendChild(item);
         dynamicElements.set(def.key, input);
+        writeColorControlValue(def, input, currentSettings[def.key] ?? def.defaultValue);
       } else if (def.type === 'text' || def.type === 'textarea') {
         if (def.type === 'text' && def.id === 'background-image-url') {
           item.classList.add('background-image-setting');
@@ -1249,7 +1454,10 @@ export function createSettingsManager(appContext) {
 
   function formatDisplayValue(def, value) {
     if (def.type === 'color') {
-      return String(value || '').toUpperCase();
+      if (def.alphaEnabled) {
+        return normalizeRgbaColor(value, def.defaultValue || '#000000');
+      }
+      return normalizeHexColor(value, def.defaultValue || '#000000').toUpperCase();
     }
     if (typeof def.formatValue === 'function') {
       try {
@@ -1423,33 +1631,97 @@ export function createSettingsManager(appContext) {
     return resolveCssVarTokens(resolved, computedStyle, depth + 1);
   }
 
-  function parseCssColorChannels(colorValue, fallbackColor = '#000000') {
-    const fallback = hexToRgbChannels(fallbackColor);
-    if (!colorParseCtx) return fallback;
+  function clampColorChannel(value) {
+    const numeric = Number.parseInt(String(value), 10);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(255, numeric));
+  }
+
+  function formatCssAlpha(value) {
+    const normalized = clamp01(value, 1);
+    return Number.parseFloat(normalized.toFixed(3)).toString();
+  }
+
+  function parseCssAlphaToken(value, fallback = 1) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return clamp01(fallback, 1);
+    if (raw.endsWith('%')) {
+      const percent = Number.parseFloat(raw.slice(0, -1));
+      if (!Number.isFinite(percent)) return clamp01(fallback, 1);
+      return clamp01(percent / 100, fallback);
+    }
+    const numeric = Number.parseFloat(raw);
+    if (!Number.isFinite(numeric)) return clamp01(fallback, 1);
+    return clamp01(numeric, fallback);
+  }
+
+  function parseExplicitRgbFunction(colorValue) {
+    // 优先解析形如 rgb()/rgba() 的直接字面量，避免经过 canvas 后 Alpha 被量化到 8bit 导致数值跳变。
+    const source = String(colorValue || '').trim();
+    const match = source.match(
+      /^rgba?\(\s*([+\-]?\d*\.?\d+)\s*,\s*([+\-]?\d*\.?\d+)\s*,\s*([+\-]?\d*\.?\d+)(?:\s*(?:,|\/)\s*([+\-]?\d*\.?\d+%?))?\s*\)$/i
+    );
+    if (!match) return null;
+    return {
+      r: clampColorChannel(Math.round(Number.parseFloat(match[1]))),
+      g: clampColorChannel(Math.round(Number.parseFloat(match[2]))),
+      b: clampColorChannel(Math.round(Number.parseFloat(match[3]))),
+      a: parseCssAlphaToken(match[4], 1)
+    };
+  }
+
+  function rgbChannelsToHex({ r, g, b }) {
+    const toHex = (channel) => clampColorChannel(channel).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function parseCssColorRgbaChannels(colorValue, fallbackColor = '#000000') {
+    const literalColor = parseExplicitRgbFunction(colorValue);
+    if (literalColor) return literalColor;
+    if (!colorParseCtx) {
+      const fallbackLiteral = parseExplicitRgbFunction(fallbackColor);
+      if (fallbackLiteral) return fallbackLiteral;
+      const fallbackHex = normalizeHexColor(fallbackColor, '#000000');
+      const fallback = hexToRgbChannels(fallbackHex);
+      return { ...fallback, a: 1 };
+    }
     const rootComputedStyle = getComputedStyle(document.documentElement);
-    const safeFallback = normalizeHexColor(fallbackColor, '#000000');
     colorParseCtx.clearRect(0, 0, 1, 1);
-    try {
-      colorParseCtx.fillStyle = safeFallback;
-    } catch (_) {
+    const assignColor = (candidateValue) => {
+      const resolved = resolveCssVarTokens(candidateValue, rootComputedStyle);
+      if (!resolved) return false;
+      try {
+        colorParseCtx.fillStyle = resolved;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
+    if (!assignColor(fallbackColor) && !assignColor('#000000')) {
       colorParseCtx.fillStyle = '#000000';
     }
-    // 主题变量里大量使用 var(--xxx) 嵌套写法，canvas 不能直接解析 var()。
-    // 这里先把变量解析成最终颜色字符串，再交给 canvas 提取 rgb 通道。
-    const candidate = resolveCssVarTokens(colorValue, rootComputedStyle);
-    if (candidate) {
-      try {
-        colorParseCtx.fillStyle = candidate;
-      } catch (_) {
-        // 忽略非法颜色值，回退到 fallback。
-      }
-    }
+    assignColor(colorValue);
     colorParseCtx.fillRect(0, 0, 1, 1);
     const data = colorParseCtx.getImageData(0, 0, 1, 1).data;
     return {
       r: data[0],
       g: data[1],
-      b: data[2]
+      b: data[2],
+      a: clamp01(data[3] / 255, 1)
+    };
+  }
+
+  function normalizeRgbaColor(value, fallback = '#000000') {
+    const { r, g, b, a } = parseCssColorRgbaChannels(value, fallback);
+    return `rgba(${r}, ${g}, ${b}, ${formatCssAlpha(a)})`;
+  }
+
+  function parseCssColorChannels(colorValue, fallbackColor = '#000000') {
+    const data = parseCssColorRgbaChannels(colorValue, fallbackColor);
+    return {
+      r: data.r,
+      g: data.g,
+      b: data.b
     };
   }
 
@@ -1458,10 +1730,12 @@ export function createSettingsManager(appContext) {
     return `rgba(${r}, ${g}, ${b}, ${alphaToken})`;
   }
 
-  function composeRgbaFromCssColor(colorValue, alphaValue, fallbackColor = '#000000') {
-    const { r, g, b } = parseCssColorChannels(colorValue, fallbackColor);
-    const alpha = clamp01(alphaValue, 1);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  function composeRgbaFromCssColor(colorValue, alphaValue, fallbackColor = '#000000', options = {}) {
+    const { r, g, b, a: sourceAlpha } = parseCssColorRgbaChannels(colorValue, fallbackColor);
+    const alpha = options.preserveSourceAlpha
+      ? clamp01(sourceAlpha, 1)
+      : clamp01(alphaValue, 1);
+    return `rgba(${r}, ${g}, ${b}, ${formatCssAlpha(alpha)})`;
   }
 
   function computeRelativeLuminanceFromRgbChannels(r, g, b) {
@@ -1493,8 +1767,8 @@ export function createSettingsManager(appContext) {
       elementOpacity,
       DEFAULT_SETTINGS.elementOpacity
     );
-    // 当前阶段先保持消息/输入与元素透明度一致；
-    // 后续接入 RGBA Picker 时可独立替换这些值而不影响其他模块。
+    // 默认情况下，消息与输入框的透明度跟随 elementOpacity。
+    // 若启用自定义 RGBA 颜色，会在 applyThemeOpacityOverrides 中改为保留颜色自身 Alpha。
     const messageUserOpacity = uiOpacity;
     const messageAiOpacity = uiOpacity;
     const inputOpacity = uiOpacity;
@@ -1559,6 +1833,7 @@ export function createSettingsManager(appContext) {
     const userColor = computed.getPropertyValue('--cerebr-message-user-bg').trim() || '#3e4451';
     const aiColor = computed.getPropertyValue('--cerebr-message-ai-bg').trim() || '#2c313c';
     const inputColor = computed.getPropertyValue('--cerebr-input-bg').trim() || '#21252b';
+    const customThemeEnabled = !!currentSettings.enableCustomThemeColors;
 
     // 背景底色改为“始终不透明”，避免 iframe 后网页参与合成导致的清晰透出问题。
     // 该滑条语义调整为“底色强度”：控制主题底色的显著程度，不再控制 alpha 透出。
@@ -1566,10 +1841,20 @@ export function createSettingsManager(appContext) {
     root.style.setProperty('--cerebr-chat-background-color', opaqueBaseColor);
     root.style.setProperty('--cerebr-chat-background-solid-color', opaqueBaseColor);
     // 元素透明度单独控制 UI 组件层，包括消息气泡、输入框、面板等。
+    // 当启用自定义配色时，消息/输入框会优先使用 RGBA 自身 Alpha，不再二次叠乘 elementOpacity。
+    const preserveMessageAndInputAlpha = customThemeEnabled;
     root.style.setProperty('--cerebr-bg-color', composeRgbaFromCssColor(bgColor, opacityProfile.uiOpacity, '#262b33'));
-    root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, opacityProfile.messageUserOpacity, '#3e4451'));
-    root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, opacityProfile.messageAiOpacity, '#2c313c'));
-    root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, opacityProfile.inputOpacity, '#21252b'));
+    if (customThemeEnabled) {
+      // 自定义配色开启时，消息/输入颜色直接使用设置里的 RGBA 值，
+      // 避免经过“计算样式 -> 再解析”链路时出现 Alpha 被覆盖的问题。
+      root.style.setProperty('--cerebr-message-user-bg', normalizeRgbaColor(currentSettings.customThemeUserMessageColor, DEFAULT_SETTINGS.customThemeUserMessageColor));
+      root.style.setProperty('--cerebr-message-ai-bg', normalizeRgbaColor(currentSettings.customThemeAiMessageColor, DEFAULT_SETTINGS.customThemeAiMessageColor));
+      root.style.setProperty('--cerebr-input-bg', normalizeRgbaColor(currentSettings.customThemeInputColor, DEFAULT_SETTINGS.customThemeInputColor));
+    } else {
+      root.style.setProperty('--cerebr-message-user-bg', composeRgbaFromCssColor(userColor, opacityProfile.messageUserOpacity, '#3e4451', { preserveSourceAlpha: preserveMessageAndInputAlpha }));
+      root.style.setProperty('--cerebr-message-ai-bg', composeRgbaFromCssColor(aiColor, opacityProfile.messageAiOpacity, '#2c313c', { preserveSourceAlpha: preserveMessageAndInputAlpha }));
+      root.style.setProperty('--cerebr-input-bg', composeRgbaFromCssColor(inputColor, opacityProfile.inputOpacity, '#21252b', { preserveSourceAlpha: preserveMessageAndInputAlpha }));
+    }
     // 玻璃态面板使用单独的“稳定底色”变量，避免 backdrop-filter 在明暗背景图上出现
     // “亮区过实 / 暗区过透”的视觉漂移。
     // 这里不再用“固定最小值”硬钳制，而是按 elementOpacity 做线性抬升：
@@ -1577,7 +1862,10 @@ export function createSettingsManager(appContext) {
     // - elementOpacity 越高，面板透明度越接近用户原始设置，保证“跟手”。
     root.style.setProperty('--cerebr-panel-surface-bg', composeRgbaFromCssColor(bgColor, opacityProfile.panelSurfaceOpacity, '#262b33'));
     root.style.setProperty('--cerebr-panel-surface-bg-strong', composeRgbaFromCssColor(bgColor, opacityProfile.panelSurfaceStrongOpacity, '#262b33'));
-    root.style.setProperty('--cerebr-panel-inline-bg', composeRgbaFromCssColor(inputColor, opacityProfile.panelInlineOpacity, '#21252b'));
+    const panelInlineColor = customThemeEnabled
+      ? normalizeRgbaColor(currentSettings.customThemeInputColor, DEFAULT_SETTINGS.customThemeInputColor)
+      : composeRgbaFromCssColor(inputColor, opacityProfile.panelInlineOpacity, '#21252b');
+    root.style.setProperty('--cerebr-panel-inline-bg', panelInlineColor);
   }
 
   function applyCustomThemeColorOverrides() {
@@ -1596,9 +1884,9 @@ export function createSettingsManager(appContext) {
 
     const bgColor = normalizeHexColor(currentSettings.customThemeBgColor, DEFAULT_SETTINGS.customThemeBgColor);
     const textColor = normalizeHexColor(currentSettings.customThemeTextColor, DEFAULT_SETTINGS.customThemeTextColor);
-    const userMessageColor = normalizeHexColor(currentSettings.customThemeUserMessageColor, DEFAULT_SETTINGS.customThemeUserMessageColor);
-    const aiMessageColor = normalizeHexColor(currentSettings.customThemeAiMessageColor, DEFAULT_SETTINGS.customThemeAiMessageColor);
-    const inputColor = normalizeHexColor(currentSettings.customThemeInputColor, DEFAULT_SETTINGS.customThemeInputColor);
+    const userMessageColor = normalizeRgbaColor(currentSettings.customThemeUserMessageColor, DEFAULT_SETTINGS.customThemeUserMessageColor);
+    const aiMessageColor = normalizeRgbaColor(currentSettings.customThemeAiMessageColor, DEFAULT_SETTINGS.customThemeAiMessageColor);
+    const inputColor = normalizeRgbaColor(currentSettings.customThemeInputColor, DEFAULT_SETTINGS.customThemeInputColor);
     const borderColor = normalizeHexColor(currentSettings.customThemeBorderColor, DEFAULT_SETTINGS.customThemeBorderColor);
     const iconColor = normalizeHexColor(currentSettings.customThemeIconColor, DEFAULT_SETTINGS.customThemeIconColor);
     const highlightColor = normalizeHexColor(currentSettings.customThemeHighlightColor, DEFAULT_SETTINGS.customThemeHighlightColor);
@@ -1612,9 +1900,9 @@ export function createSettingsManager(appContext) {
     root.classList.add('custom-theme-colors-enabled');
     root.style.setProperty('--cerebr-bg-color', toOpacityColor(bgColor));
     root.style.setProperty('--cerebr-text-color', textColor);
-    root.style.setProperty('--cerebr-message-user-bg', toOpacityColor(userMessageColor));
-    root.style.setProperty('--cerebr-message-ai-bg', toOpacityColor(aiMessageColor));
-    root.style.setProperty('--cerebr-input-bg', toOpacityColor(inputColor));
+    root.style.setProperty('--cerebr-message-user-bg', userMessageColor);
+    root.style.setProperty('--cerebr-message-ai-bg', aiMessageColor);
+    root.style.setProperty('--cerebr-input-bg', inputColor);
     root.style.setProperty('--cerebr-icon-color', iconColor);
     root.style.setProperty('--cerebr-border-color', borderColor);
     root.style.setProperty('--cerebr-hover-color', `rgba(${textR}, ${textG}, ${textB}, ${hoverAlpha})`);

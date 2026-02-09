@@ -3825,9 +3825,21 @@ input:checked + .slider::before {
     border-radius: 6px;
 }
 
+.menu-item--color .settings-color-alpha {
+    width: 88px;
+    margin: 0;
+}
+
+.menu-item--color .settings-color-alpha-value {
+    min-width: 42px;
+    text-align: right;
+    font-size: 12px;
+    opacity: 0.82;
+    font-variant-numeric: tabular-nums;
+}
+
 .menu-item--color .setting-value {
     min-width: 68px;
-    text-transform: uppercase;
     letter-spacing: 0.2px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
@@ -5439,7 +5451,21 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     grid-template-columns: minmax(160px, 1fr) auto auto;
 }
 
+#chat-history-panel .settings-tab-content .menu-item--color.menu-item--color-rgba {
+    grid-template-columns: minmax(160px, 1fr) auto minmax(130px, 1.2fr) auto auto;
+}
+
 #chat-history-panel .settings-tab-content .menu-item--color input[type="color"] {
+    justify-self: end;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--color .settings-color-alpha {
+    width: 100%;
+    max-width: 100%;
+    min-width: 120px;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--color .settings-color-alpha-value {
     justify-self: end;
 }
 
