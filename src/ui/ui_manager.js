@@ -381,8 +381,42 @@ export function createUIManager(appContext) {
       return value;
     };
 
+    const resolveAltWheelNestedScrollable = (eventTarget) => {
+      if (!eventTarget || typeof eventTarget.closest !== 'function') return null;
+      // 仅在划词气泡内启用该分流，避免影响主聊天区常规 Alt+滚轮行为。
+      const bubbleHost = eventTarget.closest('.selection-thread-bubble');
+      if (!bubbleHost) return null;
+      let current = eventTarget instanceof Element ? eventTarget : eventTarget?.parentElement;
+      while (current && current !== container) {
+        const style = window.getComputedStyle(current);
+        const overflowY = (style.overflowY || '').toLowerCase();
+        const allowsScroll = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+        const canScroll = (current.scrollHeight - current.clientHeight) > 1;
+        if (allowsScroll && canScroll) {
+          return current;
+        }
+        current = current.parentElement;
+      }
+      return null;
+    };
+
     // 按住 Alt 时使用加速滚动，提高浏览长对话的效率
     container.addEventListener('wheel', (e) => {
+      const nestedScrollable = e.altKey ? resolveAltWheelNestedScrollable(e.target) : null;
+      if (nestedScrollable) {
+        // 在气泡预览内按 Alt+滚轮时，优先滚动气泡内部，不让主聊天容器抢滚动。
+        e.preventDefault();
+        const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
+        const maxTop = Math.max(0, (nestedScrollable.scrollHeight || 0) - (nestedScrollable.clientHeight || 0));
+        const baseTop = Math.max(0, Number(nestedScrollable.scrollTop) || 0);
+        nestedScrollable.scrollTop = clampNumber(baseTop + acceleratedDeltaY, 0, maxTop);
+        if (altScrollAnimRaf) {
+          stopAltScrollAnimation();
+        }
+        messageSender.setShouldAutoScroll(false);
+        return;
+      }
+
       let effectiveDeltaY = e.deltaY;
       let projectedScrollTop = Math.max(0, container.scrollTop || 0);
 
