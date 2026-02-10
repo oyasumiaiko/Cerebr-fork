@@ -452,8 +452,40 @@
       return result;
     }
 
+    function shouldIgnoreElementForMinimapHeight(el) {
+      if (!el?.classList) return false;
+      if (el.classList.contains('selection-thread-bubble')) return true;
+      if (el.classList.contains('chat-scroll-minimap')) return true;
+      return false;
+    }
+
+    function resolveScrollableContentHeight(container) {
+      if (!container) return 0;
+      const children = container.children;
+      const total = children ? children.length : 0;
+      if (!total) {
+        return Math.max(0, Number(container.clientHeight) || 0);
+      }
+
+      let maxBottom = 0;
+      for (let i = 0; i < total; i += 1) {
+        const el = children[i];
+        if (!el || shouldIgnoreElementForMinimapHeight(el)) continue;
+        const top = Math.max(0, Number(el.offsetTop) || 0);
+        const height = Math.max(0, Number(el.offsetHeight) || 0);
+        if (height <= 0) continue;
+        const bottom = top + height;
+        if (bottom > maxBottom) maxBottom = bottom;
+      }
+
+      const style = window.getComputedStyle(container);
+      const paddingBottom = Math.max(0, parseFloat(style.paddingBottom) || 0);
+      const contentHeight = Math.max(0, maxBottom + paddingBottom);
+      const clientHeight = Math.max(0, Number(container.clientHeight) || 0);
+      return Math.max(clientHeight, contentHeight);
+    }
+
     function buildMinimapRenderContext(messages, scrollHeight, clientHeight, messageDisplayMode) {
-      const safeScrollHeight = Math.max(1, Number(scrollHeight) || 0);
       const safeClientHeight = Math.max(0, Number(clientHeight) || 0);
       const mode = messageDisplayMode === MINIMAP_MESSAGE_MODE_FIXED
         ? MINIMAP_MESSAGE_MODE_FIXED
@@ -475,6 +507,12 @@
       const lastMessageBottom = messageLayout.length > 0
         ? (messageLayout[messageLayout.length - 1]?.bottom || 0)
         : 0;
+      const safeScrollHeight = Math.max(
+        1,
+        Number(scrollHeight) || 0,
+        safeClientHeight,
+        Math.max(0, lastMessageBottom)
+      );
       const leadingGap = Math.max(0, Math.min(safeScrollHeight, firstMessageTop));
       const trailingGap = Math.max(0, safeScrollHeight - Math.max(0, lastMessageBottom));
       const hasLeadingGapSegment = leadingGap > 0.5;
@@ -1276,7 +1314,7 @@
       const { trackHeight } = syncMinimapGeometry(state, minimapWidth, minimapSide);
       const messages = collectDirectMessageElements(container);
       const messageCount = messages.length;
-      const scrollHeight = Math.max(0, container.scrollHeight || 0);
+      const scrollHeight = resolveScrollableContentHeight(container);
       const clientHeight = Math.max(0, container.clientHeight || 0);
       const renderContext = buildMinimapRenderContext(messages, scrollHeight, clientHeight, messageDisplayMode);
       state.renderContext = renderContext;
