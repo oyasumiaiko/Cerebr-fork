@@ -103,6 +103,15 @@ input, textarea, select {
     --cerebr-control-padding: 4px 8px;
     --cerebr-control-inset-shadow: inset 0 1px 2px rgba(15, 15, 15, 0.08);
     --cerebr-control-focus-ring: 0 0 0 3px color-mix(in srgb, var(--cerebr-highlight) 25%, transparent);
+    /* UI 语义色：用于控件与状态，不再复用“用户消息气泡色”。 */
+    --cerebr-ui-hover-bg: var(--cerebr-control-bg-hover);
+    --cerebr-ui-hover-bg-strong: var(--cerebr-control-bg-active);
+    --cerebr-ui-soft-surface: color-mix(in srgb, var(--cerebr-control-bg) 86%, transparent);
+    --cerebr-slider-track-bg: color-mix(in srgb, var(--cerebr-control-bg-active) 72%, var(--cerebr-border-color));
+    --cerebr-slider-thumb-bg: var(--cerebr-icon-color);
+    --cerebr-status-success: var(--cerebr-green);
+    --cerebr-status-warning: var(--cerebr-orange);
+    --cerebr-status-error: var(--cerebr-red);
 
     --cerebr-button-bg: color-mix(in srgb, var(--cerebr-highlight) 85%, rgba(255, 255, 255, 0.08));
     --cerebr-button-hover-bg: color-mix(in srgb, var(--cerebr-highlight) 90%, rgba(0, 0, 0, 0.08));
@@ -1129,10 +1138,10 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 #input-api-switcher.lock-invalid .input-api-current {
-    border-color: color-mix(in srgb, #ff6b6b 60%, transparent);
+    border-color: color-mix(in srgb, var(--cerebr-status-error) 60%, transparent);
     box-shadow:
       0 6px 14px rgba(0, 0, 0, 0.12),
-      inset 0 0 0 1px color-mix(in srgb, #ff6b6b 30%, transparent);
+      inset 0 0 0 1px color-mix(in srgb, var(--cerebr-status-error) 30%, transparent);
 }
 
 .input-api-lock-icon {
@@ -1207,7 +1216,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .input-api-option:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .input-api-option.current {
@@ -1296,12 +1305,12 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .slash-command-hint-item:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
     border-color: color-mix(in srgb, var(--cerebr-border-color) 40%, transparent);
 }
 
 .slash-command-hint-item.is-active {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg-strong);
     border-color: color-mix(in srgb, var(--cerebr-highlight) 55%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 45%, transparent);
 }
@@ -1491,7 +1500,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .menu-item:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .menu-item--stack {
@@ -1546,7 +1555,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .background-image-button:hover {
-    background-color: color-mix(in srgb, var(--cerebr-message-user-bg) 70%, transparent);
+    background-color: var(--cerebr-ui-hover-bg);
     border-color: color-mix(in srgb, var(--cerebr-highlight) 45%, transparent);
 }
 
@@ -1649,7 +1658,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .settings-input-clear:hover {
-    background-color: color-mix(in srgb, var(--cerebr-message-user-bg) 70%, transparent);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 /* 收藏的API列表样式 */
@@ -1679,7 +1688,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .favorite-api-item:hover {
-    background-color: var(--cerebr-message-user-bg); /* 与 .menu-item:hover 一致 */
+    background-color: var(--cerebr-ui-hover-bg); /* 与 .menu-item:hover 一致 */
 }
 
 .favorite-api-item.current {
@@ -1701,12 +1710,12 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .favorite-btn.active i {
-    color: #ffb400;
+    color: var(--cerebr-yellow);
     transform: scale(1.1);
 }
 
 .favorite-btn.active:hover i {
-    color: #ffa000;
+    color: var(--cerebr-orange);
 }
 
 /* 开关样式 */
@@ -1938,7 +1947,7 @@ input:checked + .slider::before {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  background: color-mix(in srgb, var(--cerebr-message-user-bg) 60%, transparent);
+  background: var(--cerebr-ui-soft-surface);
   border-radius: 8px;
 }
 
@@ -1957,7 +1966,7 @@ input:checked + .slider::before {
 .db-stats-chart-container { grid-column: 1 / -1; }
 .db-stats-chart { display: flex; align-items: center; gap: 12px; }
 .circular-chart { width: 120px; height: 120px; }
-.circle-bg { fill: none; stroke: #eee; stroke-width: 3.8; opacity: .2; }
+.circle-bg { fill: none; stroke: color-mix(in srgb, var(--cerebr-border-color) 65%, transparent); stroke-width: 3.8; opacity: .55; }
 .circle { fill: none; stroke-width: 2.8; stroke-linecap: round; }
 .text-data { stroke: var(--cerebr-teal); }
 .image-data { stroke: var(--cerebr-purple); }
@@ -1969,7 +1978,7 @@ input:checked + .slider::before {
 .image-color { background: var(--cerebr-purple); }
 
 .domains-card .domain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.domains-card .domain-list li { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 8px; background: color-mix(in srgb, var(--cerebr-message-user-bg) 50%, transparent); border-radius: 6px; }
+.domains-card .domain-list li { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 8px; background: var(--cerebr-ui-soft-surface); border-radius: 6px; }
 .domains-card .domain { opacity: .9; }
 .domains-card .count { opacity: .7; }
 
@@ -2095,7 +2104,7 @@ input:checked + .slider::before {
 
 .card-button:hover {
     opacity: 1;
-    background-color: rgba(0, 0, 0, 0.1);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .card-button.active {
@@ -2113,7 +2122,7 @@ input:checked + .slider::before {
 
 .api-card:hover .select-btn:hover {
     opacity: 1;
-    background-color: rgba(0, 0, 0, 0.1);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .card-button svg {
@@ -2988,7 +2997,7 @@ input:checked + .slider::before {
 }
 
 .form-group input:focus {
-    outline: 1px solid #64ffda;
+    outline: 1px solid color-mix(in srgb, var(--cerebr-highlight) 65%, transparent);
 }
 
 /* Markdown 样式 */
@@ -3108,7 +3117,7 @@ input:checked + .slider::before {
 }
 
 .context-menu-item:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .context-menu-item svg {
@@ -3239,7 +3248,7 @@ input:checked + .slider::before {
 }
 
 .context-menu-submenu-item:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 .context-menu-submenu-item.is-disabled {
@@ -3538,7 +3547,7 @@ input:checked + .slider::before {
 
 /* 链接样式 */
 .message a {
-    color: #0366d6;
+    color: var(--cerebr-highlight);
     text-decoration: none;
 }
 
@@ -3682,35 +3691,21 @@ input:checked + .slider::before {
 }
 
 /* 深色模式适配 */
-@media (prefers-color-scheme: dark) {
-    .slider {
-        background-color: rgba(255, 255, 255, 0.15);
-    }
+:root.dark-theme .slider {
+    background-color: var(--cerebr-slider-track-bg);
+}
 
-    input:checked + .slider {
-        background-color: var(--cerebr-icon-color);
-    }
+:root.dark-theme .message blockquote {
+    border-left-color: rgba(255, 255, 255, 0.2);
+    color: var(--cerebr-text-color);
+}
 
-    .card-button:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-    }
+:root.dark-theme .message code:not(pre code) {
+    background: rgba(255, 255, 255, 0.1);
+}
 
-    .message blockquote {
-        border-left-color: rgba(255, 255, 255, 0.2);
-        color: var(--cerebr-text-color);
-    }
-
-    .message code:not(pre code) {
-        background: rgba(255, 255, 255, 0.1);
-    }
-
-    .message a {
-        color: #58a6ff;
-    }
-
-    .message {
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-    }
+:root.dark-theme .message {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 /* 动画 */
@@ -3745,7 +3740,7 @@ input:checked + .slider::before {
 }
 
 .loading-content #webpage-switch:checked + .slider {
-    background-color: rgba(128, 128, 128, 0.3);
+    background-color: color-mix(in srgb, var(--cerebr-text-color) 22%, transparent);
 }
 
 .loading-content #webpage-switch:checked + .slider:before {
@@ -3794,13 +3789,6 @@ input:checked + .slider::before {
     cursor: wait;
 }
 
-/* 深色模式适配加载动画 */
-@media (prefers-color-scheme: dark) {
-    .loading-content #webpage-switch:checked + .slider:after {
-        border-top-color: var(--cerebr-text-color);
-    }
-}
-
 /* 批量加载时的消息样式 */
 .message.batch-load {
     animation: none;
@@ -3818,10 +3806,12 @@ input:checked + .slider::before {
 .menu-item input[type="range"] {
     width: 100px;
     height: 4px;
-    background: var(--cerebr-message-user-bg);
+    background: var(--cerebr-slider-track-bg);
     border-radius: 2px;
     outline: none;
     -webkit-appearance: none;
+    appearance: none;
+    accent-color: var(--cerebr-highlight);
     margin: 0 8px;
 }
 
@@ -3830,7 +3820,7 @@ input:checked + .slider::before {
     appearance: none;
     width: 12px;
     height: 12px;
-    background: var(--cerebr-icon-color);
+    background: var(--cerebr-slider-thumb-bg);
     border-radius: 50%;
     cursor: pointer;
     transition: transform 0.2s;
@@ -3838,6 +3828,22 @@ input:checked + .slider::before {
 
 .menu-item input[type="range"]::-webkit-slider-thumb:hover {
     transform: scale(1.2);
+}
+
+.menu-item input[type="range"]::-moz-range-track {
+    height: 4px;
+    border: none;
+    border-radius: 2px;
+    background: var(--cerebr-slider-track-bg);
+}
+
+.menu-item input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--cerebr-slider-thumb-bg);
+    cursor: pointer;
 }
 
 .menu-item--color {
@@ -3949,7 +3955,7 @@ input[type="range"].temperature {
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
-    background: color-mix(in srgb, var(--cerebr-icon-color) 25%, transparent);
+    background: var(--cerebr-slider-track-bg);
     border-radius: 2px;
     outline: none;
     padding: 0;
@@ -3962,7 +3968,7 @@ input[type="range"].temperature::-webkit-slider-thumb {
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--cerebr-icon-color);
+    background: var(--cerebr-slider-thumb-bg);
     box-shadow: 0 0 0 2px var(--cerebr-bg-color);
     cursor: pointer;
     transition: all .2s ease-in-out;
@@ -4032,7 +4038,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .loading-message.error-message,
 .message.error-message {
-    color: #ff3b30;
+    color: var(--cerebr-status-error);
     opacity: 0.95;
 }
 
@@ -4042,14 +4048,6 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .message.error-message::after {
     display: none;
-}
-
-/* 深色模式下的错误消息颜色 */
-@media (prefers-color-scheme: dark) {
-    .loading-message.error-message,
-    .message.error-message {
-        color: #ff453a;
-    }
 }
 
 /* 收起按钮样式 */
@@ -4096,8 +4094,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 #stop-update:hover {
-    background-color: var(--cerebr-message-user-bg);
-    color: #ff4d4d;
+    background-color: var(--cerebr-ui-hover-bg);
+    color: var(--cerebr-status-error);
 }
 
 /* 表格样式 */
@@ -4246,7 +4244,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .prompt-group:focus-within {
-    border-color: rgba(0, 122, 255, 0.5);
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 55%, transparent);
     background: color-mix(in srgb, var(--cerebr-message-ai-bg) 88%, transparent);
 }
 
@@ -4298,8 +4296,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .prompt-group > textarea:not(.prompt-storage):focus {
     outline: none;
-    border-color: rgba(0, 122, 255, 0.5);
-    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
+    border-color: var(--cerebr-highlight);
+    box-shadow: var(--cerebr-control-focus-ring);
 }
 
 .prompt-actions {
@@ -4340,7 +4338,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 #save-prompts:hover {
-    background: var(--cerebr-message-user-bg);
+    background: var(--cerebr-ui-hover-bg);
     box-shadow: none;
 }
 
@@ -4414,15 +4412,15 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     flex: 1;
     appearance: none;
     padding: 6px 10px;
-    background: var(--cerebr-message-user-bg);
+    background: var(--cerebr-control-bg);
     color: var(--cerebr-text-color);
     border: 1px solid var(--cerebr-border-color);
     border-radius: 6px;
     outline: none;
 }
 .model-select-container .model-select:focus {
-    border-color: rgba(0, 122, 255, 0.5);
-    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
+    border-color: var(--cerebr-highlight);
+    box-shadow: var(--cerebr-control-focus-ring);
 }
 
 /* 提示词设置内的模型选择器收拢到标题行，避免占用额外纵向空间 */
@@ -4460,7 +4458,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     padding: 8px;
     border: 1px dashed var(--cerebr-border-color);
     border-radius: 8px;
-    background: color-mix(in srgb, var(--cerebr-message-user-bg) 80%, transparent);
+    background: var(--cerebr-ui-soft-surface);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -4521,8 +4519,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     align-items: center;
     justify-content: center;
     min-height: 0;
-    border: 1px solid var(--cerebr-border-color);
-    background: var(--cerebr-message-user-bg);
+    border: 1px solid var(--cerebr-control-border);
+    background: var(--cerebr-control-bg);
     color: var(--cerebr-text-color);
     border-radius: 6px;
     cursor: pointer;
@@ -4530,18 +4528,18 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .url-rule-action-btn:hover {
-    border-color: color-mix(in srgb, var(--cerebr-text-color) 25%, var(--cerebr-border-color));
-    background: color-mix(in srgb, var(--cerebr-message-user-bg) 92%, var(--cerebr-text-color));
+    border-color: var(--cerebr-control-border-hover);
+    background: var(--cerebr-control-bg-hover);
 }
 
 .url-rule-action-btn.confirm-rule {
     border-color: color-mix(in srgb, var(--cerebr-highlight) 40%, transparent);
-    background: color-mix(in srgb, var(--cerebr-highlight) 18%, var(--cerebr-message-user-bg));
+    background: color-mix(in srgb, var(--cerebr-highlight) 18%, var(--cerebr-control-bg));
     color: var(--cerebr-highlight);
 }
 
 .url-rule-action-btn.confirm-rule:hover {
-    background: color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-message-user-bg));
+    background: color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-control-bg-hover));
 }
 
 .url-rule-action-btn.delete-rule {
@@ -4564,8 +4562,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 .url-rule-pattern-input:focus,
 .url-rule-type-select:focus,
 .url-rule-prompt:focus {
-    border-color: rgba(0, 122, 255, 0.5);
-    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.18);
+    border-color: var(--cerebr-highlight);
+    box-shadow: var(--cerebr-control-focus-ring);
 }
 
 /* 发送按钮样式 */
@@ -5026,8 +5024,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .chat-history-item .info .info-api-lock--invalid {
-    color: color-mix(in srgb, var(--cerebr-text-color) 70%, #ff6b6b);
-    background: color-mix(in srgb, #ff6b6b 18%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, var(--cerebr-status-error));
+    background: color-mix(in srgb, var(--cerebr-status-error) 18%, transparent);
 }
 
 /* URL 快速筛选：匹配等级徽标 */
@@ -5105,7 +5103,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 #chat-history-panel .panel-header button:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 /* 固定聊天记录面板中的标题栏和搜索框 */
@@ -5194,7 +5192,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 /* 鼠标悬停时改变背景 */
 .chat-history-context-menu-option:hover {
-    background-color: var(--cerebr-message-user-bg);
+    background-color: var(--cerebr-ui-hover-bg);
 }
 
 /* Added: Glow effect when auto scrolling is enabled */
@@ -5702,7 +5700,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .db-stats-entry-status.is-error {
-    color: #ff4d4f;
+    color: var(--cerebr-status-error);
 }
 
 .stats-trend-section {
@@ -5851,7 +5849,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     justify-content: space-between;
     font-size: 12px;
     padding: 6px 8px;
-    background: color-mix(in srgb, var(--cerebr-message-user-bg) 50%, transparent);
+    background: var(--cerebr-ui-soft-surface);
     border-radius: 6px;
 }
 
@@ -5901,7 +5899,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .circle.image-data {
-    stroke: #ff9500;
+    stroke: var(--cerebr-orange);
 }
 
 .percentage {
@@ -5936,7 +5934,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .legend-color.image-color {
-    background-color: #ff9500;
+    background-color: var(--cerebr-orange);
 }
 
 /* 统计面板页脚 */
@@ -5948,31 +5946,6 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     margin-top: 16px;
     font-size: 12px;
     opacity: 0.7;
-}
-
-/* 深色模式适配 */
-:root.dark-theme .db-stats-card {
-    background-color: var(--cerebr-message-ai-bg);
-}
-
-:root.dark-theme .db-stats-metric-value.highlight {
-    color: rgb(50, 145, 255);
-}
-
-:root.dark-theme .circle.text-data {
-    stroke: rgb(50, 145, 255);
-}
-
-:root.dark-theme .circle.image-data {
-    stroke: #ff9f0a;
-}
-
-:root.dark-theme .legend-color.text-color {
-    background-color: rgb(50, 145, 255);
-}
-
-:root.dark-theme .legend-color.image-color {
-    background-color: #ff9f0a;
 }
 
 #theme-selector{
@@ -6355,10 +6328,10 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
   box-shadow: 0 12px 36px rgba(3, 7, 18, 0.48);
 }
 
-.notification--info    { border-left-color: #2ecc71; }  /* 信息：绿 */
-.notification--success { border-left-color: #2ecc71; }  /* 成功：同信息用绿 */
-.notification--warning { border-left-color: #f5a623; }  /* 警告：黄 */
-.notification--error   { border-left-color: #ff4d4f; }  /* 错误：红 */
+.notification--info    { border-left-color: var(--cerebr-status-success); } /* 信息：绿 */
+.notification--success { border-left-color: var(--cerebr-status-success); } /* 成功：同信息用绿 */
+.notification--warning { border-left-color: var(--cerebr-status-warning); } /* 警告：黄 */
+.notification--error   { border-left-color: var(--cerebr-status-error); }   /* 错误：红 */
 
 .notification__content {
   font-size: 13px;
@@ -6418,9 +6391,9 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 /* 进度条颜色与类型保持一致（绿/黄/红） */
 .notification--info .notification__progress-bar,
-.notification--success .notification__progress-bar { background: #2ecc71; }
-.notification--warning .notification__progress-bar { background: #f5a623; }
-.notification--error .notification__progress-bar   { background: #ff4d4f; }
+.notification--success .notification__progress-bar { background: var(--cerebr-status-success); }
+.notification--warning .notification__progress-bar { background: var(--cerebr-status-warning); }
+.notification--error .notification__progress-bar   { background: var(--cerebr-status-error); }
 
 .notification__progress-bar--indeterminate {
   width: 60%;
@@ -6661,17 +6634,11 @@ body.chat-empty .empty-state-content {
 .message .thoughts-content {
     margin: 8px 0;
     border-radius: 8px;
-    background-color: rgba(128, 128, 128, 0.05); /* Light gray, semi-transparent */
-    border: 1px solid rgba(128, 128, 128, 0.1); /* Very faint border */
+    background-color: color-mix(in srgb, var(--cerebr-message-ai-bg) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
     font-size: 0.85em; /* Slightly smaller than main message text */
     line-height: 1.5;
-    color: rgba(0, 0, 0, 0.6); /* Softer text color for light theme */
-}
-
-.dark-theme .message .thoughts-content {
-    background-color: rgba(255, 255, 255, 0.04); /* Adjusted for dark theme */
-    border-color: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.55); /* Softer text color for dark theme */
+    color: color-mix(in srgb, var(--cerebr-text-color) 62%, transparent);
 }
 
 .message .thoughts-content .thoughts-toggle {
@@ -6692,11 +6659,7 @@ body.chat-empty .empty-state-content {
 }
 
 .message .thoughts-content .thoughts-toggle:hover {
-    background: rgba(128, 128, 128, 0.06);
-}
-
-.dark-theme .message .thoughts-content .thoughts-toggle:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--cerebr-ui-hover-bg);
 }
 
 .message .thoughts-content .thoughts-inner-content {

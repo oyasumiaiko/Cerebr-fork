@@ -299,7 +299,7 @@ class PromptSettings {
             
             // 添加动画效果
             textarea.style.transition = 'background-color 0.3s ease';
-            textarea.style.backgroundColor = 'rgba(52, 199, 89, 0.1)'; // 浅绿色
+            textarea.style.backgroundColor = 'color-mix(in srgb, var(--cerebr-status-success, var(--cerebr-green, #34c759)) 18%, transparent)';
             setTimeout(() => {
                 textarea.style.backgroundColor = '';
             }, 500);

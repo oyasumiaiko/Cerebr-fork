@@ -1122,7 +1122,12 @@ export function createChatHistoryUI(appContext) {
   animation: skeletonPulse 1.2s ease-in-out infinite;
 }
 .skeleton-title, .skeleton-sub, .skeleton-group-label {
-  background: linear-gradient(90deg, rgba(180,180,180,0.08) 25%, rgba(255,255,255,0.18) 37%, rgba(180,180,180,0.08) 63%);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--cerebr-control-bg) 72%, transparent) 25%,
+    color-mix(in srgb, var(--cerebr-control-bg-hover) 88%, transparent) 37%,
+    color-mix(in srgb, var(--cerebr-control-bg) 72%, transparent) 63%
+  );
   background-size: 400% 100%;
   border-radius: 6px;
 }
@@ -1159,8 +1164,8 @@ export function createChatHistoryUI(appContext) {
   width: calc(var(--branch-depth) * 14px);
   background-image: repeating-linear-gradient(
     to right,
-    rgba(255, 255, 255, 0.08) 0,
-    rgba(255, 255, 255, 0.08) 1px,
+    color-mix(in srgb, var(--cerebr-border-color) 45%, transparent) 0,
+    color-mix(in srgb, var(--cerebr-border-color) 45%, transparent) 1px,
     transparent 1px,
     transparent 14px
   );
