@@ -289,11 +289,11 @@ export function createSettingsManager(appContext) {
       label: '聊天/输入模糊',
       group: 'theme',
       min: 0,
-      max: 36,
+      max: 100,
       step: 1,
       defaultValue: DEFAULT_SETTINGS.chatInputBlurRadius,
       apply: (v) => applyChatInputBlurRadius(v),
-      formatValue: (value) => `${Math.round(Math.max(0, Math.min(36, Number(value) || 0)))}px`
+      formatValue: (value) => `${Math.round(Math.max(0, Math.min(100, Number(value) || 0)))}px`
     },
     {
       key: 'enableCustomThemeColors',
@@ -2575,7 +2575,7 @@ export function createSettingsManager(appContext) {
 
   function applyChatInputBlurRadius(value) {
     const radius = clampChatInputBlurRadius(value);
-    // 聊天消息气泡与输入框统一使用该变量，保持视觉强度一致。
+    // 聊天消息、输入区以及各类浮层面板统一使用该变量，保持模糊强度一致。
     document.documentElement.style.setProperty('--cerebr-chat-input-blur-radius', `${radius}px`);
   }
 
@@ -2632,7 +2632,7 @@ export function createSettingsManager(appContext) {
   function clampChatInputBlurRadius(input) {
     const n = Number(input);
     if (!Number.isFinite(n)) return DEFAULT_SETTINGS.chatInputBlurRadius;
-    return Math.round(Math.min(36, Math.max(0, n)));
+    return Math.round(Math.min(100, Math.max(0, n)));
   }
 
   function getScrollMinimapWidthBounds() {
