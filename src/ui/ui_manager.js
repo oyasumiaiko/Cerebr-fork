@@ -284,19 +284,6 @@ export function createUIManager(appContext) {
     const AUTO_SCROLL_THRESHOLD = 100;
     const ALT_SCROLL_MULTIPLIER = 5; // 固定 5 倍滚动速度，避免动态加速带来的不可控跳跃；如需调节手感只改这里。
     const ALT_SCROLL_ANIMATION_MS = 110; // Alt+滚轮平滑动画时长（ms），兼顾 120Hz 下的顺滑与响应速度。
-    let altScrollAnimRaf = null;
-    let altScrollAnimStartAt = 0;
-    let altScrollAnimFromTop = 0;
-    let altScrollAnimFromLeft = 0;
-    let altScrollAnimToTop = 0;
-    let altScrollAnimToLeft = 0;
-    let nestedAltScrollAnimRaf = null;
-    let nestedAltScrollAnimStartAt = 0;
-    let nestedAltScrollAnimFromTop = 0;
-    let nestedAltScrollAnimFromLeft = 0;
-    let nestedAltScrollAnimToTop = 0;
-    let nestedAltScrollAnimToLeft = 0;
-    let nestedAltScrollTarget = null;
 
     const clampNumber = (value, min, max) => {
       const numeric = Number(value);
@@ -304,132 +291,106 @@ export function createUIManager(appContext) {
       return Math.min(max, Math.max(min, numeric));
     };
 
-    const stopAltScrollAnimation = () => {
-      if (altScrollAnimRaf) {
-        cancelAnimationFrame(altScrollAnimRaf);
-        altScrollAnimRaf = null;
+    const createAltScrollState = (initialTarget = null) => ({
+      target: initialTarget,
+      raf: null,
+      startAt: 0,
+      fromTop: 0,
+      fromLeft: 0,
+      toTop: 0,
+      toLeft: 0
+    });
+
+    // 抽象同一套 Alt 滚动引擎，主聊天与浮层仅传入不同 target。
+    const mainAltScrollState = createAltScrollState(container);
+    const nestedAltScrollState = createAltScrollState(null);
+
+    const stopAltScrollState = (state, options = {}) => {
+      if (!state) return;
+      const { clearTarget = false } = options;
+      if (state.raf) {
+        cancelAnimationFrame(state.raf);
+        state.raf = null;
       }
-      altScrollAnimStartAt = 0;
-      const currentTop = Math.max(0, container.scrollTop || 0);
-      const currentLeft = Math.max(0, container.scrollLeft || 0);
-      altScrollAnimFromTop = currentTop;
-      altScrollAnimFromLeft = currentLeft;
-      altScrollAnimToTop = currentTop;
-      altScrollAnimToLeft = currentLeft;
+      state.startAt = 0;
+      const target = state.target;
+      if (target) {
+        const currentTop = Math.max(0, target.scrollTop || 0);
+        const currentLeft = Math.max(0, target.scrollLeft || 0);
+        state.fromTop = currentTop;
+        state.fromLeft = currentLeft;
+        state.toTop = currentTop;
+        state.toLeft = currentLeft;
+      }
+      if (clearTarget) {
+        state.target = null;
+      }
     };
 
-    const stopNestedAltScrollAnimation = () => {
-      if (nestedAltScrollAnimRaf) {
-        cancelAnimationFrame(nestedAltScrollAnimRaf);
-        nestedAltScrollAnimRaf = null;
-      }
-      nestedAltScrollAnimStartAt = 0;
-      if (!nestedAltScrollTarget) return;
-      const currentTop = Math.max(0, nestedAltScrollTarget.scrollTop || 0);
-      const currentLeft = Math.max(0, nestedAltScrollTarget.scrollLeft || 0);
-      nestedAltScrollAnimFromTop = currentTop;
-      nestedAltScrollAnimFromLeft = currentLeft;
-      nestedAltScrollAnimToTop = currentTop;
-      nestedAltScrollAnimToLeft = currentLeft;
-    };
-
-    const runAltScrollAnimationFrame = (timestamp) => {
-      if (!altScrollAnimRaf) return;
-      if (!altScrollAnimStartAt) altScrollAnimStartAt = timestamp;
-      const elapsed = timestamp - altScrollAnimStartAt;
+    const runAltScrollStateFrame = (state, timestamp) => {
+      const target = state?.target;
+      if (!state?.raf || !target) return;
+      if (!state.startAt) state.startAt = timestamp;
+      const elapsed = timestamp - state.startAt;
       const progress = clampNumber(elapsed / ALT_SCROLL_ANIMATION_MS, 0, 1);
       // 使用缓出曲线，起步快、收尾稳，避免“黏滞感”。
       const eased = 1 - Math.pow(1 - progress, 3);
-      const nextTop = altScrollAnimFromTop + (altScrollAnimToTop - altScrollAnimFromTop) * eased;
-      const nextLeft = altScrollAnimFromLeft + (altScrollAnimToLeft - altScrollAnimFromLeft) * eased;
-      container.scrollTop = nextTop;
-      container.scrollLeft = nextLeft;
-
-      if (progress >= 1 || (Math.abs(altScrollAnimToTop - nextTop) < 0.5 && Math.abs(altScrollAnimToLeft - nextLeft) < 0.5)) {
-        container.scrollTop = altScrollAnimToTop;
-        container.scrollLeft = altScrollAnimToLeft;
-        altScrollAnimRaf = null;
-        altScrollAnimStartAt = 0;
-        altScrollAnimFromTop = altScrollAnimToTop;
-        altScrollAnimFromLeft = altScrollAnimToLeft;
-        return;
-      }
-
-      altScrollAnimRaf = requestAnimationFrame(runAltScrollAnimationFrame);
-    };
-
-    const animateAltScrollBy = (deltaY, deltaX) => {
-      const currentTop = Math.max(0, container.scrollTop || 0);
-      const currentLeft = Math.max(0, container.scrollLeft || 0);
-      const maxTop = Math.max(0, (container.scrollHeight || 0) - (container.clientHeight || 0));
-      const maxLeft = Math.max(0, (container.scrollWidth || 0) - (container.clientWidth || 0));
-      // 连续滚轮时以“当前计划终点”为基准累加，避免动画进行中丢输入。
-      const baseTop = altScrollAnimRaf ? altScrollAnimToTop : currentTop;
-      const baseLeft = altScrollAnimRaf ? altScrollAnimToLeft : currentLeft;
-      const targetTop = clampNumber(baseTop + (Number.isFinite(deltaY) ? deltaY : 0), 0, maxTop);
-      const targetLeft = clampNumber(baseLeft + (Number.isFinite(deltaX) ? deltaX : 0), 0, maxLeft);
-
-      altScrollAnimFromTop = currentTop;
-      altScrollAnimFromLeft = currentLeft;
-      altScrollAnimToTop = targetTop;
-      altScrollAnimToLeft = targetLeft;
-      altScrollAnimStartAt = 0;
-      if (!altScrollAnimRaf) {
-        altScrollAnimRaf = requestAnimationFrame(runAltScrollAnimationFrame);
-      }
-      return targetTop;
-    };
-
-    const runNestedAltScrollAnimationFrame = (timestamp) => {
-      const target = nestedAltScrollTarget;
-      if (!nestedAltScrollAnimRaf || !target) return;
-      if (!nestedAltScrollAnimStartAt) nestedAltScrollAnimStartAt = timestamp;
-      const elapsed = timestamp - nestedAltScrollAnimStartAt;
-      const progress = clampNumber(elapsed / ALT_SCROLL_ANIMATION_MS, 0, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const nextTop = nestedAltScrollAnimFromTop + (nestedAltScrollAnimToTop - nestedAltScrollAnimFromTop) * eased;
-      const nextLeft = nestedAltScrollAnimFromLeft + (nestedAltScrollAnimToLeft - nestedAltScrollAnimFromLeft) * eased;
+      const nextTop = state.fromTop + (state.toTop - state.fromTop) * eased;
+      const nextLeft = state.fromLeft + (state.toLeft - state.fromLeft) * eased;
       target.scrollTop = nextTop;
       target.scrollLeft = nextLeft;
 
-      if (progress >= 1 || (Math.abs(nestedAltScrollAnimToTop - nextTop) < 0.5 && Math.abs(nestedAltScrollAnimToLeft - nextLeft) < 0.5)) {
-        target.scrollTop = nestedAltScrollAnimToTop;
-        target.scrollLeft = nestedAltScrollAnimToLeft;
-        nestedAltScrollAnimRaf = null;
-        nestedAltScrollAnimStartAt = 0;
-        nestedAltScrollAnimFromTop = nestedAltScrollAnimToTop;
-        nestedAltScrollAnimFromLeft = nestedAltScrollAnimToLeft;
+      if (progress >= 1 || (Math.abs(state.toTop - nextTop) < 0.5 && Math.abs(state.toLeft - nextLeft) < 0.5)) {
+        target.scrollTop = state.toTop;
+        target.scrollLeft = state.toLeft;
+        state.raf = null;
+        state.startAt = 0;
+        state.fromTop = state.toTop;
+        state.fromLeft = state.toLeft;
         return;
       }
 
-      nestedAltScrollAnimRaf = requestAnimationFrame(runNestedAltScrollAnimationFrame);
+      state.raf = requestAnimationFrame((nextTs) => runAltScrollStateFrame(state, nextTs));
     };
 
-    const animateNestedAltScrollBy = (target, deltaY, deltaX) => {
-      if (!target) return 0;
-      if (nestedAltScrollTarget !== target) {
-        stopNestedAltScrollAnimation();
-        nestedAltScrollTarget = target;
+    const animateAltScrollStateBy = (state, target, deltaY, deltaX) => {
+      if (!state || !target) return 0;
+      if (state.target !== target) {
+        stopAltScrollState(state);
+        state.target = target;
+      } else if (!state.target) {
+        state.target = target;
       }
+
       const currentTop = Math.max(0, target.scrollTop || 0);
       const currentLeft = Math.max(0, target.scrollLeft || 0);
       const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
       const maxLeft = Math.max(0, (target.scrollWidth || 0) - (target.clientWidth || 0));
-      const baseTop = nestedAltScrollAnimRaf ? nestedAltScrollAnimToTop : currentTop;
-      const baseLeft = nestedAltScrollAnimRaf ? nestedAltScrollAnimToLeft : currentLeft;
+      // 连续滚轮时以“当前计划终点”为基准累加，避免动画进行中丢输入。
+      const baseTop = state.raf ? state.toTop : currentTop;
+      const baseLeft = state.raf ? state.toLeft : currentLeft;
       const targetTop = clampNumber(baseTop + (Number.isFinite(deltaY) ? deltaY : 0), 0, maxTop);
       const targetLeft = clampNumber(baseLeft + (Number.isFinite(deltaX) ? deltaX : 0), 0, maxLeft);
 
-      nestedAltScrollAnimFromTop = currentTop;
-      nestedAltScrollAnimFromLeft = currentLeft;
-      nestedAltScrollAnimToTop = targetTop;
-      nestedAltScrollAnimToLeft = targetLeft;
-      nestedAltScrollAnimStartAt = 0;
-      if (!nestedAltScrollAnimRaf) {
-        nestedAltScrollAnimRaf = requestAnimationFrame(runNestedAltScrollAnimationFrame);
+      state.fromTop = currentTop;
+      state.fromLeft = currentLeft;
+      state.toTop = targetTop;
+      state.toLeft = targetLeft;
+      state.startAt = 0;
+      if (!state.raf) {
+        state.raf = requestAnimationFrame((nextTs) => runAltScrollStateFrame(state, nextTs));
       }
       return targetTop;
     };
+
+    const stopMainAltScrollAnimation = () => stopAltScrollState(mainAltScrollState);
+    const stopNestedAltScrollAnimation = () => stopAltScrollState(nestedAltScrollState, { clearTarget: true });
+    const animateMainAltScrollBy = (deltaY, deltaX) => (
+      animateAltScrollStateBy(mainAltScrollState, container, deltaY, deltaX)
+    );
+    const animateNestedAltScrollBy = (target, deltaY, deltaX) => (
+      animateAltScrollStateBy(nestedAltScrollState, target, deltaY, deltaX)
+    );
 
     /**
      * 将滚轮事件的 delta 值统一转换为像素单位
@@ -483,8 +444,8 @@ export function createUIManager(appContext) {
         const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode, nestedScrollable) * ALT_SCROLL_MULTIPLIER;
         const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode, nestedScrollable) * ALT_SCROLL_MULTIPLIER;
         animateNestedAltScrollBy(nestedScrollable, acceleratedDeltaY, acceleratedDeltaX);
-        if (altScrollAnimRaf) {
-          stopAltScrollAnimation();
+        if (mainAltScrollState.raf) {
+          stopMainAltScrollAnimation();
         }
         messageSender.setShouldAutoScroll(false);
         return;
@@ -499,14 +460,14 @@ export function createUIManager(appContext) {
         const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
 
         stopNestedAltScrollAnimation();
-        projectedScrollTop = animateAltScrollBy(acceleratedDeltaY, acceleratedDeltaX);
+        projectedScrollTop = animateMainAltScrollBy(acceleratedDeltaY, acceleratedDeltaX);
         effectiveDeltaY = acceleratedDeltaY || 0;
       } else {
         // 非 Alt 滚动接管时立即中断 Alt 动画，避免双通道滚动叠加。
-        if (altScrollAnimRaf) {
-          stopAltScrollAnimation();
+        if (mainAltScrollState.raf) {
+          stopMainAltScrollAnimation();
         }
-        if (nestedAltScrollAnimRaf) {
+        if (nestedAltScrollState.raf) {
           stopNestedAltScrollAnimation();
         }
       }
@@ -528,7 +489,7 @@ export function createUIManager(appContext) {
     }, { passive: false });
 
     container.addEventListener('mousedown', (e) => {
-      stopAltScrollAnimation();
+      stopMainAltScrollAnimation();
       stopNestedAltScrollAnimation();
       if (e.offsetX < container.clientWidth) { 
          messageSender.setShouldAutoScroll(false);
