@@ -200,6 +200,8 @@ export function createMessageSender(appContext) {
   const MAX_AUTO_RETRY_ATTEMPTS = 5;
   const AUTO_RETRY_BASE_DELAY_MS = 500;
   const AUTO_RETRY_MAX_DELAY_MS = 8000;
+  // 流式写库节流：避免每个 token 都触发一次 IndexedDB 写入。
+  const STREAM_DRAFT_SAVE_INTERVAL_MS = 1200;
 
   // 临时模式状态不再写入 sessionStorage，改由父页面在内存里同步，避免 F5 刷新仍保留旧状态。
 
@@ -891,15 +893,210 @@ export function createMessageSender(appContext) {
     return chatHistoryManager.chatHistory.currentNode || null;
   }
 
+  function normalizeConversationId(value) {
+    return (typeof value === 'string' && value.trim()) ? value.trim() : '';
+  }
+
+  function resolveAttemptAiNode(attemptState, messageId) {
+    const normalizedId = normalizeConversationId(messageId);
+    if (!normalizedId) return null;
+
+    const activeNode = chatHistoryManager?.chatHistory?.messages?.find?.(m => m.id === normalizedId) || null;
+    if (activeNode) return activeNode;
+
+    const fallbackList = Array.isArray(attemptState?.historyMessagesRef)
+      ? attemptState.historyMessagesRef
+      : [];
+    return fallbackList.find(m => m.id === normalizedId) || null;
+  }
+
+  function bindAttemptAiMessage(attemptState, messageId, explicitNode = null) {
+    if (!attemptState) return;
+    const normalizedId = normalizeConversationId(messageId);
+    if (!normalizedId) return;
+    attemptState.aiMessageId = normalizedId;
+    attemptState.aiMessageNode = explicitNode || resolveAttemptAiNode(attemptState, normalizedId) || null;
+  }
+
+  function isAttemptMainConversationActive(attemptState) {
+    const boundId = normalizeConversationId(attemptState?.boundConversationId);
+    if (!boundId) return true;
+    const activeId = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    return !!(activeId && activeId === boundId);
+  }
+
+  function captureAttemptConversationContext(attemptState) {
+    if (!attemptState) return;
+    if (!Array.isArray(attemptState.historyMessagesRef)) {
+      attemptState.historyMessagesRef = chatHistoryManager?.chatHistory?.messages || [];
+    }
+    if (!normalizeConversationId(attemptState.boundConversationId)) {
+      const fromSenderState = normalizeConversationId(currentConversationId);
+      const fromHistoryUi = normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+      attemptState.boundConversationId = fromSenderState || fromHistoryUi || '';
+    }
+    if (attemptState.boundApiLock === undefined) {
+      attemptState.boundApiLock = chatHistoryUI?.getActiveConversationApiLock?.() || null;
+    }
+  }
+
+  async function persistAttemptConversationSnapshot(attemptState, options = {}) {
+    if (!attemptState || typeof chatHistoryUI?.saveCurrentConversation !== 'function') return null;
+    captureAttemptConversationContext(attemptState);
+
+    const historyMessages = Array.isArray(attemptState.historyMessagesRef)
+      ? attemptState.historyMessagesRef
+      : null;
+    if (!historyMessages || historyMessages.length === 0) return null;
+
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const force = !!normalizedOptions.force;
+
+    const now = Date.now();
+    if (!force && Number.isFinite(attemptState.lastPersistAt)) {
+      const elapsed = now - attemptState.lastPersistAt;
+      if (elapsed >= 0 && elapsed < STREAM_DRAFT_SAVE_INTERVAL_MS) {
+        return null;
+      }
+    }
+
+    if (attemptState.persistInFlight) {
+      if (force) {
+        attemptState.pendingForcedPersist = true;
+      } else {
+        attemptState.pendingPersist = true;
+      }
+      return attemptState.persistPromise || null;
+    }
+
+    attemptState.persistInFlight = true;
+    attemptState.persistPromise = (async () => {
+      const boundId = normalizeConversationId(attemptState.boundConversationId);
+      const activeId = normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+      const shouldActivate = isAttemptMainConversationActive(attemptState);
+
+      const savedConversation = await chatHistoryUI.saveCurrentConversation(!!boundId, {
+        conversationId: boundId || undefined,
+        chatHistoryOverride: { messages: historyMessages },
+        // 若当前界面已切到其它会话，只做后台落库，不反向抢占 UI 当前会话。
+        updateActiveState: shouldActivate,
+        preserveExistingApiLock: true,
+        apiLockOverride: attemptState.boundApiLock
+      });
+
+      const savedId = normalizeConversationId(savedConversation?.id)
+        || boundId
+        || (shouldActivate ? activeId : '');
+      if (savedId) {
+        attemptState.boundConversationId = savedId;
+        if (shouldActivate) {
+          currentConversationId = savedId;
+        }
+      }
+      attemptState.lastPersistAt = Date.now();
+      return savedConversation || null;
+    })()
+      .catch((error) => {
+        console.warn('后台保存会话草稿失败:', error);
+        return null;
+      })
+      .finally(() => {
+        attemptState.persistInFlight = false;
+        attemptState.persistPromise = null;
+        const shouldForceNext = !!attemptState.pendingForcedPersist;
+        const shouldPersistNext = shouldForceNext || !!attemptState.pendingPersist;
+        attemptState.pendingForcedPersist = false;
+        attemptState.pendingPersist = false;
+        if (shouldPersistNext) {
+          setTimeout(() => {
+            void persistAttemptConversationSnapshot(attemptState, { force: shouldForceNext });
+          }, 0);
+        }
+      });
+
+    return attemptState.persistPromise;
+  }
+
+  function createAssistantHistoryNodeForDetachedList(payload) {
+    const {
+      content,
+      thoughts,
+      historyParentId,
+      historyPatch,
+      historyMessagesRef
+    } = payload || {};
+    const targetMessages = Array.isArray(historyMessagesRef) ? historyMessagesRef : null;
+    if (!targetMessages) return null;
+
+    const processedContent = imageHandler.processImageTags(content || '', null);
+    const node = {
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      role: 'assistant',
+      content: processedContent,
+      parentId: historyParentId || null,
+      children: [],
+      timestamp: Date.now(),
+      thoughtsRaw: null,
+      thoughtSignature: null,
+      thoughtSignatureSource: null,
+      reasoning_content: null,
+      tool_calls: null,
+      apiUuid: null,
+      apiDisplayName: '',
+      apiModelId: '',
+      hasInlineImages: false,
+      promptType: null,
+      promptMeta: null,
+      preprocessOriginalText: null,
+      preprocessRenderedText: null,
+      pageMeta: null
+    };
+
+    targetMessages.push(node);
+    if (historyParentId) {
+      const parentNode = targetMessages.find(m => m && m.id === historyParentId);
+      if (parentNode) {
+        if (!Array.isArray(parentNode.children)) {
+          parentNode.children = [];
+        }
+        parentNode.children.push(node.id);
+      }
+    }
+    if (thoughts !== undefined) {
+      node.thoughtsRaw = thoughts;
+    }
+    if (historyPatch && typeof historyPatch === 'object') {
+      Object.assign(node, historyPatch);
+    }
+    node.hasInlineImages = Array.isArray(processedContent) && processedContent.some(p => p?.type === 'image_url');
+    return node;
+  }
+
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
   function createThreadAiMessageHistoryOnly(payload) {
     const {
       content,
       thoughts,
       historyParentId,
-      historyPatch
+      historyPatch,
+      historyMessagesRef = null,
+      preserveCurrentNode = true
     } = payload || {};
     if (!historyParentId) return null;
+
+    const activeHistoryMessages = chatHistoryManager?.chatHistory?.messages || [];
+    const shouldUseActiveHistory = !historyMessagesRef || historyMessagesRef === activeHistoryMessages;
+    if (!shouldUseActiveHistory) {
+      return createAssistantHistoryNodeForDetachedList({
+        content,
+        thoughts,
+        historyParentId,
+        historyPatch,
+        historyMessagesRef
+      });
+    }
+
     const processedContent = imageHandler.processImageTags(content || '', null);
     const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function';
     const node = addWithOptions
@@ -907,7 +1104,7 @@ export function createMessageSender(appContext) {
           'assistant',
           processedContent,
           historyParentId,
-          { preserveCurrentNode: true }
+          { preserveCurrentNode: !!preserveCurrentNode }
         )
       : chatHistoryManager.addMessageToTree('assistant', processedContent, historyParentId);
     if (!node) return null;
@@ -2136,7 +2333,16 @@ export function createMessageSender(appContext) {
         manualAbort: false,
         finished: false,
         loadingMessage: null,
-        aiMessageId: null
+        aiMessageId: null,
+        aiMessageNode: null,
+        historyMessagesRef: null,
+        boundConversationId: '',
+        boundApiLock: undefined,
+        lastPersistAt: 0,
+        persistInFlight: false,
+        persistPromise: null,
+        pendingPersist: false,
+        pendingForcedPersist: false
       };
       activeAttempts.set(attemptState.id, attemptState);
 
@@ -2194,6 +2400,8 @@ export function createMessageSender(appContext) {
     try {
       // 开始处理消息：为本次请求注册 attempt，并在必要时开启全局“正在处理”状态
       attempt = beginAttempt();
+      // 固定本次请求绑定的会话上下文，后续即使切到其它会话也可继续后台落库。
+      captureAttemptConversationContext(attempt);
       const signal = attempt.controller.signal;
 
       // 如果已有注入的系统消息，则使用它；否则从消息文本中提取
@@ -2303,6 +2511,16 @@ export function createMessageSender(appContext) {
         attempt.parentMessageIdForAi = regenParentId || userMessageId || fallbackParentId;
       }
 
+      // 关键持久化修复：
+      // - 用户消息写入后立刻落库，避免“流式尚未完成就关闭页面”导致用户消息丢失；
+      // - 同时固定 attempt 的会话/历史引用，供后续后台流式增量写库使用。
+      if (attempt) {
+        captureAttemptConversationContext(attempt);
+      }
+      if (!regenerateMode && userMessageDiv) {
+        await persistAttemptConversationSnapshot(attempt, { force: true });
+      }
+
       // 清空输入区域
       if (!regenerateMode) {
         clearInputs();
@@ -2325,7 +2543,7 @@ export function createMessageSender(appContext) {
 
           if (canUpdateExistingAiMessage) {
             // 绑定 attempt 到目标 AI 消息，便于“停止更新”按消息粒度工作
-            attempt.aiMessageId = normalizedTargetAiMessageId;
+            bindAttemptAiMessage(attempt, normalizedTargetAiMessageId, node);
             // 阅读位置锁定：仅对“原地替换”重新生成开启。
             // - preserveTargetMessageId 用于在流式/非流式更新时判断是否需要做滚动补偿；
             // - preserveReadingPosition 用于总开关，避免普通发送/普通更新带来额外开销。
@@ -2597,17 +2815,18 @@ export function createMessageSender(appContext) {
         await handleNonStreamResponse(response, loadingMessage, effectiveApiConfig, attempt);
       }
 
-      // 消息处理完成后，自动保存会话
-      if (currentConversationId) {
-        await chatHistoryUI.saveCurrentConversation(true); // 更新现有会话记录
-      } else {
-        await chatHistoryUI.saveCurrentConversation(false); // 新会话，生成新的 conversation id
-        // 获取新创建的会话ID并更新本地变量
-        currentConversationId = chatHistoryUI.getCurrentConversationId();
+      // 消息处理完成后，强制保存一次最终态。
+      // 注意：这里必须使用 attempt 绑定的会话上下文，避免“中途切到其它会话”时写错目标会话。
+      const finalConversation = await persistAttemptConversationSnapshot(attempt, { force: true });
+      const finalConversationId = normalizeConversationId(finalConversation?.id)
+        || normalizeConversationId(attempt?.boundConversationId)
+        || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+      if (finalConversationId && isAttemptMainConversationActive(attempt)) {
+        currentConversationId = finalConversationId;
       }
 
       // 首条 AI 回复后尝试生成对话标题（异步，不阻塞主流程）
-      const titleConversationId = currentConversationId || chatHistoryUI.getCurrentConversationId();
+      const titleConversationId = finalConversationId || currentConversationId || chatHistoryUI.getCurrentConversationId();
       if (titleConversationId) {
         void maybeGenerateConversationTitle({
           conversationId: titleConversationId,
@@ -2628,6 +2847,7 @@ export function createMessageSender(appContext) {
         if (!hasAiMessage && loadingMessage && loadingMessage.parentNode) {
           loadingMessage.remove();
         }
+        await persistAttemptConversationSnapshot(attempt, { force: true });
         console.log('用户手动停止更新');
         return;
       }
@@ -2707,6 +2927,7 @@ export function createMessageSender(appContext) {
           // 错误：重试达到上限
           showNotification({ message: '自动重试失败，已达到最大尝试次数', type: 'error' });
         }
+        await persistAttemptConversationSnapshot(attempt, { force: true });
         return { ok: false, error, apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()), retryHint, retry };
       }
 
@@ -2739,6 +2960,7 @@ export function createMessageSender(appContext) {
         showNotification({ message: '自动重试失败，已达到最大尝试次数', type: 'error' });
       }
 
+      await persistAttemptConversationSnapshot(attempt, { force: true });
       return { ok: false, error, apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()), retryHint, retry };
     } finally {
       finalizeAttempt(attempt);
@@ -2920,6 +3142,7 @@ export function createMessageSender(appContext) {
     const getUiContainer = () => {
       // 线程场景优先线程容器，普通会话回退到主聊天容器，确保滚动/锚点逻辑统一。
       if (threadContext) return resolveThreadUiContainer(threadContext);
+      if (!isAttemptMainConversationActive(attemptState)) return null;
       return chatContainer;
     };
 
@@ -2969,7 +3192,7 @@ export function createMessageSender(appContext) {
       try {
         if (!messageId) return;
         // 先写历史节点，后续无论 DOM 是否可见（线程折叠/虚拟列表）都能保留元信息。
-        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+        const node = resolveAttemptAiNode(attemptState, messageId);
         if (node) {
           node.apiUuid = apiConfig?.id || null;
           node.apiDisplayName = apiConfig?.displayName || '';
@@ -2989,7 +3212,7 @@ export function createMessageSender(appContext) {
 
     function promoteLoadingMessageToAi({ answer, thoughts }) {
       if (!loadingMessage || !loadingMessage.parentNode) return null;
-      const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
+      const shouldRenderDom = !!getUiContainer();
       // 线程 UI 不可见时，不做 DOM 升级，交由“仅历史节点”分支处理，避免无意义渲染。
       if (!shouldRenderDom) return null;
       const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
@@ -3013,12 +3236,16 @@ export function createMessageSender(appContext) {
         // 把线程关联字段一次性打到新节点，保持树结构与 UI 渲染来源一致。
         Object.assign(node, threadHistoryPatch);
       }
+      bindAttemptAiMessage(attemptState, node.id, node);
       loadingMessage.setAttribute('data-message-id', node.id);
       loadingMessage.classList.remove('loading-message');
       try { loadingMessage.classList.add('ai-message'); } catch (_) {}
       loadingMessage.textContent = '';
       loadingMessage.removeAttribute('title');
-      messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '');
+      messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', {
+        fallbackNode: node,
+        suppressMissingNodeWarning: true
+      });
       applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
       updateThreadLastMessage(threadContext, node.id);
       return node.id;
@@ -3040,6 +3267,7 @@ export function createMessageSender(appContext) {
    * @param {Object} attemptState
    */
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
+    captureAttemptConversationContext(attemptState);
     // 流式场景：此时已拿到响应头，但正文 token 尚未到达。
     // 在首个 token 到达前维持占位消息，并展示“等待首 token”的细粒度状态。
     updateLoadingStatus(
@@ -3100,6 +3328,9 @@ export function createMessageSender(appContext) {
 		    // - 普通发送：首个 token 到达时新建消息并赋值；
 		    // - “原地替换”重新生成：sendMessageCore 会预先把 attempt.aiMessageId 设为目标消息ID，这里直接复用。
 		    let currentAiMessageId = attemptState?.aiMessageId || null;
+        if (currentAiMessageId && !attemptState?.aiMessageNode) {
+          attemptState.aiMessageNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
+        }
 		    // 重新生成（原地替换）：只在“首次写回”时清一次，避免后续 token 更新中重复清空
 		    let hasClearedBoundSignatureForRegenerate = false;
 
@@ -3108,6 +3339,10 @@ export function createMessageSender(appContext) {
 	    const uiUpdateThrottler = createAdaptiveUpdateThrottler({
 	      run: (payload) => {
 	        if (!payload || !payload.messageId) return;
+          const boundNode = resolveAttemptAiNode(attemptState, payload.messageId);
+          if (boundNode) {
+            attemptState.aiMessageNode = boundNode;
+          }
 	        const regenContainer = getUiContainer();
 	        const anchor = regenContainer
 	          ? captureReadingAnchorForRegenerate(regenContainer, payload.messageId, attemptState)
@@ -3116,8 +3351,13 @@ export function createMessageSender(appContext) {
           messageProcessor.updateAIMessage(
             payload.messageId,
             payload.answer || '',
-            payload.thoughts || ''
+            payload.thoughts || '',
+            {
+              fallbackNode: boundNode || attemptState?.aiMessageNode || null,
+              suppressMissingNodeWarning: true
+            }
           );
+          void persistAttemptConversationSnapshot(attemptState);
 	        } finally {
 	          if (regenContainer) {
 	            restoreReadingAnchor(regenContainer, anchor);
@@ -3148,6 +3388,10 @@ export function createMessageSender(appContext) {
 
       if (currentAiMessageId) {
         // 原地替换：首帧直接更新到既有 AI 消息上（不创建新节点）
+        const boundNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
+        if (boundNode) {
+          attemptState.aiMessageNode = boundNode;
+        }
         const regenContainer = getUiContainer();
         const anchor = regenContainer
           ? captureReadingAnchorForRegenerate(regenContainer, currentAiMessageId, attemptState)
@@ -3156,7 +3400,11 @@ export function createMessageSender(appContext) {
           messageProcessor.updateAIMessage(
             currentAiMessageId,
             aiResponse,
-            aiThoughtsRaw
+            aiThoughtsRaw,
+            {
+              fallbackNode: boundNode || attemptState?.aiMessageNode || null,
+              suppressMissingNodeWarning: true
+            }
           );
           if (!hasClearedBoundSignatureForRegenerate) {
             hasClearedBoundSignatureForRegenerate = clearBoundSignatureForRegenerate(currentAiMessageId, attemptState);
@@ -3175,7 +3423,7 @@ export function createMessageSender(appContext) {
       if (!currentAiMessageId) {
         // 次优路径：把“正在处理...”占位升级为正式 AI 消息，减少 DOM 抖动与顺序跳跃。
         let promotedId = null;
-        if (loadingMessage && loadingMessage.parentNode) {
+        if (loadingMessage && loadingMessage.parentNode && getUiContainer()) {
           promotedId = promoteLoadingMessageToAi({
             answer: aiResponse,
             thoughts: aiThoughtsRaw
@@ -3183,9 +3431,7 @@ export function createMessageSender(appContext) {
         }
         if (promotedId) {
           currentAiMessageId = promotedId;
-          if (attemptState) {
-            attemptState.aiMessageId = currentAiMessageId;
-          }
+          bindAttemptAiMessage(attemptState, currentAiMessageId);
         }
       }
 
@@ -3196,19 +3442,20 @@ export function createMessageSender(appContext) {
         }
         const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
         const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
-        const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
-        if (threadContext && !shouldRenderDom) {
+        const uiContainer = getUiContainer();
+        const shouldRenderDom = !!uiContainer;
+        if (!shouldRenderDom) {
           const createdNode = createThreadAiMessageHistoryOnly({
             content: aiResponse,
             thoughts: aiThoughtsRaw,
             historyParentId,
-            historyPatch: threadHistoryPatch
+            historyPatch: threadHistoryPatch,
+            historyMessagesRef: attemptState?.historyMessagesRef || null,
+            preserveCurrentNode: !!threadContext
           });
           if (createdNode) {
             currentAiMessageId = createdNode.id;
-            if (attemptState) {
-              attemptState.aiMessageId = currentAiMessageId;
-            }
+            bindAttemptAiMessage(attemptState, currentAiMessageId, createdNode);
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
             updateThreadLastMessage(threadContext, currentAiMessageId);
           }
@@ -3235,9 +3482,7 @@ export function createMessageSender(appContext) {
 
           if (newAiMessageDiv) {
             currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
-            if (attemptState) {
-              attemptState.aiMessageId = currentAiMessageId;
-            }
+            bindAttemptAiMessage(attemptState, currentAiMessageId);
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
             updateThreadLastMessage(threadContext, currentAiMessageId);
           }
@@ -3249,6 +3494,8 @@ export function createMessageSender(appContext) {
           scrollToBottom(scrollContainer);
         }
       }
+
+      void persistAttemptConversationSnapshot(attemptState);
     };
 
     const applyStreamingRenderTransition = ({ hasDelta }) => {
@@ -3316,7 +3563,10 @@ export function createMessageSender(appContext) {
 		    // - OpenAI 兼容：thoughtSignature（message-level thoughtSignature + reasoning_content/tool_calls）
 		    if (currentAiMessageId && (latestGeminiThoughtSignature || latestOpenAIThoughtSignature || (Array.isArray(latestOpenAIToolCalls) && latestOpenAIToolCalls.length > 0))) {
 		      try {
-	        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === currentAiMessageId);
+	        const node = resolveAttemptAiNode(attemptState, currentAiMessageId);
+          if (node) {
+            attemptState.aiMessageNode = node;
+          }
 	        if (node) {
 	          if (isGeminiApi && latestGeminiThoughtSignature) {
 	            // Gemini：在历史节点上记录 Thought Signature，供后续多轮对话回传使用
@@ -3358,6 +3608,8 @@ export function createMessageSender(appContext) {
 	        console.warn('记录签名/推理元信息失败（流式）:', e);
 	      }
 	    }
+
+      await persistAttemptConversationSnapshot(attemptState, { force: true });
 
     async function processLine(line) {
       // Trim the line to handle potential CR characters as well (e.g. '\r\n')
@@ -3871,20 +4123,23 @@ export function createMessageSender(appContext) {
     const existingMessageId = attemptState?.aiMessageId || null;
     if (existingMessageId) {
       try {
-        const existingNode = chatHistoryManager.chatHistory.messages.find(m => m.id === existingMessageId);
+        const existingNode = resolveAttemptAiNode(attemptState, existingMessageId);
         const safeMessageId = escapeMessageIdForSelector(existingMessageId);
         const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
         const existingEl = selector
           ? (chatContainer.querySelector(selector)
             || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
           : null;
-        if (existingNode && existingNode.role === 'assistant' && existingEl && existingEl.classList.contains('ai-message')) {
+        if (existingNode && existingNode.role === 'assistant') {
           const regenContainer = getUiContainer();
           const anchor = regenContainer
             ? captureReadingAnchorForRegenerate(regenContainer, existingMessageId, attemptState)
             : null;
           try {
-            messageProcessor.updateAIMessage(existingMessageId, answer || '', thoughts || '');
+            messageProcessor.updateAIMessage(existingMessageId, answer || '', thoughts || '', {
+              fallbackNode: existingNode,
+              suppressMissingNodeWarning: true
+            });
             // 重新生成（原地替换）：一旦开始写回新内容，旧签名就不再匹配，必须先清空
             clearBoundSignatureForRegenerate(existingMessageId, attemptState);
             applyApiMetaToMessage(existingMessageId, usedApiConfig, existingEl);
@@ -3934,11 +4189,9 @@ export function createMessageSender(appContext) {
       promotedId = promoteLoadingMessageToAi({ answer, thoughts });
     }
     if (promotedId) {
-      if (attemptState) {
-        attemptState.aiMessageId = promotedId;
-      }
+      bindAttemptAiMessage(attemptState, promotedId);
       try {
-        const node = chatHistoryManager.chatHistory.messages.find(m => m.id === promotedId);
+        const node = resolveAttemptAiNode(attemptState, promotedId);
         if (node && thoughtSignature) {
           node.thoughtSignature = thoughtSignature;
           if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
@@ -3963,20 +4216,22 @@ export function createMessageSender(appContext) {
     // 回退：创建新消息（旧行为）
     const threadHistoryPatch = buildThreadHistoryPatch(threadContext);
     const historyParentId = resolveHistoryParentIdForAi(threadContext, attemptState);
-    const shouldRenderDom = !threadContext || isThreadUiActive(threadContext);
-    if (threadContext && !shouldRenderDom) {
+    const shouldRenderDom = threadContext
+      ? isThreadUiActive(threadContext)
+      : isAttemptMainConversationActive(attemptState);
+    if (!shouldRenderDom) {
       const createdNode = createThreadAiMessageHistoryOnly({
         content: answer || '',
         thoughts: thoughts || '',
         historyParentId,
-        historyPatch: threadHistoryPatch
+        historyPatch: threadHistoryPatch,
+        historyMessagesRef: attemptState?.historyMessagesRef || null,
+        preserveCurrentNode: !!threadContext
       });
       if (createdNode) {
         const messageId = createdNode.id;
         // 绑定本次 AI 消息到 attempt，便于按消息粒度中止/清理
-        if (attemptState) {
-          attemptState.aiMessageId = messageId;
-        }
+        bindAttemptAiMessage(attemptState, messageId, createdNode);
         applyApiMetaToMessage(messageId, usedApiConfig);
         updateThreadLastMessage(threadContext, messageId);
         if (thoughtSignature) {
@@ -4028,15 +4283,13 @@ export function createMessageSender(appContext) {
     if (newAiMessageDiv) {
       const messageId = newAiMessageDiv.getAttribute('data-message-id');
       // 绑定本次 AI 消息到 attempt，便于按消息粒度中止/清理
-      if (attemptState) {
-        attemptState.aiMessageId = messageId;
-      }
+      bindAttemptAiMessage(attemptState, messageId);
       applyApiMetaToMessage(messageId, usedApiConfig, newAiMessageDiv);
       updateThreadLastMessage(threadContext, messageId);
       // 在历史节点上记录推理签名，供后续多轮对话回传使用，并刷新 footer 标记
       if (thoughtSignature) {
         try {
-          const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+          const node = resolveAttemptAiNode(attemptState, messageId);
           if (node) {
             node.thoughtSignature = thoughtSignature;
             if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
@@ -4050,7 +4303,7 @@ export function createMessageSender(appContext) {
 	      // OpenAI 兼容：保存 reasoning_content / tool_calls（仅在非 Gemini 场景）
 	      if (!isGeminiApi) {
 	        try {
-	          const node = chatHistoryManager.chatHistory.messages.find(m => m.id === messageId);
+	          const node = resolveAttemptAiNode(attemptState, messageId);
 	          if (node) {
 	            if (typeof reasoningContentRaw === 'string' && reasoningContentRaw) {
 	              node.reasoning_content = reasoningContentRaw;

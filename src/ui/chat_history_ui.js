@@ -1824,19 +1824,35 @@ export function createChatHistoryUI(appContext) {
   /**
    * 保存或更新当前对话至持久存储
    * @param {boolean} [isUpdate=false] - 是否为更新操作
-   * @param {{ preserveExistingApiLock?: boolean }} [options] - 额外保存选项
+   * @param {{ preserveExistingApiLock?: boolean, updateActiveState?: boolean, chatHistoryOverride?: { messages?: Array<any> }, conversationId?: string, apiLockOverride?: any }} [options] - 额外保存选项
    *   - preserveExistingApiLock: 当内存态未携带 apiLock 时，是否回退继承已存储会话中的 apiLock（默认 true）
-   * @returns {Promise<void>}
+   *   - updateActiveState: 是否同步更新当前激活会话状态（默认 true，后台保存可设为 false）
+   *   - chatHistoryOverride: 指定要保存的历史快照（用于后台会话写库）
+   *   - conversationId: 指定保存目标会话 ID（用于后台会话写库）
+   *   - apiLockOverride: 指定本次保存使用的会话 API 锁快照（用于避免混入当前激活会话的锁）
+   * @returns {Promise<Object|null>} 返回保存后的会话对象；无可保存消息时返回 null
    */
   async function saveCurrentConversation(isUpdate = false, options = {}) {
-    const preserveExistingApiLock = options?.preserveExistingApiLock !== false;
-    const chatHistory = services.chatHistoryManager.chatHistory;
-    const rawMessages = chatHistory.messages;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const preserveExistingApiLock = normalizedOptions.preserveExistingApiLock !== false;
+    const updateActiveState = normalizedOptions.updateActiveState !== false;
+    const overrideChatHistory = (normalizedOptions.chatHistoryOverride && typeof normalizedOptions.chatHistoryOverride === 'object')
+      ? normalizedOptions.chatHistoryOverride
+      : null;
+    const overrideConversationId = (typeof normalizedOptions.conversationId === 'string')
+      ? normalizedOptions.conversationId.trim()
+      : '';
+    const targetConversationId = overrideConversationId || currentConversationId || '';
+    const hasApiLockOverride = Object.prototype.hasOwnProperty.call(normalizedOptions, 'apiLockOverride');
+
+    const chatHistory = overrideChatHistory || services.chatHistoryManager.chatHistory;
+    const rawMessages = Array.isArray(chatHistory?.messages) ? chatHistory.messages : [];
     if (rawMessages.length === 0) {
-      if (isUpdate && currentConversationId) {
-        await deleteConversationRecord(currentConversationId);
+      // 仅在“当前激活会话”的更新路径下执行删除，避免后台保存误删其它会话。
+      if (isUpdate && updateActiveState && targetConversationId) {
+        await deleteConversationRecord(targetConversationId);
       }
-      return;
+      return null;
     }
     // 说明：后续的落盘流程会把 dataURL 转换为本地路径，为避免污染实时对话树，
     // 这里先深拷贝一份消息列表，仅在副本上做持久化处理。
@@ -1930,14 +1946,16 @@ export function createChatHistoryUI(appContext) {
     // - existingConversationSnapshot/summaryFromExistingTitle 代表已存储态补充信息。
     let summaryFromExistingTitle = '';
     // 会话固定 API：先快照“内存态”，后续与“已存储态”通过纯函数合并。
-    const memoryApiLockSnapshot = normalizeConversationApiLock(activeConversationApiLock || activeConversation?.apiLock);
+    const memoryApiLockSnapshot = hasApiLockOverride
+      ? normalizeConversationApiLock(normalizedOptions.apiLockOverride)
+      : normalizeConversationApiLock(activeConversationApiLock || activeConversation?.apiLock);
     let existingConversationSnapshot = null;
 
     // 如果是更新操作并且已存在记录，则固定使用首次保存的 url 和 title
-    if (isUpdate && currentConversationId) {
+    if (isUpdate && targetConversationId) {
       try {
         // 使用false参数，不加载完整内容，只获取元数据
-        const existingConversation = await getConversationById(currentConversationId, false);
+        const existingConversation = await getConversationById(targetConversationId, false);
         if (existingConversation) {
           existingConversationSnapshot = existingConversation;
           // 若用户未手动改名，且该会话已有固定 title，则用固定 title 重算摘要（避免用到“当前标签页标题”）
@@ -1989,7 +2007,7 @@ export function createChatHistoryUI(appContext) {
     const generateConversationId = () => `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const messageStats = computeConversationMessageStats(messagesCopy);
     const conversation = {
-      id: isUpdate ? (currentConversationId || generateConversationId()) : generateConversationId(),
+      id: isUpdate ? (targetConversationId || generateConversationId()) : generateConversationId(),
       url: urlToSave,
       title: titleToSave,
       startTime,
@@ -2018,15 +2036,18 @@ export function createChatHistoryUI(appContext) {
     await putConversation(conversation);
     invalidateMetadataCache();
     
-    // 更新当前会话ID和活动会话
-    currentConversationId = conversation.id;
-    activeConversation = conversation;
-    activeConversationApiLock = apiLockToSave;
+    // 根据调用方意图决定是否同步“当前激活会话”上下文。
+    if (updateActiveState) {
+      currentConversationId = conversation.id;
+      activeConversation = conversation;
+      activeConversationApiLock = apiLockToSave;
+    }
     
     // 更新内存缓存
     updateConversationInCache(conversation);
     
     console.log(`已${isUpdate ? '更新' : '保存'}对话记录:`, conversation);
+    return conversation;
   }
 
   /**

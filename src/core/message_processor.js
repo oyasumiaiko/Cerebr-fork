@@ -954,9 +954,17 @@ export function createMessageProcessor(appContext) {
    * @param {string} newAnswerContent - 最新的完整答案文本
    * @param {string|null} newThoughtsRaw - 最新的完整思考过程原始文本 (可选)
    */
-  function updateAIMessage(messageId, newAnswerContent, newThoughtsRaw) {
+  function updateAIMessage(messageId, newAnswerContent, newThoughtsRaw, options = null) {
+    const updateOptions = (options && typeof options === 'object') ? options : {};
     const messageDiv = resolveMessageElement(messageId);
-    const node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
+    let node = chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId);
+    const fallbackNode = (updateOptions.fallbackNode && typeof updateOptions.fallbackNode === 'object')
+      ? updateOptions.fallbackNode
+      : null;
+    if (!node && fallbackNode) {
+      // 会话切换后，目标消息可能已不在当前内存会话；允许调用方提供绑定节点继续后台更新。
+      node = fallbackNode;
+    }
 
     messageVirtualizer.ensureMessageVisible(messageDiv);
 
@@ -974,8 +982,10 @@ export function createMessageProcessor(appContext) {
     }
 
     if (!node) {
-      console.error('updateAIMessage: 消息或历史节点未找到', messageId);
-      return;
+      if (!updateOptions.suppressMissingNodeWarning) {
+        console.error('updateAIMessage: 消息或历史节点未找到', messageId);
+      }
+      return false;
     }
 
     // --- 同步历史记录中的内容结构（支持图片 + 文本的混合内容） ---
@@ -1004,7 +1014,7 @@ export function createMessageProcessor(appContext) {
 
     // 线程切换/面板关闭时可能找不到 DOM，仍需保证历史数据完整。
     if (!messageDiv) {
-      return;
+      return true;
     }
 
     messageDiv.setAttribute('data-original-text', safeAnswerContent);
@@ -1044,6 +1054,7 @@ export function createMessageProcessor(appContext) {
     }
     scrollToBottom(resolveScrollContainerForMessage(messageDiv));
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageDiv));
+    return true;
   }
 
   function bindInlineImagePreviews(container) {
