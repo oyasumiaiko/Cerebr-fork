@@ -337,11 +337,6 @@ body.standalone-mode {
     background-color: var(--cerebr-chat-background-solid-color, #262b33);
 }
 
-/* 侧栏 iframe 场景仅关闭“氛围 blur 层”(:before)，保留主背景图层(:after)。 */
-html:not(.standalone-mode) body::before {
-    display: none !important;
-}
-
 /* 全局控件统一样式 */
 button,
 input[type="text"],
