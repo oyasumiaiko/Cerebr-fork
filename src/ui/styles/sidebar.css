@@ -605,7 +605,8 @@ html:not(.fullscreen-mode) #chat-container {
 
 .chat-scroll-minimap.chat-scroll-minimap--active {
     pointer-events: auto;
-    opacity: 1;
+    /* 保持轨道底色透明度稳定：激活态直接使用用户配置透明度。 */
+    opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--auto-hide {
@@ -618,21 +619,21 @@ html:not(.fullscreen-mode) #chat-container {
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--interacting {
-    opacity: 1;
+    opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--interacting.chat-scroll-minimap--auto-hide,
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--interacting.chat-scroll-minimap--auto-hide:hover,
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--interacting.chat-scroll-minimap--auto-hide:focus-within {
-    opacity: 1;
+    opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active:active {
-    opacity: 1;
+    opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--dragging {
-    opacity: 1;
+    opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
 }
 
 .chat-scroll-minimap .chat-scroll-minimap__canvas {
@@ -643,6 +644,12 @@ html:not(.fullscreen-mode) #chat-container {
     height: 100%;
     opacity: var(--cerebr-scroll-minimap-canvas-opacity);
     transition: opacity 0.14s ease;
+}
+
+.chat-scroll-minimap:hover .chat-scroll-minimap__canvas,
+.chat-scroll-minimap:focus-within .chat-scroll-minimap__canvas {
+    /* hover 时仅增强前景层（消息块），不抬高轨道底色透明度。 */
+    opacity: var(--cerebr-scroll-minimap-interaction-opacity, 0.94);
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--interacting .chat-scroll-minimap__canvas,
@@ -4757,7 +4764,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     border: 1px solid var(--cerebr-border-color);
     border-radius: 8px;
     padding: 16px;
-    /* z-index: 9999; */
+    /* 让 Esc 面板整体层级高于缩略图滚动条与宽度拖拽手柄，避免其穿透到面板之上。 */
+    z-index: 1005;
     backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
     box-shadow: 0 0px 20px 4px rgba(0, 0, 0, 0.2);
     overflow: hidden;
@@ -5516,6 +5524,9 @@ body.chat-history-panel-resizing {
 #chat-history-panel .settings-tab-content {
     padding: 12px;
     gap: 10px;
+    /* settings 内容作为独立绘制层，确保面板内部控件不被底层交互层盖住。 */
+    position: relative;
+    z-index: 1;
     background: var(--cerebr-bg-color);
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
     border-radius: 10px;
