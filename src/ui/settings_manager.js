@@ -138,7 +138,11 @@ export function createSettingsManager(appContext) {
     // 主题透明度拆分：背景层与元素层独立控制
     backgroundOpacity: 0.8,
     elementOpacity: 0.8,
-    // 聊天消息气泡与输入框的背景模糊强度（单位 px）
+    // 主界面（菜单/输入区/Esc 面板等）背景模糊强度（单位 px）
+    mainUiBlurRadius: 0,
+    // 消息气泡背景模糊强度（单位 px）
+    messageBlurRadius: 0,
+    // 兼容旧版本（聊天/输入模糊），仅用于迁移；新版本请使用 mainUiBlurRadius/messageBlurRadius
     chatInputBlurRadius: 0,
     // 是否启用“自定义配色覆盖主题”
     enableCustomThemeColors: false,
@@ -288,17 +292,30 @@ export function createSettingsManager(appContext) {
       formatValue: (value) => `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
     },
     {
-      key: 'chatInputBlurRadius',
+      key: 'mainUiBlurRadius',
       type: 'range',
-      id: 'theme-chat-input-blur-radius',
-      label: '聊天/输入模糊',
+      id: 'theme-main-ui-blur-radius',
+      label: '主界面模糊',
       group: 'theme',
       min: 0,
       max: 100,
       step: 1,
-      defaultValue: DEFAULT_SETTINGS.chatInputBlurRadius,
-      apply: (v) => applyChatInputBlurRadius(v),
-      formatValue: (value) => `${Math.round(Math.max(0, Math.min(100, Number(value) || 0)))}px`
+      defaultValue: DEFAULT_SETTINGS.mainUiBlurRadius,
+      apply: (v) => applyMainUiBlurRadius(v),
+      formatValue: (value) => `${clampBlurRadiusPx(value)}px`
+    },
+    {
+      key: 'messageBlurRadius',
+      type: 'range',
+      id: 'theme-message-blur-radius',
+      label: '消息气泡模糊',
+      group: 'theme',
+      min: 0,
+      max: 100,
+      step: 1,
+      defaultValue: DEFAULT_SETTINGS.messageBlurRadius,
+      apply: (v) => applyMessageBlurRadius(v),
+      formatValue: (value) => `${clampBlurRadiusPx(value)}px`
     },
     {
       key: 'enableCustomThemeColors',
@@ -874,8 +891,8 @@ export function createSettingsManager(appContext) {
     if (key === 'backgroundOpacity' || key === 'elementOpacity') {
       return clamp01(value, DEFAULT_SETTINGS[key]);
     }
-    if (key === 'chatInputBlurRadius') {
-      return clampChatInputBlurRadius(value);
+    if (key === 'mainUiBlurRadius' || key === 'messageBlurRadius' || key === 'chatInputBlurRadius') {
+      return clampBlurRadiusPx(value);
     }
     if (key === 'backgroundMessageBlurRadius') {
       return clampBackgroundMessageBlurRadius(value);
@@ -1622,6 +1639,33 @@ export function createSettingsManager(appContext) {
           await queueStorageSet('sync', { fullscreenWidth: currentSettings.fullscreenWidth }, { flush: 'now' });
         } catch (e) {
           console.warn('写入 fullscreenWidth 默认值失败（忽略）:', e);
+        }
+      }
+
+      // 兼容旧版本“聊天/输入模糊”拆分：
+      // - 旧键：chatInputBlurRadius（同时作用于主界面和消息）
+      // - 新键：mainUiBlurRadius / messageBlurRadius（分别控制）
+      // 迁移策略：仅在新键缺失时，用旧值补齐，确保升级后视觉不突变。
+      const hasLegacyBlur = Object.prototype.hasOwnProperty.call(result, 'chatInputBlurRadius');
+      const hasMainUiBlur = Object.prototype.hasOwnProperty.call(result, 'mainUiBlurRadius');
+      const hasMessageBlur = Object.prototype.hasOwnProperty.call(result, 'messageBlurRadius');
+      if (hasLegacyBlur && (!hasMainUiBlur || !hasMessageBlur)) {
+        const legacyBlur = clampBlurRadiusPx(result.chatInputBlurRadius);
+        const blurPatch = {};
+        if (!hasMainUiBlur) {
+          currentSettings.mainUiBlurRadius = legacyBlur;
+          blurPatch.mainUiBlurRadius = legacyBlur;
+        }
+        if (!hasMessageBlur) {
+          currentSettings.messageBlurRadius = legacyBlur;
+          blurPatch.messageBlurRadius = legacyBlur;
+        }
+        if (Object.keys(blurPatch).length > 0) {
+          try {
+            await queueStorageSet('sync', blurPatch, { flush: 'now' });
+          } catch (e) {
+            console.warn('迁移模糊拆分设置失败（忽略）:', e);
+          }
         }
       }
       
@@ -2620,10 +2664,23 @@ export function createSettingsManager(appContext) {
     document.documentElement.style.setProperty('--cerebr-background-message-blur-radius', `${radius}px`);
   }
 
-  function applyChatInputBlurRadius(value) {
-    const radius = clampChatInputBlurRadius(value);
-    // 聊天消息、输入区以及各类浮层面板统一使用该变量，保持模糊强度一致。
+  function applyMainUiBlurRadius(value) {
+    const radius = clampBlurRadiusPx(value);
+    // 主界面（输入区、菜单、Esc 面板等）统一读取 main-ui 变量。
+    document.documentElement.style.setProperty('--cerebr-main-ui-blur-radius', `${radius}px`);
+    // 兼容旧样式变量：逐步迁移期间继续同步写入，避免漏改样式点位。
     document.documentElement.style.setProperty('--cerebr-chat-input-blur-radius', `${radius}px`);
+  }
+
+  function applyMessageBlurRadius(value) {
+    const radius = clampBlurRadiusPx(value);
+    // 消息气泡单独读取 message 变量，实现与主界面模糊强度解耦。
+    document.documentElement.style.setProperty('--cerebr-message-blur-radius', `${radius}px`);
+  }
+
+  // 兼容旧调用：旧键“chatInputBlurRadius”映射到“主界面模糊”。
+  function applyChatInputBlurRadius(value) {
+    applyMainUiBlurRadius(value);
   }
 
   /**
@@ -2681,10 +2738,15 @@ export function createSettingsManager(appContext) {
     return Math.min(1, Math.max(0, n));
   }
 
-  function clampChatInputBlurRadius(input) {
+  function clampBlurRadiusPx(input) {
     const n = Number(input);
-    if (!Number.isFinite(n)) return DEFAULT_SETTINGS.chatInputBlurRadius;
+    if (!Number.isFinite(n)) return DEFAULT_SETTINGS.mainUiBlurRadius;
     return Math.round(Math.min(100, Math.max(0, n)));
+  }
+
+  // 兼容旧逻辑：保留旧函数名，统一转发到新的通用 clamp。
+  function clampChatInputBlurRadius(input) {
+    return clampBlurRadiusPx(input);
   }
 
   function clampBackgroundMessageBlurRadius(input) {

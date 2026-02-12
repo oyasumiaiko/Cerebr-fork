@@ -51,7 +51,10 @@ input, textarea, select {
     --cerebr-opacity-panel-surface: 0.87;
     --cerebr-opacity-panel-surface-strong: 0.91;
     --cerebr-opacity-panel-inline: 0.84;
-    --cerebr-chat-input-blur-radius: 0px;
+    --cerebr-main-ui-blur-radius: 0px;
+    --cerebr-message-blur-radius: 0px;
+    /* 兼容旧变量名：逐步迁移样式期间，旧变量始终映射到“主界面模糊”。 */
+    --cerebr-chat-input-blur-radius: var(--cerebr-main-ui-blur-radius);
     --cerebr-panel-surface-bg: var(--cerebr-bg-color);
     --cerebr-panel-surface-bg-strong: var(--cerebr-bg-color);
     --cerebr-panel-inline-bg: var(--cerebr-input-bg);
@@ -902,8 +905,8 @@ body.fullscreen-width-resize-active * {
         var(--thread-header-glass-mid) 62%,
         var(--thread-header-glass-bottom) 100%
     );
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
-    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     mask-image: linear-gradient(180deg, #000 0%, #000 62%, transparent 100%);
     -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 62%, transparent 100%);
 }
@@ -945,8 +948,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     border-radius: 8px;
     border: 1px dashed color-mix(in srgb, var(--cerebr-border-color) 60%, transparent);
     background: color-mix(in srgb, var(--cerebr-bg-color) 84%, transparent);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
-    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     color: var(--cerebr-text-color);
     font-size: var(--cerebr-font-size);
     max-height: 60vh;
@@ -1040,8 +1043,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     transform: translateY(8px) scale(0.98);
     animation: messageAppear 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
     will-change: transform, opacity;
-    backdrop-filter: saturate(2.5) blur(var(--cerebr-chat-input-blur-radius, 0px));
-    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: saturate(2.5) blur(var(--cerebr-message-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-message-blur-radius, 0px));
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
     transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                 box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1125,8 +1128,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 #input-container {
     padding: 0;
     background-color: var(--cerebr-input-bg);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
-    -webkit-backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -1202,7 +1205,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     box-shadow:
       0 6px 14px rgba(0, 0, 0, 0.12),
       inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
@@ -1244,7 +1247,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 50%, transparent);
     border-radius: 12px;
     padding: 6px;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     box-shadow:
       0 14px 26px rgba(0, 0, 0, 0.2),
       inset 0 0 0 1px color-mix(in srgb, #fff 14%, transparent);
@@ -1341,7 +1344,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
     background: var(--cerebr-panel-surface-bg, var(--cerebr-input-bg));
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     box-shadow:
       0 12px 22px rgba(0, 0, 0, 0.18),
       inset 0 0 0 1px color-mix(in srgb, #fff 12%, transparent);
@@ -1546,7 +1549,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     width: max-content;
     margin-bottom: 8px;
     transform-origin: bottom right;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     opacity: 0;
     visibility: hidden;
     transform: translateY(4px);
@@ -1665,7 +1668,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
     background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     z-index: 30;
 }
 
@@ -1856,7 +1859,7 @@ input:checked + .slider::before {
     flex-direction: column;
     padding: 20px;
     overflow-y: auto;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
     visibility: hidden;
@@ -2759,7 +2762,7 @@ input:checked + .slider::before {
     gap: 8px;
     padding: 6px 4px;
     background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
 }
 
 .gallery-toolbar-left,
@@ -3165,7 +3168,7 @@ input:checked + .slider::before {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     z-index: 2000;
     display: none;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -3248,7 +3251,7 @@ input:checked + .slider::before {
     background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     opacity: 0;
     visibility: hidden;
     transform: translateX(4px);
@@ -3344,7 +3347,7 @@ input:checked + .slider::before {
     border: 1px solid var(--selection-thread-bubble-border);
     background: var(--selection-thread-bubble-bg);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     display: none;
     color: var(--cerebr-text-color);
     font-size: var(--cerebr-font-size);
@@ -3705,7 +3708,7 @@ input:checked + .slider::before {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s cubic-bezier(0, 0, 0.2, 1);
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
 }
 
 .image-preview-modal.visible {
@@ -4236,7 +4239,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     gap: 10px;
     padding: 16px 18px 12px;
     overflow-y: auto;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     border: 1px solid rgba(255, 255, 255, 0.1);
     opacity: 0;
     visibility: hidden;
@@ -4766,7 +4769,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     padding: 16px;
     /* 让 Esc 面板整体层级高于缩略图滚动条与宽度拖拽手柄，避免其穿透到面板之上。 */
     z-index: 1005;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     box-shadow: 0 0px 20px 4px rgba(0, 0, 0, 0.2);
     overflow: hidden;
     display: flex;
@@ -4875,7 +4878,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     border-radius: 14px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
     padding: 14px 16px;
-    backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     opacity: 0;
     visibility: hidden;
     transform: translateY(2px);
@@ -6437,7 +6440,7 @@ body.chat-history-panel-resizing {
   font-size: 12px;
   line-height: 1.4;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+  backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
 }
 
 .search-syntax-popover[data-visible="1"] {
@@ -6491,7 +6494,7 @@ body.chat-history-panel-resizing {
   background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 85%, transparent);
   border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
-  backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+  backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
   animation: notificationFadeIn 200ms cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: auto;
   border-left: 4px solid var(--cerebr-highlight);
@@ -6601,7 +6604,7 @@ body.chat-history-panel-resizing {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.35);
-  backdrop-filter: blur(var(--cerebr-chat-input-blur-radius, 0px));
+  backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
   display: flex;
   align-items: center;
   justify-content: center;
