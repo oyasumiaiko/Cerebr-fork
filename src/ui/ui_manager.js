@@ -49,6 +49,56 @@ export function createUIManager(appContext) {
   const settingsManager = services.settingsManager; // 预留：后续需要时再使用
 
   let settingsMenuTimeout = null; // Timeout for hover-based closing
+  const SETTINGS_MENU_VIEWPORT_MARGIN_PX = 8;
+
+  function clampToRange(value, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return min;
+    if (!Number.isFinite(max) || max < min) return min;
+    return Math.min(max, Math.max(min, numeric));
+  }
+
+  /**
+   * 将“...”菜单提升到 body 下，避免受输入框层叠上下文与 backdrop-filter 影响。
+   */
+  function ensureSettingsMenuPortal() {
+    if (!dom.settingsMenu || !document.body) return;
+    if (dom.settingsMenu.parentElement === document.body) return;
+    document.body.appendChild(dom.settingsMenu);
+  }
+
+  /**
+   * 以按钮为锚点计算浮层菜单位置，避免在窗口边缘被裁剪。
+   */
+  function positionSettingsMenu() {
+    if (!dom.settingsMenu || !dom.settingsButton) return;
+    const buttonRect = dom.settingsButton.getBoundingClientRect();
+    const menu = dom.settingsMenu;
+    const viewportWidth = Math.max(
+      Number(document.documentElement?.clientWidth) || 0,
+      Number(window.innerWidth) || 0
+    );
+    const viewportHeight = Math.max(
+      Number(document.documentElement?.clientHeight) || 0,
+      Number(window.innerHeight) || 0
+    );
+    const menuWidth = Math.max(1, Number(menu.offsetWidth) || Number(menu.getBoundingClientRect().width) || 1);
+    const menuHeight = Math.max(1, Number(menu.offsetHeight) || Number(menu.getBoundingClientRect().height) || 1);
+
+    const leftMin = SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+    const leftMax = viewportWidth - menuWidth - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+    const topMin = SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+    const topMax = viewportHeight - menuHeight - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+
+    // 与旧布局保持一致：右侧对齐按钮并留 8px 缝隙，默认显示在按钮上方。
+    const preferredLeft = buttonRect.right - SETTINGS_MENU_VIEWPORT_MARGIN_PX - menuWidth;
+    const preferredTop = buttonRect.top - menuHeight - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+    const left = clampToRange(preferredLeft, leftMin, leftMax);
+    const top = clampToRange(preferredTop, topMin, topMax);
+
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+  }
 
   /**
    * 自动调整文本框高度
@@ -95,6 +145,8 @@ export function createUIManager(appContext) {
         return;
     }
 
+    ensureSettingsMenuPortal();
+
     if (show === undefined) {
       appContext.dom.settingsMenu.classList.toggle('visible');
     } else {
@@ -106,7 +158,9 @@ export function createUIManager(appContext) {
     }
 
     if (appContext.dom.settingsMenu.classList.contains('visible')) {
+      positionSettingsMenu();
       apiManager.renderFavoriteApis();
+      requestAnimationFrame(() => positionSettingsMenu());
     }
   }
 
@@ -187,11 +241,15 @@ export function createUIManager(appContext) {
   function setupSettingsMenuEventListeners() {
     // Hover behavior for settings menu
     if (dom.settingsButton && dom.settingsMenu) {
+        ensureSettingsMenuPortal();
+
         const openSettingsMenu = () => {
             clearTimeout(settingsMenuTimeout);
             // 设置菜单不参与互斥：打开它不应关闭其他面板
             dom.settingsMenu.classList.add('visible');
+            positionSettingsMenu();
             apiManager.renderFavoriteApis();
+            requestAnimationFrame(() => positionSettingsMenu());
         };
 
         
@@ -263,6 +321,12 @@ export function createUIManager(appContext) {
         });
         dom.settingsMenu.addEventListener('mouseleave', () => {
             scheduleCloseSettingsMenu();
+        });
+
+        // 视口尺寸变化时同步重新定位，避免浮层漂移到屏幕外。
+        window.addEventListener('resize', () => {
+          if (!dom.settingsMenu.classList.contains('visible')) return;
+          positionSettingsMenu();
         });
 
         // Keep this: 阻止菜单内部点击事件冒泡，防止触发外部的关闭逻辑

@@ -1500,10 +1500,9 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     display: block;
 }
 
-/* 新增：容器为设置按钮和菜单的包裹容器，作为菜单的定位参照 */
+/* 设置按钮容器：仅承载按钮本身，菜单已由 JS 迁移到 body 浮层。 */
 #settings-container {
-    position: relative;
-    display: inline-block;
+    display: inline-flex;
 }
 
 /* 设置按钮和菜单样式 */
@@ -1539,15 +1538,15 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 #settings-menu {
-    position: absolute;
-    bottom: 100%;
-    right: 8px;
+    /* 菜单通过 JS 挂到 body 并用 fixed 定位，避免受输入框父级的模糊/层叠上下文影响。 */
+    position: fixed;
+    left: 0;
+    top: 0;
     background: var(--cerebr-panel-surface-bg, var(--cerebr-bg-color));
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     padding: 8px;
     width: max-content;
-    margin-bottom: 8px;
     transform-origin: bottom right;
     backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     opacity: 0;
