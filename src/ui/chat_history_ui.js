@@ -2823,15 +2823,22 @@ export function createChatHistoryUI(appContext) {
     summary.appendChild(titleSpan);
     summary.appendChild(metaSpan);
   }
-
   /**
-   * 清空聊天记录
+   * Clear current chat view and reset active conversation pointer.
+   *
+   * By default this does NOT abort in-flight streaming requests.
+   * Use abortActiveRequests=true only for explicit stop semantics.
+   *
+   * @param {{ abortActiveRequests?: boolean }} [options]
    * @returns {Promise<void>}
    */
-  async function clearChatHistory() {
-    // 终止当前请求（若存在）
-    services.messageSender.abortCurrentRequest();
-    // 清空聊天时不再二次保存，避免覆盖已有记录。
+  async function clearChatHistory(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const abortActiveRequests = normalizedOptions.abortActiveRequests === true;
+    if (abortActiveRequests) {
+      services.messageSender.abortCurrentRequest();
+    }
+    // Keep clear-chat lightweight: do not trigger an extra save here.
     services.selectionThreadManager?.resetForClearChat?.();
     // 清空聊天容器和内存中的聊天记录
     chatContainer.innerHTML = '';
