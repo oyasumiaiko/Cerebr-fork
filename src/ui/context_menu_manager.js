@@ -50,7 +50,6 @@ export function createContextMenuManager(appContext) {
   const regenerateSubmenu = regenerateButton?.querySelector('.context-menu-submenu');
   const regenerateSubmenuList = regenerateSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateApiHint = document.getElementById('regenerate-message-api-hint');
-  const lockApiFromMessageButton = document.getElementById('lock-api-from-message');
 
   // Services from appContext.services
   const messageSender = services.messageSender;
@@ -447,14 +446,6 @@ export function createContextMenuManager(appContext) {
     return null;
   }
 
-  function resolveApiConfigFromMessage(messageElement) {
-    if (!messageElement) return null;
-    const messageId = messageElement.getAttribute('data-message-id') || '';
-    if (!messageId) return null;
-    const node = findHistoryMessageById(messageId);
-    return resolveApiConfigFromHistoryNode(node);
-  }
-
   function getRegenerateTargetAiIds(regenTarget) {
     if (!regenTarget || typeof regenTarget !== 'object') return [];
     if (Array.isArray(regenTarget.targetAiMessageIds) && regenTarget.targetAiMessageIds.length > 0) {
@@ -669,18 +660,6 @@ export function createContextMenuManager(appContext) {
       if (regenerateApiHint) {
         regenerateApiHint.textContent = '';
         regenerateApiHint.removeAttribute('title');
-      }
-    }
-
-    if (lockApiFromMessageButton) {
-      const apiConfig = resolveApiConfigFromMessage(messageElement);
-      if (apiConfig) {
-        const label = getApiDisplayName(apiConfig);
-        lockApiFromMessageButton.style.display = 'flex';
-        lockApiFromMessageButton.title = `固定该对话到：${label}`;
-      } else {
-        lockApiFromMessageButton.style.display = 'none';
-        lockApiFromMessageButton.removeAttribute('title');
       }
     }
 
@@ -1252,18 +1231,6 @@ export function createContextMenuManager(appContext) {
       if (target && target.closest('.context-menu-submenu')) return;
       regenerateMessage(event);
     });
-    if (lockApiFromMessageButton) {
-      lockApiFromMessageButton.addEventListener('click', async () => {
-        const apiConfig = resolveApiConfigFromMessage(currentMessageElement);
-        if (!apiConfig) {
-          utils?.showNotification?.({ message: '该消息未记录可用的 API 信息', type: 'warning', duration: 1800 });
-          hideContextMenu();
-          return;
-        }
-        await chatHistoryUI?.setConversationApiLock?.(null, apiConfig);
-        hideContextMenu();
-      });
-    }
     if (regenerateSubmenuList) {
       regenerateSubmenuList.addEventListener('click', (event) => {
         const target = event?.target instanceof Element ? event.target : null;
