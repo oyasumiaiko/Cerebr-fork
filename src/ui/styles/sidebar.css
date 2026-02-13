@@ -3241,9 +3241,10 @@ input:checked + .slider::before {
 }
 
 .context-menu-submenu {
-    position: absolute;
+    /* 子菜单改为 portal 到 body 后使用 fixed 定位，确保 blur 采样稳定。 */
+    position: fixed;
     top: 0;
-    left: calc(100% + 6px);
+    left: 0;
     min-width: 180px;
     padding: 6px;
     border-radius: 8px;
@@ -3267,29 +3268,26 @@ input:checked + .slider::before {
     width: 6px;
     height: 100%;
     background: transparent;
+    pointer-events: none;
 }
 
-.context-menu-item--has-submenu:hover .context-menu-submenu,
-.context-menu-item--has-submenu:focus-within .context-menu-submenu {
+.context-menu-submenu.context-menu-submenu--visible {
     opacity: 1;
     visibility: visible;
     transform: translateX(0);
     pointer-events: auto;
 }
 
-.context-menu-item--submenu-left .context-menu-submenu {
-    left: auto;
-    right: calc(100% + 6px);
+.context-menu-submenu.context-menu-submenu--left {
     transform: translateX(-4px);
 }
 
-.context-menu-item--submenu-left .context-menu-submenu::before {
+.context-menu-submenu.context-menu-submenu--left::before {
     left: auto;
     right: -6px;
 }
 
-.context-menu-item--submenu-left:hover .context-menu-submenu,
-.context-menu-item--submenu-left:focus-within .context-menu-submenu {
+.context-menu-submenu.context-menu-submenu--left.context-menu-submenu--visible {
     transform: translateX(0);
 }
 

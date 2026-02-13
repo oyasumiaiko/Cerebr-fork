@@ -65,6 +65,11 @@ export function createContextMenuManager(appContext) {
   let currentMessageContainer = null;
   let currentCodeBlock = null;
   let isEditing = false;
+  const SUBMENU_EDGE_GAP_PX = 6;
+  const SUBMENU_VIEWPORT_MARGIN_PX = 8;
+  const SUBMENU_HIDE_DELAY_MS = 120;
+  let activeContextSubmenu = null;
+  let submenuHoverHideTimer = null;
 
   const MESSAGE_IMAGE_EXPORT_DEFAULTS = {
     widthPx: 0,         // 0 = 跟随消息当前宽度
@@ -581,16 +586,118 @@ export function createContextMenuManager(appContext) {
     });
   }
 
-  function updateSubmenuDirection(menuItem, submenu) {
-    if (!menuItem || !submenu) return;
-    menuItem.classList.remove('context-menu-item--submenu-left');
-    const buttonRect = menuItem.getBoundingClientRect();
-    const submenuWidth = submenu.offsetWidth || 180;
-    const spaceRight = window.innerWidth - buttonRect.right;
-    const spaceLeft = buttonRect.left;
-    if (spaceRight < submenuWidth && spaceLeft >= submenuWidth) {
-      menuItem.classList.add('context-menu-item--submenu-left');
+  function clearSubmenuHideTimer() {
+    if (!submenuHoverHideTimer) return;
+    clearTimeout(submenuHoverHideTimer);
+    submenuHoverHideTimer = null;
+  }
+
+  function scheduleSubmenuHide() {
+    clearSubmenuHideTimer();
+    submenuHoverHideTimer = setTimeout(() => {
+      submenuHoverHideTimer = null;
+      if (!activeContextSubmenu) return;
+      const { menuItem, submenu } = activeContextSubmenu;
+      try {
+        if ((menuItem && menuItem.matches(':hover')) || (submenu && submenu.matches(':hover'))) {
+          scheduleSubmenuHide();
+          return;
+        }
+      } catch (_) {
+        // 兜底：若 :hover 检测不可用，则按默认流程关闭子菜单。
+      }
+      closeActiveContextSubmenu();
+    }, SUBMENU_HIDE_DELAY_MS);
+  }
+
+  /**
+   * 将子菜单提升到 body（portal），确保 backdrop-filter 采样到真实页面背景。
+   */
+  function ensureSubmenuPortal(submenu) {
+    if (!submenu || !document.body) return;
+    if (!submenu.classList.contains('context-menu-submenu--portal')) {
+      submenu.classList.add('context-menu-submenu--portal');
     }
+    if (submenu.parentElement !== document.body) {
+      document.body.appendChild(submenu);
+    }
+  }
+
+  function resolveSubmenuPlacement(menuItem, submenu) {
+    const menuItemRect = menuItem.getBoundingClientRect();
+    const submenuRect = submenu.getBoundingClientRect();
+    const submenuWidth = Math.max(180, Math.round(submenuRect.width || submenu.offsetWidth || 180));
+    const submenuHeight = Math.max(0, Math.round(submenuRect.height || submenu.offsetHeight || 0));
+    const viewportWidth = Math.max(document.documentElement?.clientWidth || 0, window.innerWidth || 0);
+    const viewportHeight = Math.max(document.documentElement?.clientHeight || 0, window.innerHeight || 0);
+
+    const spaceRight = viewportWidth - menuItemRect.right - SUBMENU_EDGE_GAP_PX;
+    const spaceLeft = menuItemRect.left - SUBMENU_EDGE_GAP_PX;
+    const openLeft = spaceRight < submenuWidth && spaceLeft >= submenuWidth;
+
+    let left = openLeft
+      ? (menuItemRect.left - submenuWidth - SUBMENU_EDGE_GAP_PX)
+      : (menuItemRect.right + SUBMENU_EDGE_GAP_PX);
+    let top = menuItemRect.top;
+
+    const maxLeft = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportWidth - submenuWidth - SUBMENU_VIEWPORT_MARGIN_PX);
+    const maxTop = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportHeight - submenuHeight - SUBMENU_VIEWPORT_MARGIN_PX);
+    left = Math.min(maxLeft, Math.max(SUBMENU_VIEWPORT_MARGIN_PX, left));
+    top = Math.min(maxTop, Math.max(SUBMENU_VIEWPORT_MARGIN_PX, top));
+
+    return { openLeft, left, top };
+  }
+
+  function positionContextSubmenu(menuItem, submenu) {
+    if (!menuItem || !submenu) return;
+    ensureSubmenuPortal(submenu);
+    const placement = resolveSubmenuPlacement(menuItem, submenu);
+    menuItem.classList.toggle('context-menu-item--submenu-left', placement.openLeft);
+    submenu.classList.toggle('context-menu-submenu--left', placement.openLeft);
+    submenu.style.left = `${Math.round(placement.left)}px`;
+    submenu.style.top = `${Math.round(placement.top)}px`;
+  }
+
+  function closeContextSubmenu(submenu, menuItem = null) {
+    if (menuItem) {
+      menuItem.classList.remove('context-menu-item--submenu-left');
+    }
+    if (submenu) {
+      submenu.classList.remove('context-menu-submenu--visible');
+      submenu.classList.remove('context-menu-submenu--left');
+    }
+    if (activeContextSubmenu?.submenu === submenu) {
+      activeContextSubmenu = null;
+    }
+  }
+
+  function closeActiveContextSubmenu() {
+    if (!activeContextSubmenu) return;
+    const { submenu, menuItem } = activeContextSubmenu;
+    activeContextSubmenu = null;
+    closeContextSubmenu(submenu, menuItem);
+  }
+
+  function openContextSubmenu(menuItem, submenu) {
+    if (!menuItem || !submenu) return;
+    clearSubmenuHideTimer();
+    if (activeContextSubmenu?.submenu && activeContextSubmenu.submenu !== submenu) {
+      closeActiveContextSubmenu();
+    }
+    positionContextSubmenu(menuItem, submenu);
+    submenu.classList.add('context-menu-submenu--visible');
+    activeContextSubmenu = { menuItem, submenu };
+  }
+
+  function updateSubmenuDirection(menuItem, submenu) {
+    positionContextSubmenu(menuItem, submenu);
+  }
+
+  function isTargetInsideAnyContextSubmenu(target) {
+    if (!target || !(target instanceof Element)) return false;
+    if (regenerateSubmenu && regenerateSubmenu.contains(target)) return true;
+    if (insertMessageSubmenu && insertMessageSubmenu.contains(target)) return true;
+    return false;
   }
 
   /**
@@ -603,6 +710,11 @@ export function createContextMenuManager(appContext) {
     currentMessageElement = messageElement;
     currentMessageContainer = resolveMessageContainer(messageElement);
     const activeContainer = currentMessageContainer || chatContainer;
+
+    clearSubmenuHideTimer();
+    closeActiveContextSubmenu();
+    ensureSubmenuPortal(regenerateSubmenu);
+    ensureSubmenuPortal(insertMessageSubmenu);
 
     // 设置菜单位置
     contextMenu.style.display = 'block';
@@ -656,7 +768,7 @@ export function createContextMenuManager(appContext) {
       updateSubmenuDirection(regenerateButton, regenerateSubmenu);
       updateRegenerateApiHint(regenTarget);
     } else {
-      regenerateButton.classList.remove('context-menu-item--submenu-left');
+      closeContextSubmenu(regenerateSubmenu, regenerateButton);
       if (regenerateApiHint) {
         regenerateApiHint.textContent = '';
         regenerateApiHint.removeAttribute('title');
@@ -674,7 +786,7 @@ export function createContextMenuManager(appContext) {
       if (canShowInsertOptions) {
         updateSubmenuDirection(insertMessageMenu, insertMessageSubmenu);
       } else {
-        insertMessageMenu.classList.remove('context-menu-item--submenu-left');
+        closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
       }
     }
     // 始终显示创建分支对话按钮，但只有在有足够消息时才可用
@@ -711,6 +823,10 @@ export function createContextMenuManager(appContext) {
    */
   function hideContextMenu() {
     contextMenu.style.display = 'none';
+    clearSubmenuHideTimer();
+    closeActiveContextSubmenu();
+    closeContextSubmenu(regenerateSubmenu, regenerateButton);
+    closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
     currentMessageElement = null;
     currentMessageContainer = null;
   }
@@ -1205,6 +1321,26 @@ export function createContextMenuManager(appContext) {
     attachContextMenuListeners(chatContainer);
     attachContextMenuListeners(threadContainer);
 
+    const bindPortalSubmenuHover = (menuItem, submenu) => {
+      if (!menuItem || !submenu) return;
+      menuItem.addEventListener('mouseenter', () => openContextSubmenu(menuItem, submenu));
+      menuItem.addEventListener('focusin', () => openContextSubmenu(menuItem, submenu));
+      menuItem.addEventListener('mouseleave', scheduleSubmenuHide);
+      submenu.addEventListener('mouseenter', clearSubmenuHideTimer);
+      submenu.addEventListener('mouseleave', scheduleSubmenuHide);
+    };
+
+    ensureSubmenuPortal(regenerateSubmenu);
+    ensureSubmenuPortal(insertMessageSubmenu);
+    bindPortalSubmenuHover(regenerateButton, regenerateSubmenu);
+    bindPortalSubmenuHover(insertMessageMenu, insertMessageSubmenu);
+
+    window.addEventListener('resize', () => {
+      if (contextMenu.style.display !== 'block') return;
+      if (!activeContextSubmenu?.menuItem || !activeContextSubmenu?.submenu) return;
+      positionContextSubmenu(activeContextSubmenu.menuItem, activeContextSubmenu.submenu);
+    });
+
     // 按钮点击处理
     copyMessageButton.addEventListener('click', copyMessageContent);
     copyCodeButton.addEventListener('click', copyCodeContent);
@@ -1285,9 +1421,11 @@ export function createContextMenuManager(appContext) {
 
     // 点击其他地方隐藏菜单
     document.addEventListener('click', (e) => {
-      if (!contextMenu.contains(e.target)) {
-        hideContextMenu();
+      const target = e.target;
+      if (contextMenu.contains(target) || isTargetInsideAnyContextSubmenu(target)) {
+        return;
       }
+      hideContextMenu();
     });
 
   }
