@@ -4016,6 +4016,8 @@ input:checked + .slider::before {
     right: -40px;   /* 向右扩展更多 */
     height: 32px;   /* 增加高度 */
     background: transparent;
+    /* 该桥接区域仅用于 hover 过渡，不应拦截底层按钮点击。 */
+    pointer-events: none;
 }
 
 .temperature-value {

@@ -50,6 +50,10 @@ export function createUIManager(appContext) {
 
   let settingsMenuTimeout = null; // Timeout for hover-based closing
   const SETTINGS_MENU_VIEWPORT_MARGIN_PX = 8;
+  const SETTINGS_MENU_CLOSE_DELAY_MS = 220;
+  const SETTINGS_MENU_SAFE_ZONE_PADDING_PX = 16;
+  let lastPointerClientX = null;
+  let lastPointerClientY = null;
 
   function clampToRange(value, min, max) {
     const numeric = Number(value);
@@ -98,6 +102,48 @@ export function createUIManager(appContext) {
 
     menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
+  }
+
+  function isPointInsideRect(x, y, rect, padding = 0) {
+    if (!rect) return false;
+    return x >= (rect.left - padding)
+      && x <= (rect.right + padding)
+      && y >= (rect.top - padding)
+      && y <= (rect.bottom + padding);
+  }
+
+  /**
+   * hover 关闭保护区：
+   * - 包含按钮、菜单本体；
+   * - 额外包含二者之间的“连线走廊”，用于替代过去的伪元素桥接层。
+   */
+  function isPointerWithinSettingsMenuSafeZone() {
+    if (!dom.settingsMenu || !dom.settingsButton) return false;
+    if (!Number.isFinite(lastPointerClientX) || !Number.isFinite(lastPointerClientY)) return false;
+    const x = lastPointerClientX;
+    const y = lastPointerClientY;
+    const menuRect = dom.settingsMenu.getBoundingClientRect();
+    const buttonRect = dom.settingsButton.getBoundingClientRect();
+
+    if (isPointInsideRect(x, y, menuRect, 2) || isPointInsideRect(x, y, buttonRect, 2)) {
+      return true;
+    }
+
+    const pad = SETTINGS_MENU_SAFE_ZONE_PADDING_PX;
+    const corridorLeft = Math.min(menuRect.left, buttonRect.left) - pad;
+    const corridorRight = Math.max(menuRect.right, buttonRect.right) + pad;
+    const menuIsAboveButton = menuRect.bottom <= buttonRect.top;
+    const menuIsBelowButton = buttonRect.bottom <= menuRect.top;
+
+    if (menuIsAboveButton || menuIsBelowButton) {
+      const corridorTop = (menuIsAboveButton ? menuRect.bottom : buttonRect.bottom) - pad;
+      const corridorBottom = (menuIsAboveButton ? buttonRect.top : menuRect.top) + pad;
+      return x >= corridorLeft && x <= corridorRight && y >= corridorTop && y <= corridorBottom;
+    }
+
+    const unionTop = Math.min(menuRect.top, buttonRect.top) - pad;
+    const unionBottom = Math.max(menuRect.bottom, buttonRect.bottom) + pad;
+    return x >= corridorLeft && x <= corridorRight && y >= unionTop && y <= unionBottom;
   }
 
   /**
@@ -155,6 +201,12 @@ export function createUIManager(appContext) {
       } else {
         appContext.dom.settingsMenu.classList.remove('visible');
       }
+    }
+
+    if (!appContext.dom.settingsMenu.classList.contains('visible')) {
+      clearTimeout(settingsMenuTimeout);
+      settingsMenuTimeout = null;
+      return;
     }
 
     if (appContext.dom.settingsMenu.classList.contains('visible')) {
@@ -243,8 +295,14 @@ export function createUIManager(appContext) {
     if (dom.settingsButton && dom.settingsMenu) {
         ensureSettingsMenuPortal();
 
+        window.addEventListener('pointermove', (event) => {
+          lastPointerClientX = Number(event.clientX);
+          lastPointerClientY = Number(event.clientY);
+        }, { passive: true });
+
         const openSettingsMenu = () => {
             clearTimeout(settingsMenuTimeout);
+            settingsMenuTimeout = null;
             // 设置菜单不参与互斥：打开它不应关闭其他面板
             dom.settingsMenu.classList.add('visible');
             positionSettingsMenu();
@@ -309,8 +367,15 @@ export function createUIManager(appContext) {
         const scheduleCloseSettingsMenu = () => {
             clearTimeout(settingsMenuTimeout);
             settingsMenuTimeout = setTimeout(() => {
+                settingsMenuTimeout = null;
+                if (!dom.settingsMenu.classList.contains('visible')) return;
+                // 鼠标位于“按钮↔菜单”走廊时继续保留，避免移动到菜单过程中闪退。
+                if (isPointerWithinSettingsMenuSafeZone()) {
+                  scheduleCloseSettingsMenu();
+                  return;
+                }
                 dom.settingsMenu.classList.remove('visible');
-            }, 300); // 300ms delay before closing
+            }, SETTINGS_MENU_CLOSE_DELAY_MS);
         };
 
         dom.settingsButton.addEventListener('mouseenter', openSettingsMenu);
