@@ -5571,8 +5571,8 @@ export function createChatHistoryUI(appContext) {
   //
   // 设计目标：
   // - 用自绘 tooltip 替换浏览器原生 title（原生 tooltip 难以排版/无法显示消息预览）；
-  // - 仅在用户“按住 Alt”时展示预览，避免日常浏览时被预览框遮挡；
-  // - 按住 Alt 后立即读取鼠标下方会话（无 300ms 延迟），并跟随鼠标显示在右下/右上；
+  // - 仅在用户“按住 Ctrl”时展示预览，避免日常浏览时被预览框遮挡；
+  // - 按住 Ctrl 后立即读取鼠标下方会话（无 300ms 延迟），并跟随鼠标显示在右下/右上；
   // - 避免性能问题：只在会话切换时按需读取会话，并对结果做短 TTL 缓存与并发去重。
   //
   // 注意：
@@ -6066,7 +6066,7 @@ export function createChatHistoryUI(appContext) {
     if (altPreviewHandlersBound) return;
     altPreviewHandlersBound = true;
 
-    // 记录鼠标位置：Alt 按下时可立即定位到“鼠标下方的会话”
+    // 记录鼠标位置：Ctrl 按下时可立即定位到“鼠标下方的会话”
     document.addEventListener('mousemove', (e) => {
       altPreviewLastPoint = { x: e.clientX, y: e.clientY };
       if (!altPreviewActive) return;
@@ -6074,7 +6074,7 @@ export function createChatHistoryUI(appContext) {
     }, { passive: true });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Alt') return;
+      if (e.key !== 'Control') return;
       if (altPreviewActive) return;
       altPreviewActive = true;
       // 立即更新一次：不需要任何 hover 延迟
@@ -6082,7 +6082,7 @@ export function createChatHistoryUI(appContext) {
     });
 
     document.addEventListener('keyup', (e) => {
-      if (e.key !== 'Alt') return;
+      if (e.key !== 'Control') return;
       altPreviewActive = false;
       hideChatHistoryPreviewTooltip();
     });
@@ -6527,14 +6527,14 @@ export function createChatHistoryUI(appContext) {
       }
     });
 
-    // 预览 tooltip 元信息：供 Alt 预览模式使用（按住 Alt 才展示）
+    // 预览 tooltip 元信息：供 Ctrl 预览模式使用（按住 Ctrl 才展示）
     const hoverMeta = {
       conversationId: conv.id,
       title: (typeof conv?.summary === 'string' && conv.summary.trim()) ? conv.summary.trim() : '无摘要',
       meta: displayInfos,
       submeta: [conv?.title, conv?.url].map(v => (typeof v === 'string' ? v.trim() : '')).filter(Boolean).join(' · ')
     };
-    // Alt 预览模式：把元信息挂到 DOM 节点上，供全局的 Alt+MouseMove 快速读取。
+    // Ctrl 预览模式：把元信息挂到 DOM 节点上，供全局的 Ctrl+MouseMove 快速读取。
     // 说明：不再使用“纯 hover + 延迟”的方式触发，避免日常浏览时预览框频繁弹出遮挡内容。
     item._previewHoverMeta = hoverMeta;
 
