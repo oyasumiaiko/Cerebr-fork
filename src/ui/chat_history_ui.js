@@ -70,10 +70,12 @@ export function createChatHistoryUI(appContext) {
   const THREAD_OVERVIEW_TOP_TRIGGER_PX = 20;
   let threadOverviewDrawer = null;
   let threadOverviewDrawerHandle = null;
+  let threadOverviewDrawerHandleIcon = null;
   let threadOverviewDrawerPanel = null;
   let threadOverviewHasContent = false;
   let threadOverviewExpanded = false;
   let threadOverviewPinned = false;
+  let threadOverviewHandleHovered = false;
   let threadOverviewHandleVisible = false;
   let threadOverviewDrawerEventsBound = false;
   let threadOverviewDrawerResizeObserver = null;
@@ -2879,9 +2881,28 @@ export function createChatHistoryUI(appContext) {
     threadOverviewDrawer.classList.toggle('is-handle-visible', showHandle);
     threadOverviewDrawer.setAttribute('aria-hidden', hasContent ? 'false' : 'true');
 
+    const nextAction = !hasContent
+      ? 'none'
+      : (isPinned
+        ? (threadOverviewHandleHovered ? 'collapse' : 'pinned')
+        : (isOpen ? 'pin' : 'expand'));
+    const actionMeta = nextAction === 'collapse'
+      ? { label: '收起线程抽屉', iconClass: 'fa-solid fa-chevron-up' }
+      : (nextAction === 'pinned'
+        ? { label: '已固定（悬停后点击可收起）', iconClass: 'fa-solid fa-thumbtack' }
+        : (nextAction === 'pin'
+          ? { label: '固定线程抽屉', iconClass: 'fa-solid fa-thumbtack' }
+          : { label: '展开并固定线程抽屉', iconClass: 'fa-solid fa-chevron-down' }));
+    if (!threadOverviewDrawerHandleIcon) {
+      threadOverviewDrawerHandleIcon = threadOverviewDrawerHandle.querySelector('i');
+    }
+    if (threadOverviewDrawerHandleIcon) {
+      threadOverviewDrawerHandleIcon.className = `${actionMeta.iconClass} conversation-thread-overview-drawer__handle-icon`;
+    }
+    threadOverviewDrawerHandle.dataset.action = nextAction;
     threadOverviewDrawerHandle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-    threadOverviewDrawerHandle.setAttribute('aria-label', isOpen ? '收起线程抽屉' : '展开并固定线程抽屉');
-    threadOverviewDrawerHandle.title = isOpen ? '收起线程抽屉' : '展开并固定线程抽屉';
+    threadOverviewDrawerHandle.setAttribute('aria-label', actionMeta.label);
+    threadOverviewDrawerHandle.title = actionMeta.label;
     threadOverviewDrawerPanel.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
   }
 
@@ -2980,7 +3001,10 @@ export function createChatHistoryUI(appContext) {
     const handle = document.createElement('button');
     handle.type = 'button';
     handle.className = 'conversation-thread-overview-drawer__handle';
-    handle.innerHTML = '<i class="fa-solid fa-chevron-down" aria-hidden="true"></i>';
+    const handleIcon = document.createElement('i');
+    handleIcon.className = 'fa-solid fa-chevron-down conversation-thread-overview-drawer__handle-icon';
+    handleIcon.setAttribute('aria-hidden', 'true');
+    handle.appendChild(handleIcon);
     handle.setAttribute('aria-label', '展开线程抽屉');
     handle.setAttribute('aria-expanded', 'false');
     handle.title = '展开线程抽屉';
@@ -2992,19 +3016,27 @@ export function createChatHistoryUI(appContext) {
         threadOverviewPinned = false;
         threadOverviewHandleVisible = true;
         setThreadOverviewExpanded(false, { keepHandleVisible: true });
+        syncThreadOverviewDrawerGeometry();
+        syncThreadOverviewDrawerState();
         return;
       }
       threadOverviewPinned = true;
       threadOverviewHandleVisible = true;
       setThreadOverviewExpanded(true, { keepHandleVisible: true });
+      syncThreadOverviewDrawerGeometry();
+      syncThreadOverviewDrawerState();
     });
     handle.addEventListener('mouseenter', () => {
+      threadOverviewHandleHovered = true;
+      syncThreadOverviewDrawerState();
       if (!threadOverviewHasContent) return;
       setThreadOverviewHandleVisible(true);
       if (threadOverviewPinned) return;
       setThreadOverviewExpanded(true, { keepHandleVisible: true });
     });
     handle.addEventListener('mouseleave', () => {
+      threadOverviewHandleHovered = false;
+      syncThreadOverviewDrawerState();
       if (threadOverviewPinned || threadOverviewExpanded) return;
       setThreadOverviewHandleVisible(false);
     });
@@ -3019,6 +3051,8 @@ export function createChatHistoryUI(appContext) {
 
     // 悬停展开：鼠标离开整个抽屉区域时自动收起（仅对未固定状态生效）。
     drawer.addEventListener('mouseleave', () => {
+      threadOverviewHandleHovered = false;
+      syncThreadOverviewDrawerState();
       if (!threadOverviewHasContent || threadOverviewPinned) return;
       setThreadOverviewExpanded(false);
       setThreadOverviewHandleVisible(false);
@@ -3026,6 +3060,7 @@ export function createChatHistoryUI(appContext) {
 
     threadOverviewDrawer = drawer;
     threadOverviewDrawerHandle = handle;
+    threadOverviewDrawerHandleIcon = handleIcon;
     threadOverviewDrawerPanel = panel;
 
     bindThreadOverviewDrawerEventsOnce();
@@ -3039,6 +3074,7 @@ export function createChatHistoryUI(appContext) {
     threadOverviewHasContent = false;
     threadOverviewExpanded = false;
     threadOverviewPinned = false;
+    threadOverviewHandleHovered = false;
     threadOverviewHandleVisible = false;
     if (threadOverviewDrawerPanel) {
       threadOverviewDrawerPanel.innerHTML = '';

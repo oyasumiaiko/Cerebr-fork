@@ -1052,7 +1052,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     border-color: color-mix(in srgb, var(--cerebr-highlight) 56%, transparent);
 }
 
-.conversation-thread-overview-drawer__handle i {
+.conversation-thread-overview-drawer__handle-icon {
     position: relative;
     z-index: 1;
     font-size: 0.78rem;
@@ -1065,8 +1065,14 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     pointer-events: auto;
 }
 
-.conversation-thread-overview-drawer.is-open .conversation-thread-overview-drawer__handle i {
-    transform: rotate(180deg);
+/* 已固定时常亮为 active 色，明确提示“当前处于固定展开状态”。 */
+.conversation-thread-overview-drawer.is-pinned .conversation-thread-overview-drawer__handle {
+    color: var(--cerebr-highlight);
+}
+
+.conversation-thread-overview-drawer.is-pinned .conversation-thread-overview-drawer__handle::before {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 62%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, var(--cerebr-input-bg) 90%);
 }
 
 .conversation-thread-overview-drawer__panel {
