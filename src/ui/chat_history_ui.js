@@ -2951,6 +2951,7 @@ export function createChatHistoryUI(appContext) {
   function closeChatHistoryPanel() {
     const panel = document.getElementById('chat-history-panel');
     if (panel && panel.classList.contains('visible')) {
+      persistChatHistoryPanelFullscreenLayout(panel);
       if (typeof panel._cancelDragMove === 'function') {
         panel._cancelDragMove();
       }
@@ -7690,6 +7691,8 @@ export function createChatHistoryUI(appContext) {
   const CHAT_HISTORY_PANEL_PIN_ATTRIBUTE = 'data-outside-click-pinned';
   const CHAT_HISTORY_PANEL_PIN_BUTTON_CLASS = 'chat-history-panel-pin-btn';
   const CHAT_HISTORY_PANEL_PIN_BUTTON_HTML = '<i class="fa-solid fa-thumbtack"></i>';
+  const CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY = 'cerebr.chat_history_panel_fullscreen_layout_v1';
+  const CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION = 1;
 
   function isChatHistoryPanelPinned() {
     const panel = document.getElementById('chat-history-panel');
@@ -7744,6 +7747,89 @@ export function createChatHistoryUI(appContext) {
 
   function isChatHistoryPanelFullscreenLayout() {
     return !!(state?.isFullscreen || document.documentElement.classList.contains('fullscreen-mode'));
+  }
+
+  // 读取 Esc 面板在全屏模式下的布局快照（仅保存位置/尺寸，不影响侧栏模式）。
+  function readChatHistoryPanelFullscreenLayout() {
+    try {
+      const rawValue = window?.localStorage?.getItem(CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY);
+      if (!rawValue) return null;
+      const parsed = JSON.parse(rawValue);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (Number(parsed.version) !== CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION) return null;
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // 持久化当前 Esc 面板布局到 localStorage，仅在全屏模式下执行。
+  function persistChatHistoryPanelFullscreenLayout(panel) {
+    if (!panel || !isChatHistoryPanelFullscreenLayout()) return;
+    try {
+      const rect = panel.getBoundingClientRect();
+      if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+
+      const dragPositioned = panel.dataset.dragPositioned === '1';
+      const sizeCustomized = panel.dataset.sizeCustomized === '1';
+      const fallbackLeft = Number.isFinite(rect.left) ? rect.left : null;
+      const fallbackTop = Number.isFinite(rect.top) ? rect.top : null;
+      const styleLeft = Number.parseFloat(panel.style.left);
+      const styleTop = Number.parseFloat(panel.style.top);
+      const left = dragPositioned
+        ? (Number.isFinite(styleLeft) ? styleLeft : fallbackLeft)
+        : fallbackLeft;
+      const top = dragPositioned
+        ? (Number.isFinite(styleTop) ? styleTop : fallbackTop)
+        : fallbackTop;
+
+      const payload = {
+        version: CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION,
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        left: Number.isFinite(left) ? Math.round(left) : null,
+        top: Number.isFinite(top) ? Math.round(top) : null,
+        dragPositioned,
+        sizeCustomized,
+        updatedAt: Date.now()
+      };
+      window.localStorage.setItem(CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+  }
+
+  // 打开 Esc 面板时尝试恢复上次全屏布局（大小 + 拖拽位置）。
+  function restoreChatHistoryPanelFullscreenLayout(panel) {
+    if (!panel || !isChatHistoryPanelFullscreenLayout()) return;
+    const saved = readChatHistoryPanelFullscreenLayout();
+    if (!saved) return;
+
+    const hasCustomSize = saved.sizeCustomized === true
+      && Number.isFinite(Number(saved.width))
+      && Number.isFinite(Number(saved.height));
+    if (hasCustomSize) {
+      panel.style.width = `${Math.round(Number(saved.width))}px`;
+      panel.style.height = `${Math.round(Number(saved.height))}px`;
+      panel.dataset.sizeCustomized = '1';
+    } else {
+      panel.dataset.sizeCustomized = '0';
+    }
+
+    const hasCustomPosition = saved.dragPositioned === true
+      && Number.isFinite(Number(saved.left))
+      && Number.isFinite(Number(saved.top));
+    if (hasCustomPosition) {
+      panel.style.left = `${Math.round(Number(saved.left))}px`;
+      panel.style.top = `${Math.round(Number(saved.top))}px`;
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+      panel.style.margin = '0';
+      panel.dataset.dragPositioned = '1';
+    } else {
+      resetChatHistoryPanelCenterPosition(panel);
+    }
+
+    clampChatHistoryPanelSize(panel);
+    clampChatHistoryPanelPosition(panel);
   }
 
   function resetChatHistoryPanelCenterPosition(panel) {
@@ -7862,6 +7948,7 @@ export function createChatHistoryUI(appContext) {
     const handlePointerEnd = (event) => {
       if (!dragSession) return;
       if (event?.pointerId != null && event.pointerId !== dragSession.pointerId) return;
+      persistChatHistoryPanelFullscreenLayout(panel);
       clearDraggingState();
     };
 
@@ -7945,6 +8032,7 @@ export function createChatHistoryUI(appContext) {
     const handleResizePointerEnd = (event) => {
       if (!resizeSession) return;
       if (event?.pointerId != null && event.pointerId !== resizeSession.pointerId) return;
+      persistChatHistoryPanelFullscreenLayout(panel);
       clearResizingState();
     };
 
@@ -7988,6 +8076,7 @@ export function createChatHistoryUI(appContext) {
         if (!panel.classList.contains('visible')) return;
         clampChatHistoryPanelSize(panel);
         syncChatHistoryPanelLayoutMode(panel);
+        persistChatHistoryPanelFullscreenLayout(panel);
       });
     }
   }
@@ -8446,6 +8535,7 @@ export function createChatHistoryUI(appContext) {
     void activateChatHistoryTab(panel, initialTab);
 
     panel.style.display = 'flex';
+    restoreChatHistoryPanelFullscreenLayout(panel);
     syncChatHistoryPanelLayoutMode(panel);
     clampChatHistoryPanelSize(panel);
     void panel.offsetWidth;  
