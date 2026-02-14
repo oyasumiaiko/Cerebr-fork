@@ -1,3 +1,5 @@
+import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
+
 /**
  * 上下文菜单管理模块
  * 负责处理消息和代码块的右键菜单功能
@@ -837,6 +839,111 @@ export function createContextMenuManager(appContext) {
   }
 
   /**
+   * 判断节点是否位于聊天主面板或线程面板中。
+   * @param {Node|null} node
+   * @returns {boolean}
+   */
+  function isNodeInsideConversationPanels(node) {
+    if (!node) return false;
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    if (!element) return false;
+    if (chatContainer?.contains(element)) return true;
+    if (threadContainer?.contains(element)) return true;
+    return false;
+  }
+
+  /**
+   * 判断当前焦点是否位于可编辑控件，避免覆盖输入框/编辑器的原生复制行为。
+   * @returns {boolean}
+   */
+  function isEditableFocusActive() {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return false;
+    if (active.isContentEditable) return true;
+    if (active.tagName === 'TEXTAREA') return true;
+    if (active.tagName !== 'INPUT') return false;
+    const inputType = (active.getAttribute('type') || 'text').toLowerCase();
+    return [
+      'text', 'search', 'url', 'tel', 'email', 'password', 'number'
+    ].includes(inputType);
+  }
+
+  /**
+   * 从 KaTeX 节点提取原始 TeX 源码（来自 annotation）。
+   * @param {Element} katexElement
+   * @returns {string}
+   */
+  function extractKaTeXSource(katexElement) {
+    if (!(katexElement instanceof Element)) return '';
+    const annotation = katexElement.querySelector('annotation[encoding="application/x-tex"]');
+    return (annotation?.textContent || '').trim();
+  }
+
+  /**
+   * 将选区片段中的 KaTeX 渲染结果替换回 TeX 文本，避免复制出“可见层 + MathML 层”的重复内容。
+   * @param {DocumentFragment} fragment
+   * @returns {boolean} 是否发生了替换
+   */
+  function replaceKaTeXWithSourceInFragment(fragment) {
+    if (!(fragment instanceof DocumentFragment)) return false;
+    let replaced = false;
+
+    // 先处理块级公式，避免后续 inline 选择器重复命中。
+    const displayNodes = Array.from(fragment.querySelectorAll('.katex-display'));
+    displayNodes.forEach((displayNode) => {
+      const katexNode = displayNode.querySelector('.katex');
+      const source = extractKaTeXSource(katexNode || displayNode);
+      if (!source) return;
+      displayNode.replaceWith(document.createTextNode(`\\[${source}\\]`));
+      replaced = true;
+    });
+
+    // 再处理行内公式。
+    const inlineNodes = Array.from(fragment.querySelectorAll('.katex'));
+    inlineNodes.forEach((katexNode) => {
+      if (katexNode.closest('.katex-display')) return;
+      const source = extractKaTeXSource(katexNode);
+      if (!source) return;
+      katexNode.replaceWith(document.createTextNode(`\\(${source}\\)`));
+      replaced = true;
+    });
+
+    return replaced;
+  }
+
+  /**
+   * 统一处理“手动选择后 Ctrl/Cmd+C”场景：
+   * 当选区包含 KaTeX 时，输出稳定的 TeX 文本，避免出现重复符号与错乱换行。
+   * @param {ClipboardEvent} event
+   */
+  function handleMathSelectionCopy(event) {
+    if (!event?.clipboardData) return;
+    if (isEditableFocusActive()) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+    if (!isNodeInsideConversationPanels(selection.anchorNode) && !isNodeInsideConversationPanels(selection.focusNode)) return;
+
+    const range = selection.getRangeAt(0);
+    const fragment = range.cloneContents();
+    if (!(fragment instanceof DocumentFragment)) return;
+    if (!fragment.querySelector('.katex') && !fragment.querySelector('.katex-display')) return;
+    if (!replaceKaTeXWithSourceInFragment(fragment)) return;
+
+    const buffer = document.createElement('div');
+    buffer.appendChild(fragment);
+    const plainText = (buffer.innerText || buffer.textContent || '').replace(/\r\n/g, '\n');
+    if (!plainText) return;
+
+    event.preventDefault();
+    event.clipboardData.setData('text/plain', plainText);
+    const htmlText = buffer.innerHTML || '';
+    if (htmlText) {
+      event.clipboardData.setData('text/html', htmlText);
+    }
+  }
+
+  /**
    * 复制代码块内容
    */
   function copyCodeContent() {
@@ -849,7 +956,6 @@ export function createContextMenuManager(appContext) {
       });
     }
   }
-
   /**
    * 重新生成消息
    */
@@ -1287,7 +1393,7 @@ export function createContextMenuManager(appContext) {
       // 监听消息（用户或 AI）右键点击
       container.addEventListener('contextmenu', (e) => {
         // 检查是否有文本被选中
-        const selectedText = window.getSelection().toString();
+        const selectedText = serializeSelectionTextWithMath(window.getSelection(), { trim: true });
         
         // 说明：
         // - 有选中文本时，优先保留浏览器默认菜单（复制/查找等）；
@@ -1417,6 +1523,9 @@ export function createContextMenuManager(appContext) {
       }
       hideContextMenu();
     });
+
+    // 修复 KaTeX 选区复制异常：将复制内容标准化为 TeX 文本，避免重复/乱码。
+    document.addEventListener('copy', handleMathSelectionCopy);
 
   }
 

@@ -1,6 +1,7 @@
 import { createSidebarAppContext, registerSidebarUtilities } from './sidebar_app_context.js';
 import { initializeSidebarServices } from './sidebar_bootstrap.js';
 import { registerSidebarEventHandlers } from './sidebar_events.js';
+import { serializeSelectionTextWithMath } from '../../utils/math_selection_text.js';
 
 /**
  * 页面 DOM 就绪后执行整体启动流程：检测模式 -> 构建上下文 -> 初始化服务 -> 注册事件。
@@ -89,9 +90,7 @@ function setupSidebarSelectionBroadcast(isStandalone) {
   window.addEventListener('selectionchange', () => {
     try {
       const selection = window.getSelection();
-      const text = (selection && !selection.isCollapsed)
-        ? selection.toString().trim()
-        : '';
+      const text = serializeSelectionTextWithMath(selection, { trim: true });
 
       // 文本未变化时不广播，避免产生噪音
       if (text === lastSelection) return;

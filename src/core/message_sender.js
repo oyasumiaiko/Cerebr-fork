@@ -10,6 +10,7 @@ import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { resolveResponseHandlingMode, planStreamingRenderTransition } from './response_flow_state.js';
+import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
 
 /**
  * 创建消息发送器
@@ -4448,7 +4449,7 @@ export function createMessageSender(appContext) {
 
       // 检查焦点是否在侧栏内
       const isSidebarFocused = document.hasFocus();
-      const sidebarSelection = window.getSelection().toString().trim();
+      const sidebarSelection = serializeSelectionTextWithMath(window.getSelection(), { trim: true });
 
       // 获取选中的文本内容
       const selectedText = (isSidebarFocused && sidebarSelection) ?
