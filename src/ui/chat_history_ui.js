@@ -1980,6 +1980,7 @@ export function createChatHistoryUI(appContext) {
     const metadataMerge = mergeConversationSaveMetadataState({
       isUpdate,
       startPageMeta,
+      startPageMetaSource: startPageMeta.source,
       summaryCandidate: summary,
       existingConversation: existingConversationSnapshot,
       summaryFromExistingTitle

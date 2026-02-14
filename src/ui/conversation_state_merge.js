@@ -69,6 +69,7 @@ function normalizeOptionalTrimmedString(value) {
  * @param {{
  *   isUpdate?: boolean,
  *   startPageMeta?: { url?: string, title?: string },
+ *   startPageMetaSource?: string,
  *   summaryCandidate?: string,
  *   existingConversation?: any,
  *   summaryFromExistingTitle?: string
@@ -86,6 +87,7 @@ export function mergeConversationSaveMetadataState(input = {}) {
   const isUpdate = input?.isUpdate === true;
   const startPageMeta = input?.startPageMeta || {};
   const existingConversation = input?.existingConversation || null;
+  const startPageMetaSource = normalizeOptionalTrimmedString(input?.startPageMetaSource);
   const summaryCandidate = (typeof input?.summaryCandidate === 'string') ? input.summaryCandidate : '';
   const summaryFromExistingTitle = (typeof input?.summaryFromExistingTitle === 'string')
     ? input.summaryFromExistingTitle
@@ -93,14 +95,22 @@ export function mergeConversationSaveMetadataState(input = {}) {
 
   let urlToSave = normalizeOptionalTrimmedString(startPageMeta?.url);
   let titleToSave = normalizeOptionalTrimmedString(startPageMeta?.title);
+  const hasFrozenStartPageMeta = startPageMetaSource === 'first_user_message' && !!(urlToSave || titleToSave);
   let summaryToSave = summaryCandidate;
   let summarySourceToSave = isUpdate ? null : 'default';
   let parentConversationIdToSave = null;
   let forkedFromMessageIdToSave = null;
 
   if (isUpdate && existingConversation && typeof existingConversation === 'object') {
-    urlToSave = normalizeOptionalTrimmedString(existingConversation.url);
-    titleToSave = normalizeOptionalTrimmedString(existingConversation.title);
+    const existingUrl = normalizeOptionalTrimmedString(existingConversation.url);
+    const existingTitle = normalizeOptionalTrimmedString(existingConversation.title);
+    if (!hasFrozenStartPageMeta) {
+      urlToSave = existingUrl;
+      titleToSave = existingTitle;
+    } else {
+      if (!urlToSave) urlToSave = existingUrl;
+      if (!titleToSave) titleToSave = existingTitle;
+    }
 
     const summarySource = normalizeOptionalTrimmedString(existingConversation.summarySource);
     summarySourceToSave = summarySource || null;

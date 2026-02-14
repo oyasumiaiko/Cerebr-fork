@@ -1402,6 +1402,10 @@ function extractImportantDOM() {
 async function extractPageContent() {
   console.log('extractPageContent 开始提取页面内容');
 
+  // 在提取开始时冻结页面元数据快照，保证 URL/标题 与本次内容抓取使用同一时间点。
+  const snapshotUrl = window.location.href;
+  const snapshotTitle = document.title || snapshotUrl;
+
   // 检查是否是PDF或者iframe中的PDF
   if (document.contentType === 'application/pdf' ||
       (window.location.href.includes('.pdf') ||
@@ -1442,7 +1446,7 @@ async function extractPageContent() {
     if (pdfResult && typeof pdfResult.fullText === 'string') {
       console.log('将PDF内容存入缓存');
       const resultToCache = {
-        title: document.title || pdfUrl, // 为标题提供备用值
+        title: snapshotTitle || pdfUrl,
         url: pdfUrl,
         content: pdfResult.fullText, // 已知为字符串
         chapters: pdfResult.chapters || [], // 为章节提供备用值
@@ -1582,8 +1586,8 @@ async function extractPageContent() {
   }
   
   const result = {
-    title: document.title || window.location.href, // 为标题提供备用值
-    url: window.location.href,
+    title: snapshotTitle,
+    url: snapshotUrl, // 使用提取开始时冻结的页面 URL
     content: mainContent,
     selectedText: currentSelection
   };

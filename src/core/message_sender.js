@@ -2812,7 +2812,10 @@ export function createMessageSender(appContext) {
           pageContentResponse = await getPageContent();
         }
         if (pageContentResponse) {
-          pageContentLength = state.pageInfo?.content?.length || 0;
+          pageContentLength = (typeof pageContentResponse?.content === 'string')
+            ? pageContentResponse.content.length
+            : 0;
+          let didCalibrateFirstUserPageMeta = false;
 
           // 兜底：为“首条用户消息”校准/补齐 pageMeta（固定会话来源页）
           //
@@ -2841,6 +2844,7 @@ export function createMessageSender(appContext) {
                     // 若与之前冻结的快照不一致，则以 pageContentResponse 为准进行校准（它对应“实际用于总结”的页面内容）
                     if (prevUrl !== url || prevTitle !== title) {
                       node.pageMeta = { url, title };
+                      didCalibrateFirstUserPageMeta = true;
                     }
                   }
                 }
@@ -2848,6 +2852,9 @@ export function createMessageSender(appContext) {
             }
           } catch (e) {
             console.warn('补齐首条用户消息 pageMeta 失败（将回退为保存时读取 pageInfo）:', e);
+          }
+          if (didCalibrateFirstUserPageMeta && attempt) {
+            await persistAttemptConversationSnapshot(attempt, { force: true });
           }
         } else {
           console.error('获取网页内容失败。');
