@@ -5694,7 +5694,7 @@ export function createChatHistoryUI(appContext) {
       const threadTitleParts = [];
       if (threadCount !== 0) {
         const icon = document.createElement('i');
-        icon.className = 'fa-solid fa-fw fa-layer-group';
+        icon.className = 'fa-solid fa-fw fa-code-branch';
         icon.setAttribute('aria-hidden', 'true');
         const count = document.createElement('span');
         count.className = 'conversation-stat-count';
