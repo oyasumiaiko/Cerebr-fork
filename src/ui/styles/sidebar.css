@@ -5222,6 +5222,25 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     background-color: var(--cerebr-ui-hover-bg);
 }
 
+
+#chat-history-panel .panel-header .chat-history-panel-pin-btn {
+    width: 32px;
+    min-width: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#chat-history-panel .panel-header .chat-history-panel-pin-btn i {
+    pointer-events: none;
+    font-size: 13px;
+}
+
+#chat-history-panel .panel-header .chat-history-panel-pin-btn.is-active {
+    color: var(--cerebr-highlight);
+    background-color: color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
+}
+
 /* 固定聊天记录面板中的标题栏和搜索框 */
 #chat-history-panel .panel-header,
 #chat-history-panel .filter-container {

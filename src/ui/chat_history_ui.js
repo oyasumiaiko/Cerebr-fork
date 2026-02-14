@@ -7674,6 +7674,57 @@ export function createChatHistoryUI(appContext) {
     return lastClosedAt;
   }
 
+
+  const CHAT_HISTORY_PANEL_PIN_DATASET_KEY = 'outsideClickPinned';
+  const CHAT_HISTORY_PANEL_PIN_ATTRIBUTE = 'data-outside-click-pinned';
+  const CHAT_HISTORY_PANEL_PIN_BUTTON_CLASS = 'chat-history-panel-pin-btn';
+  const CHAT_HISTORY_PANEL_PIN_BUTTON_HTML = '<i class="fa-solid fa-thumbtack-angle"></i>';
+
+  function isChatHistoryPanelPinned() {
+    const panel = document.getElementById('chat-history-panel');
+    return !!(panel && panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] === '1');
+  }
+
+  function applyChatHistoryPanelPinState(panel, pinButton, pinned) {
+    if (!panel || !pinButton) return;
+    panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] = pinned ? '1' : '0';
+    pinButton.classList.toggle('is-active', pinned);
+    pinButton.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    pinButton.title = pinned
+      ? 'Esc 菜单已固定：点击外部不会关闭'
+      : '固定 Esc 菜单：点击外部时不自动关闭';
+    pinButton.setAttribute('aria-label', pinButton.title);
+  }
+
+  function ensureChatHistoryPanelPinButton(panel) {
+    if (!panel) return null;
+    const headerActions = panel.querySelector('.panel-header .header-actions');
+    if (!headerActions) return null;
+
+    let pinButton = headerActions.querySelector(`.${CHAT_HISTORY_PANEL_PIN_BUTTON_CLASS}`);
+    if (!pinButton) {
+      pinButton = document.createElement('button');
+      pinButton.type = 'button';
+      pinButton.className = CHAT_HISTORY_PANEL_PIN_BUTTON_CLASS;
+      pinButton.innerHTML = CHAT_HISTORY_PANEL_PIN_BUTTON_HTML;
+      pinButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const nextPinned = panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] !== '1';
+        applyChatHistoryPanelPinState(panel, pinButton, nextPinned);
+      });
+      headerActions.appendChild(pinButton);
+    }
+
+    const firstAction = headerActions.firstElementChild;
+    if (firstAction && firstAction !== pinButton) {
+      headerActions.insertBefore(pinButton, firstAction);
+    }
+
+    const pinned = panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] === '1';
+    applyChatHistoryPanelPinState(panel, pinButton, pinned);
+    return pinButton;
+  }
+
   // Esc 面板在拖动/缩放时使用的一组约束常量。
   const CHAT_HISTORY_PANEL_DRAG_MARGIN_PX = 8;
   const CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX = 8;
@@ -8021,6 +8072,7 @@ export function createChatHistoryUI(appContext) {
       // - 需求背景：打开聊天记录窗口时保持平铺列表，避免首次加载就进行树状排序与额外预热。
       // - 一致性：关闭树状模式用 data-branch-view-mode="" 表示，便于与用户手动切换状态一致。
       panel.dataset.branchViewMode = '';
+      panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] = '0';
 
       // 添加标题栏
       const header = document.createElement('div');
@@ -8052,6 +8104,7 @@ export function createChatHistoryUI(appContext) {
       header.appendChild(title);
       header.appendChild(headerActions);
       panel.appendChild(header);
+      ensureChatHistoryPanelPinButton(panel);
       setupChatHistoryPanelDrag(panel, header);
       setupChatHistoryPanelResize(panel);
 
@@ -8312,6 +8365,10 @@ export function createChatHistoryUI(appContext) {
       if (!panel.hasAttribute('data-branch-view-mode')) {
         panel.dataset.branchViewMode = '';
       }
+      if (!panel.hasAttribute(CHAT_HISTORY_PANEL_PIN_ATTRIBUTE)) {
+        panel.dataset[CHAT_HISTORY_PANEL_PIN_DATASET_KEY] = '0';
+      }
+      ensureChatHistoryPanelPinButton(panel);
 
       // 如果面板已存在，获取 filterInput 引用
       filterInput = panel.querySelector('.filter-container input[type="text"]');
@@ -11750,6 +11807,7 @@ export function createChatHistoryUI(appContext) {
     closeChatHistoryPanel,
     toggleChatHistoryPanel,
     isChatHistoryPanelOpen,
+    isChatHistoryPanelPinned,
     backupConversations,
     restoreConversations, 
     refreshChatHistory,

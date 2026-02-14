@@ -867,6 +867,11 @@ function setupClickAwayHandler(appContext) {
     }
 
     if (!clickInsideManagedElement) {
+      const chatHistoryPanelPinned = !!appContext.services.chatHistoryUI?.isChatHistoryPanelPinned?.();
+      const chatHistoryPanelOpen = !!appContext.services.chatHistoryUI?.isChatHistoryPanelOpen?.();
+      if (chatHistoryPanelOpen && chatHistoryPanelPinned) {
+        return;
+      }
       appContext.services.uiManager.closeExclusivePanels();
     }
   });
