@@ -5114,6 +5114,14 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     cursor: default;
 }
 
+.chat-history-item .info .info-open-state.is-open-current {
+    --status-pill-color: var(--cerebr-green);
+}
+
+.chat-history-item .info .info-open-state.is-open-elsewhere {
+    --status-pill-color: var(--cerebr-highlight);
+}
+
 .chat-history-item .info .info-open-state.is-jumpable {
     cursor: pointer;
 }

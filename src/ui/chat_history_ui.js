@@ -4833,13 +4833,18 @@ export function createChatHistoryUI(appContext) {
     const { tabs, selfTabId, otherTabs } = getConversationOpenTabsState(conversationId);
     const isOpen = tabs.length > 0;
     const isOpenElsewhere = otherTabs.length > 0;
+    const isOpenInCurrentTab = selfTabId !== null
+      && tabs.some((tab) => Number.isFinite(Number(tab?.tabId)) && Number(tab.tabId) === selfTabId);
 
     if (!isOpen) {
       openWrap.hidden = true;
       openWrap.setAttribute('aria-hidden', 'true');
       openBadge.classList.remove('is-jumpable');
+      openBadge.classList.remove('is-open-current');
+      openBadge.classList.remove('is-open-elsewhere');
       openBadge.title = '';
       openBadge.dataset.openStateKey = '';
+      openBadge.textContent = '已打开';
       openBadge.setAttribute('aria-disabled', 'true');
       refreshConversationItemStatusBadgeWrap(item);
       return;
@@ -4849,7 +4854,8 @@ export function createChatHistoryUI(appContext) {
     const nextTitle = isOpenElsewhere
       ? (tooltip ? `${tooltip}\n\n点击跳转到已打开的标签页` : '点击跳转到已打开的标签页')
       : (tooltip || '该会话已在当前标签页打开');
-    const nextKey = `${tabs.length}:${isOpenElsewhere ? 1 : 0}`;
+    const nextKey = `${tabs.length}:${isOpenElsewhere ? 1 : 0}:${isOpenInCurrentTab ? 1 : 0}`;
+    const nextBadgeText = isOpenElsewhere ? '已打开' : '当前打开';
 
     // 性能/体验：避免在存在性快照频繁更新时重复写 title 导致浏览器 tooltip 抖动
     if (openBadge.dataset.openStateKey !== nextKey) {
@@ -4862,6 +4868,11 @@ export function createChatHistoryUI(appContext) {
     openWrap.hidden = false;
     openWrap.setAttribute('aria-hidden', 'false');
     openBadge.classList.toggle('is-jumpable', isOpenElsewhere);
+    openBadge.classList.toggle('is-open-current', !isOpenElsewhere && isOpenInCurrentTab);
+    openBadge.classList.toggle('is-open-elsewhere', isOpenElsewhere);
+    if (openBadge.textContent !== nextBadgeText) {
+      openBadge.textContent = nextBadgeText;
+    }
     openBadge.setAttribute('aria-disabled', isOpenElsewhere ? 'false' : 'true');
     refreshConversationItemStatusBadgeWrap(item);
   }
