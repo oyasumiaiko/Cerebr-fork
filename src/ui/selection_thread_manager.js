@@ -2326,6 +2326,7 @@ export function createSelectionThreadManager(appContext) {
       showNotification?.({ message: '未找到对应的划词对话', type: 'warning' });
       return false;
     }
+    const anchorViewportSnapshot = captureMainChatAnchorViewportSnapshot(threadId, info.anchorMessageId);
     state.activeThreadId = threadId;
     state.activeAnchorMessageId = info.anchorMessageId;
     state.activeSelectionText = info.annotation?.selectionText || '';
@@ -2333,9 +2334,12 @@ export function createSelectionThreadManager(appContext) {
     document.body.classList.add('thread-mode-active');
     updateThreadPanelTitle(state.activeSelectionText);
     applyThreadLayout();
-    scrollMainChatToThreadAnchor(threadId, info.anchorMessageId, {
-      preferredViewportPercent: THREAD_ANCHOR_VIEWPORT_CENTER
-    });
+    // 仅当高亮锚点当前不在可视区域时才执行“居中跳转”；已在屏内则保持用户当前视角不动。
+    if (!anchorViewportSnapshot) {
+      scrollMainChatToThreadAnchor(threadId, info.anchorMessageId, {
+        preferredViewportPercent: THREAD_ANCHOR_VIEWPORT_CENTER
+      });
+    }
     await renderThreadMessages(threadId, options);
     return true;
   }
