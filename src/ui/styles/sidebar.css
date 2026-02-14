@@ -997,7 +997,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     left: 50%;
     width: min(760px, calc(100% - 26px));
     transform: translateX(-50%);
-    z-index: 1400;
+    /* 保持在线程/聊天内容上方，同时低于 ESC 菜单面板（#chat-history-panel: 1005）。 */
+    z-index: 1004;
     pointer-events: none;
 }
 
