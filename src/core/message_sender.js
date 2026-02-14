@@ -2398,6 +2398,15 @@ export function createMessageSender(appContext) {
     const normalizedTargetAiMessageId = (typeof targetAiMessageId === 'string' && targetAiMessageId.trim())
       ? targetAiMessageId.trim()
       : null;
+    const normalizedRegenerateUserMessageId = (typeof messageId === 'string' && messageId.trim())
+      ? messageId.trim()
+      : null;
+    if (regenerateMode) {
+      const abortTargetId = normalizedTargetAiMessageId || normalizedRegenerateUserMessageId;
+      if (abortTargetId) {
+        abortCurrentRequest(abortTargetId, { strictTarget: true });
+      }
+    }
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
     let canUpdateExistingAiMessage = false;
@@ -4505,7 +4514,7 @@ export function createMessageSender(appContext) {
    * @public
    * @param {HTMLElement|string} [target] - 可选：要中止的目标消息元素或其 data-message-id；缺省时中止所有请求
    */
-  function abortCurrentRequest(target) {
+  function abortCurrentRequest(target, options = {}) {
     if (!activeAttempts.size) return false;
 
     let abortedAny = false;
@@ -4514,12 +4523,20 @@ export function createMessageSender(appContext) {
     const targetId = typeof target === 'string'
       ? target
       : (isElementTarget ? target.getAttribute('data-message-id') : null);
+    const normalizedTargetId = normalizeConversationId(targetId);
+    const strictTarget = !!(options && typeof options === 'object' && options.strictTarget);
 
-    if (targetElement || targetId) {
+    if (targetElement || normalizedTargetId) {
       // 按消息粒度中止：仅终止与指定消息/占位符绑定的那一路请求
       for (const attempt of activeAttempts.values()) {
-        const matchesById = targetId && attempt.aiMessageId && attempt.aiMessageId === targetId;
-        const matchesByLoading = targetElement && attempt.loadingMessage === targetElement;
+        const attemptAiId = normalizeConversationId(attempt?.aiMessageId);
+        const attemptParentMessageId = normalizeConversationId(attempt?.parentMessageIdForAi)
+          || normalizeConversationId(attempt?.threadContext?.parentMessageIdForAi);
+        const matchesById = !!(
+          normalizedTargetId
+          && (attemptAiId === normalizedTargetId || attemptParentMessageId === normalizedTargetId)
+        );
+        const matchesByLoading = !!(targetElement && attempt.loadingMessage === targetElement);
         if (matchesById || matchesByLoading) {
           attempt.manualAbort = true;
           try { attempt.controller?.abort(); } catch (e) { console.error('中止当前请求失败:', e); }
@@ -4528,7 +4545,7 @@ export function createMessageSender(appContext) {
       }
 
       // 如果未能定位到对应 attempt，则退回为中止最近一次请求（向后兼容旧行为）
-      if (!abortedAny) {
+      if (!abortedAny && !strictTarget) {
         const lastAttempt = Array.from(activeAttempts.values()).slice(-1)[0];
         if (lastAttempt) {
           lastAttempt.manualAbort = true;
