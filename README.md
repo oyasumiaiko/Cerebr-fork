@@ -12,11 +12,35 @@
 
 # 🧠 Cerebr - Intelligent AI Assistant
 
-![screenshot](./statics/image.png)
+## 📸 Feature Highlights
 
-The name "Cerebr" comes from a Latin root related to "brain" or "cerebrum". This reflects our vision: to integrate powerful AI capabilities and make Cerebr your second brain for deep reading and understanding. Cerebr is a focused AI assistant for Chromium browsers, designed to enhance your work efficiency and learning experience.
+### Main interface
+![Main interface](./statics/readme/readme-main-ui.png)
 
-Born from a need for a clean, efficient browser AI assistant, Cerebr keeps a minimalist design while delivering strong capabilities for everyday web browsing, reading, and research.
+### One-click web page summary, or one-click YouTube video summary with subtitle extensions
+![One-click summary](./statics/readme/readme-one-click-summary.png)
+
+### Powerful chat history management and fast full-text search
+![Chat history management 1](./statics/readme/readme-history-search-1.png)
+![Chat history management 2](./statics/readme/readme-history-search-2.png)
+
+### Detailed customizable personalization and color themes
+![Theme customization](./statics/readme/readme-theme-customization.png)
+
+### Auto-name conversations with specified APIs and custom prompts, plus custom image export layout, resolution, and appearance
+![Auto title and export settings](./statics/readme/readme-auto-title-and-export-settings.png)
+
+### Unified chat history gallery for quickly viewing all images in conversations
+![Chat image gallery](./statics/readme/readme-image-gallery.png)
+
+### Fullscreen conversation mode and thread mode for selecting message snippets and quickly explaining them with custom prompts
+![Fullscreen and thread mode](./statics/readme/readme-fullscreen-thread-mode.png)
+
+Explore any rabbit hole you want to explore.
+
+### One-click export messages into custom-sized and custom-layout images for fast sharing
+![Message export 1](./statics/readme/readme-export-image-1.png)
+![Message export 2](./statics/readme/readme-export-image-2.png)
 
 ## ✨ Core Features
 

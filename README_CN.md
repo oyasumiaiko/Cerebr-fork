@@ -12,11 +12,35 @@
 
 # 🧠 Cerebr - 智能 AI 助手
 
-![screenshot](./statics/image.png)
+## 📸 功能预览
 
-Cerebr 是一款面向 Chromium 浏览器的侧边栏 AI 助手扩展，专注于提升工作效率和学习体验。“Cerebr”源自拉丁语词根，与“大脑/脑”相关，这也体现了我们的愿景：整合强大的 AI 能力，让 Cerebr 成为你的第二大脑，帮助深度阅读与理解。
+### 主界面
+![主界面](./statics/readme/readme-main-ui.png)
 
-在尝试了市面上的浏览器 AI 助手后，我们发现它们要么受限于次数，要么界面过于花哨。Cerebr 希望提供一个简洁、高效、无干扰的体验，但同时具备足够强的能力。
+### 一键总结网页，或配合 YouTube 字幕插件一键总结 YouTube 视频
+![一键总结网页与 YouTube 视频](./statics/readme/readme-one-click-summary.png)
+
+### 强大的聊天记录管理和快速聊天记录全文搜索
+![聊天记录管理与搜索 1](./statics/readme/readme-history-search-1.png)
+![聊天记录管理与搜索 2](./statics/readme/readme-history-search-2.png)
+
+### 详细的自定义个性化配色设置
+![个性化配色设置](./statics/readme/readme-theme-customization.png)
+
+### 使用指定 API 和自定义提示词为对话自动命名，自定义图片导出布局、分辨率和外观格式
+![自动命名与导出设置](./statics/readme/readme-auto-title-and-export-settings.png)
+
+### 统一的聊天记录相册，快速查看聊天记录中的所有图片
+![聊天记录相册](./statics/readme/readme-image-gallery.png)
+
+### 全屏对话模式与线程模式，允许对聊天记录中的文本片段划词并使用自定义提示词快速解释，并深入对话
+![全屏对话与线程模式](./statics/readme/readme-fullscreen-thread-mode.png)
+
+探索任何一个你想探索的兔子洞。
+
+### 对消息一键导出为自定义大小和布局的图片，方便快速分享
+![消息导出图片 1](./statics/readme/readme-export-image-1.png)
+![消息导出图片 2](./statics/readme/readme-export-image-2.png)
 
 ## ✨ 核心特性
 
