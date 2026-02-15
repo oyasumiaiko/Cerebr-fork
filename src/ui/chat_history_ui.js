@@ -3693,7 +3693,11 @@ export function createChatHistoryUI(appContext) {
     // 如果已存在菜单，则删除
     const existingMenu = document.getElementById('chat-history-context-menu');
     if (existingMenu) {
-      existingMenu.remove();
+      if (typeof existingMenu.__closeMenu === 'function') {
+        existingMenu.__closeMenu();
+      } else {
+        existingMenu.remove();
+      }
     }
     // 创建菜单容器
     const menu = document.createElement('div');
@@ -3703,6 +3707,21 @@ export function createChatHistoryUI(appContext) {
     menu.style.left = e.clientX + 'px';
     // 添加 CSS 类，设置其他样式
     menu.classList.add('chat-history-context-menu');
+    const menuCleanupCallbacks = [];
+    let menuClosed = false;
+    const closeMenu = () => {
+      if (menuClosed) return;
+      menuClosed = true;
+      while (menuCleanupCallbacks.length) {
+        const cleanup = menuCleanupCallbacks.pop();
+        try { cleanup?.(); } catch (_) {}
+      }
+      if (menu.parentElement) {
+        menu.remove();
+      }
+      try { delete menu.__closeMenu; } catch (_) {}
+    };
+    menu.__closeMenu = closeMenu;
 
     // --- 添加 置顶/取消置顶 选项 ---
     const pinnedIds = await getPinnedIds();
@@ -3717,7 +3736,7 @@ export function createChatHistoryUI(appContext) {
       } else {
         await pinConversation(conversationId);
       }
-      menu.remove();
+      closeMenu();
       refreshChatHistory(); // 刷新列表以显示更新后的顺序
     });
     menu.appendChild(pinToggleOption); // 添加到菜单顶部
@@ -3729,7 +3748,7 @@ export function createChatHistoryUI(appContext) {
     renameOption.classList.add('chat-history-context-menu-option');
     renameOption.addEventListener('click', async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
-      menu.remove(); // 先关闭菜单
+      closeMenu(); // 先关闭菜单
       try {
         const conversation = await getConversationFromCacheOrLoad(conversationId);
         if (conversation) {
@@ -3796,7 +3815,7 @@ export function createChatHistoryUI(appContext) {
     apiLockOption.classList.add('chat-history-context-menu-option');
     apiLockOption.addEventListener('click', async (e) => {
       e.stopPropagation();
-      menu.remove();
+      closeMenu();
       if (hasApiLock) {
         await setConversationApiLock(conversationId, null);
         return;
@@ -3816,7 +3835,7 @@ export function createChatHistoryUI(appContext) {
     autoTitleOption.classList.add('chat-history-context-menu-option');
     autoTitleOption.addEventListener('click', async (e) => {
       e.stopPropagation();
-      menu.remove();
+      closeMenu();
       try {
         await autoGenerateConversationTitleForConversation(conversationId);
       } catch (error) {
@@ -3832,7 +3851,7 @@ export function createChatHistoryUI(appContext) {
     openUrlOption.classList.add('chat-history-context-menu-option');
     openUrlOption.addEventListener('click', async (event) => {
       event.stopPropagation();
-      menu.remove();
+      closeMenu();
       try {
         // 优先使用列表元数据携带的 URL（无需读库）；若缺失再回退读取会话详情。
         let urlToOpen = normalizeOpenableUrl(conversationUrl);
@@ -3895,20 +3914,53 @@ export function createChatHistoryUI(appContext) {
         // 显示错误提示
         showNotification({ message: '复制失败，请重试', type: 'error', duration: 2200 });
       }
-      menu.remove();
+      closeMenu();
     });
 
     // 删除选项
     const deleteOption = document.createElement('div');
     deleteOption.textContent = '删除聊天记录';
-    deleteOption.classList.add('chat-history-context-menu-option');
+    deleteOption.classList.add('chat-history-context-menu-option', 'chat-history-context-menu-option--danger');
+    deleteOption.title = '按住 Shift 并点击以确认删除';
+    let deleteShiftArmed = false;
+    const syncDeleteOptionShiftArmed = (armed) => {
+      deleteShiftArmed = !!armed;
+      deleteOption.dataset.shiftArmed = deleteShiftArmed ? '1' : '0';
+      deleteOption.classList.toggle('is-shift-armed', deleteShiftArmed);
+      deleteOption.title = deleteShiftArmed
+        ? '已按住 Shift：点击将删除聊天记录'
+        : '按住 Shift 并点击以确认删除';
+    };
+    syncDeleteOptionShiftArmed(false);
+
+    const onDeleteGuardKeyDown = (event) => {
+      if (event.key !== 'Shift') return;
+      syncDeleteOptionShiftArmed(true);
+    };
+    const onDeleteGuardKeyUp = (event) => {
+      if (event.key !== 'Shift') return;
+      syncDeleteOptionShiftArmed(false);
+    };
+    const onDeleteGuardBlur = () => {
+      syncDeleteOptionShiftArmed(false);
+    };
+    window.addEventListener('keydown', onDeleteGuardKeyDown, true);
+    window.addEventListener('keyup', onDeleteGuardKeyUp, true);
+    window.addEventListener('blur', onDeleteGuardBlur);
+    menuCleanupCallbacks.push(() => window.removeEventListener('keydown', onDeleteGuardKeyDown, true));
+    menuCleanupCallbacks.push(() => window.removeEventListener('keyup', onDeleteGuardKeyUp, true));
+    menuCleanupCallbacks.push(() => window.removeEventListener('blur', onDeleteGuardBlur));
 
     deleteOption.addEventListener('click', async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
+      if (!(e.shiftKey || deleteShiftArmed)) {
+        showNotification?.({ message: '请按住 Shift 后再点击删除', type: 'warning', duration: 1800 });
+        return;
+      }
       try {
         await deleteConversationRecord(conversationId);
       } finally {
-        menu.remove();
+        closeMenu();
       }
     });
 
@@ -3921,12 +3973,11 @@ export function createChatHistoryUI(appContext) {
     } catch (_) {}
 
     // 点击其他地方时移除菜单
-    document.addEventListener('click', function onDocClick() {
-      if (menu.parentElement) {
-        menu.remove();
-      }
-      document.removeEventListener('click', onDocClick);
-    });
+    const onDocClick = () => {
+      closeMenu();
+    };
+    document.addEventListener('click', onDocClick);
+    menuCleanupCallbacks.push(() => document.removeEventListener('click', onDocClick));
   }
 
   /**
