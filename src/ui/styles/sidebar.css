@@ -5593,6 +5593,12 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     color: var(--cerebr-text-color);
 }
 
+.chat-history-context-menu-separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+}
+
 /* 鼠标悬停时改变背景 */
 .chat-history-context-menu-option:hover {
     background-color: var(--cerebr-ui-hover-bg);

@@ -3890,6 +3890,13 @@ export function createChatHistoryUI(appContext) {
     };
     menu.__closeMenu = closeMenu;
 
+    const appendMenuSeparator = () => {
+      const separator = document.createElement('div');
+      separator.className = 'chat-history-context-menu-separator';
+      separator.setAttribute('role', 'separator');
+      menu.appendChild(separator);
+    };
+
     // --- 添加 置顶/取消置顶 选项 ---
     const pinnedIds = await getPinnedIds();
     const isPinned = pinnedIds.includes(conversationId);
@@ -3972,6 +3979,7 @@ export function createChatHistoryUI(appContext) {
       }
     });
     menu.appendChild(renameOption); // 添加重命名选项
+    appendMenuSeparator();
 
     // 固定 API / 取消固定
     let apiLockSnapshot = null;
@@ -4053,6 +4061,7 @@ export function createChatHistoryUI(appContext) {
       }
     });
     menu.appendChild(openUrlOption);
+    appendMenuSeparator();
 
     // 复制聊天记录选项
     const copyOption = document.createElement('div');
@@ -4143,6 +4152,7 @@ export function createChatHistoryUI(appContext) {
     });
 
     menu.appendChild(copyOption);
+    appendMenuSeparator();
     menu.appendChild(deleteOption);
     document.body.appendChild(menu);
     // append 后才能拿到菜单宽高，因此在这里做“视口内修正”
