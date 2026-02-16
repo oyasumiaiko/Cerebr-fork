@@ -5639,6 +5639,113 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     color: #ff7a7c;
 }
 
+/* 通用输入弹窗（替代 window.prompt） */
+.cerebr-input-dialog-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 10020;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: color-mix(in srgb, #000 36%, transparent);
+}
+
+.cerebr-input-dialog {
+    width: min(560px, calc(100vw - 40px));
+    max-height: min(84vh, 760px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 88%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
+    color: var(--cerebr-text-color);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+}
+
+.cerebr-input-dialog-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.cerebr-input-dialog-message {
+    font-size: 12px;
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--cerebr-text-color) 80%, transparent);
+    white-space: pre-wrap;
+}
+
+.cerebr-input-dialog-control {
+    width: 100%;
+    min-height: 36px;
+    max-height: 48vh;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 88%, transparent);
+    background: color-mix(in srgb, var(--cerebr-input-bg) 92%, transparent);
+    color: var(--cerebr-text-color);
+    padding: 8px 10px;
+    outline: none;
+    resize: vertical;
+    font-size: 13px;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+
+.cerebr-input-dialog-control::placeholder {
+    color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+}
+
+.cerebr-input-dialog-control:focus {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 72%, var(--cerebr-border-color));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-highlight) 24%, transparent);
+}
+
+.cerebr-input-dialog-control.is-invalid {
+    border-color: color-mix(in srgb, var(--cerebr-red) 72%, var(--cerebr-border-color));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-red) 20%, transparent);
+}
+
+.cerebr-input-dialog-validation {
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-red) 88%, transparent);
+    line-height: 1.3;
+}
+
+.cerebr-input-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.cerebr-input-dialog-button {
+    min-width: 72px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 88%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 86%, transparent);
+    color: var(--cerebr-text-color);
+    cursor: pointer;
+}
+
+.cerebr-input-dialog-button:hover {
+    background: color-mix(in srgb, var(--cerebr-control-bg-hover) 88%, transparent);
+}
+
+.cerebr-input-dialog-button--confirm {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 65%, var(--cerebr-border-color));
+    background: color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-control-bg));
+}
+
+.cerebr-input-dialog-button--confirm:hover {
+    background: color-mix(in srgb, var(--cerebr-highlight) 36%, var(--cerebr-control-bg-hover));
+}
+
 /* Added: Glow effect when auto scrolling is enabled */
 @keyframes breathing {
     0%, 100% {

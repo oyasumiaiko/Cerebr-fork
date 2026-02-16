@@ -3620,6 +3620,173 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 统一输入弹窗（替代 window.prompt）。
+   *
+   * 设计目标：
+   * - 避免浏览器原生 prompt 的样式割裂与交互受限；
+   * - 统一支持单行/多行输入，便于后续复用于重命名、标签编辑、导入 JSON 等场景；
+   * - 保持最小依赖：纯 DOM 构建，不引入额外框架。
+   *
+   * @param {Object} options
+   * @param {string} [options.title='输入']
+   * @param {string} [options.message='']
+   * @param {string} [options.defaultValue='']
+   * @param {string} [options.placeholder='']
+   * @param {string} [options.confirmText='确定']
+   * @param {string} [options.cancelText='取消']
+   * @param {boolean} [options.multiline=false]
+   * @param {number} [options.rows=6]
+   * @param {(value: string) => { ok: boolean, message?: string } | null} [options.validate]
+   * @returns {Promise<string|null>} 用户确认返回输入文本；取消返回 null。
+   */
+  function openUnifiedInputDialog(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const title = typeof normalizedOptions.title === 'string' && normalizedOptions.title.trim()
+      ? normalizedOptions.title.trim()
+      : '输入';
+    const message = typeof normalizedOptions.message === 'string' ? normalizedOptions.message : '';
+    const defaultValue = typeof normalizedOptions.defaultValue === 'string' ? normalizedOptions.defaultValue : '';
+    const placeholder = typeof normalizedOptions.placeholder === 'string' ? normalizedOptions.placeholder : '';
+    const confirmText = typeof normalizedOptions.confirmText === 'string' && normalizedOptions.confirmText.trim()
+      ? normalizedOptions.confirmText.trim()
+      : '确定';
+    const cancelText = typeof normalizedOptions.cancelText === 'string' && normalizedOptions.cancelText.trim()
+      ? normalizedOptions.cancelText.trim()
+      : '取消';
+    const multiline = normalizedOptions.multiline === true;
+    const rows = Math.max(2, Number(normalizedOptions.rows) || 6);
+    const validate = typeof normalizedOptions.validate === 'function'
+      ? normalizedOptions.validate
+      : null;
+
+    return new Promise((resolve) => {
+      const root = document.createElement('div');
+      root.className = 'cerebr-input-dialog-mask';
+
+      const panel = document.createElement('div');
+      panel.className = 'cerebr-input-dialog';
+      panel.setAttribute('role', 'dialog');
+      panel.setAttribute('aria-modal', 'true');
+      panel.setAttribute('aria-label', title);
+      root.appendChild(panel);
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'cerebr-input-dialog-title';
+      titleEl.textContent = title;
+      panel.appendChild(titleEl);
+
+      if (message.trim()) {
+        const messageEl = document.createElement('div');
+        messageEl.className = 'cerebr-input-dialog-message';
+        messageEl.textContent = message;
+        panel.appendChild(messageEl);
+      }
+
+      const inputEl = multiline
+        ? document.createElement('textarea')
+        : document.createElement('input');
+      inputEl.className = 'cerebr-input-dialog-control';
+      if (!multiline) {
+        inputEl.type = 'text';
+      } else {
+        inputEl.rows = rows;
+      }
+      inputEl.value = defaultValue;
+      inputEl.placeholder = placeholder;
+      panel.appendChild(inputEl);
+
+      const validationHint = document.createElement('div');
+      validationHint.className = 'cerebr-input-dialog-validation';
+      validationHint.hidden = true;
+      panel.appendChild(validationHint);
+
+      const actions = document.createElement('div');
+      actions.className = 'cerebr-input-dialog-actions';
+      panel.appendChild(actions);
+
+      const cancelButton = document.createElement('button');
+      cancelButton.type = 'button';
+      cancelButton.className = 'cerebr-input-dialog-button cerebr-input-dialog-button--cancel';
+      cancelButton.textContent = cancelText;
+      actions.appendChild(cancelButton);
+
+      const confirmButton = document.createElement('button');
+      confirmButton.type = 'button';
+      confirmButton.className = 'cerebr-input-dialog-button cerebr-input-dialog-button--confirm';
+      confirmButton.textContent = confirmText;
+      actions.appendChild(confirmButton);
+
+      let closed = false;
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener('keydown', handleKeydown, true);
+        if (root.parentElement) root.remove();
+      };
+
+      const finish = (value) => {
+        cleanup();
+        resolve(value);
+      };
+
+      const showValidation = (hintText) => {
+        const nextText = typeof hintText === 'string' ? hintText.trim() : '';
+        if (!nextText) {
+          validationHint.hidden = true;
+          validationHint.textContent = '';
+          inputEl.classList.remove('is-invalid');
+          return;
+        }
+        validationHint.hidden = false;
+        validationHint.textContent = nextText;
+        inputEl.classList.add('is-invalid');
+      };
+
+      const attemptConfirm = () => {
+        const value = String(inputEl.value || '');
+        if (validate) {
+          const result = validate(value);
+          if (result && result.ok === false) {
+            showValidation(result.message || '输入无效，请检查后重试');
+            return;
+          }
+        }
+        showValidation('');
+        finish(value);
+      };
+
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+          return;
+        }
+        if (event.key === 'Enter' && !multiline) {
+          event.preventDefault();
+          attemptConfirm();
+        }
+      };
+
+      cancelButton.addEventListener('click', () => finish(null));
+      confirmButton.addEventListener('click', attemptConfirm);
+      root.addEventListener('mousedown', (event) => {
+        if (event.target === root) {
+          finish(null);
+        }
+      });
+      document.addEventListener('keydown', handleKeydown, true);
+      document.body.appendChild(root);
+
+      requestAnimationFrame(() => {
+        try {
+          inputEl.focus();
+          if (typeof inputEl.select === 'function') inputEl.select();
+        } catch (_) {}
+      });
+    });
+  }
+
+  /**
    * 显示聊天记录面板的右键菜单
    * @param {MouseEvent} e - 右键事件
    * @param {string} conversationId - 对话记录ID
@@ -3752,7 +3919,18 @@ export function createChatHistoryUI(appContext) {
       try {
         const conversation = await getConversationFromCacheOrLoad(conversationId);
         if (conversation) {
-          const newName = window.prompt('请输入新的对话名称:', conversation.summary || '');
+          const newName = await openUnifiedInputDialog({
+            title: '重命名对话',
+            message: '请输入新的对话名称',
+            defaultValue: conversation.summary || '',
+            placeholder: '例如：调试认证流程',
+            validate: (value) => {
+              if (!String(value || '').trim()) {
+                return { ok: false, message: '名称不能为空' };
+              }
+              return { ok: true };
+            }
+          });
           if (newName !== null && newName.trim() !== '') { // 确保用户输入了内容且没有取消
             // 保留 summary/selection 对话的方括号前缀：即便用户删掉，也会在保存时补回。
             const trimmedName = newName.trim();
@@ -12292,7 +12470,15 @@ export function createChatHistoryUI(appContext) {
 
     // 由于 Permissions Policy 限制，直接调用 Clipboard API 可能被阻止，这里改为让用户手动粘贴 JSON
     const hint = '请粘贴聊天 JSON 字符串数组，例如 ["第一条用户消息","第一条AI回复"]';
-    let rawText = window.prompt(hint, '');
+    let rawText = await openUnifiedInputDialog({
+      title: '从剪贴板导入',
+      message: hint,
+      defaultValue: '',
+      placeholder: '[\"第一条用户消息\",\"第一条AI回复\"]',
+      confirmText: '导入',
+      multiline: true,
+      rows: 8
+    });
 
     if (rawText === null) {
       // 用户取消，不视为错误
