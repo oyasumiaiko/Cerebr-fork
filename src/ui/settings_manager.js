@@ -2428,7 +2428,10 @@ export function createSettingsManager(appContext) {
   }
 
   function applyBackgroundImage(url, options = {}) {
-    const { cacheBustToken = null } = options || {};
+    const {
+      cacheBustToken = null,
+      forceNextListItem = false
+    } = options || {};
     const normalizedInput = typeof url === 'string' ? url.trim() : '';
     const token = ++backgroundImageLoadToken;
 
@@ -2446,12 +2449,12 @@ export function createSettingsManager(appContext) {
     const normalizedSource = normalizeBackgroundSource(normalizedInput);
 
     if (normalizedSource.kind === 'list') {
-      loadBackgroundImageFromList(normalizedSource.url, token);
+      loadBackgroundImageFromList(normalizedSource.url, token, { forceNext: !!forceNextListItem });
       return;
     }
 
     if (normalizedSource.kind === 'inline_list') {
-      loadBackgroundImageFromInlineList(normalizedSource.list, token);
+      loadBackgroundImageFromInlineList(normalizedSource.list, token, { forceNext: !!forceNextListItem });
       return;
     }
 
@@ -2519,7 +2522,7 @@ export function createSettingsManager(appContext) {
     return `${resourceUrl}${separator}__cerebr_bg=${encodeURIComponent(String(cacheBustToken))}`;
   }
 
-  async function loadBackgroundImageFromList(listUrl, token) {
+  async function loadBackgroundImageFromList(listUrl, token, options = {}) {
     try {
       const response = await fetch(listUrl);
       if (!response.ok) {
@@ -2537,7 +2540,7 @@ export function createSettingsManager(appContext) {
       }
 
       const signature = computeListSignature(candidates, listUrl);
-      await tryLoadQueuedBackground(candidates, signature, token);
+      await tryLoadQueuedBackground(candidates, signature, token, options);
     } catch (error) {
       if (token !== backgroundImageLoadToken) return;
       console.error('加载背景图片列表失败:', listUrl, error);
@@ -2545,7 +2548,7 @@ export function createSettingsManager(appContext) {
     }
   }
 
-  async function loadBackgroundImageFromInlineList(list, token) {
+  async function loadBackgroundImageFromInlineList(list, token, options = {}) {
     if (token !== backgroundImageLoadToken) return;
     const candidates = normalizeListCandidates(list);
     if (!candidates.length) {
@@ -2554,11 +2557,20 @@ export function createSettingsManager(appContext) {
       return;
     }
     const signature = computeListSignature(candidates, 'inline');
-    await tryLoadQueuedBackground(candidates, signature, token);
+    await tryLoadQueuedBackground(candidates, signature, token, options);
   }
 
-  async function tryLoadQueuedBackground(candidates, signature, token) {
+  async function tryLoadQueuedBackground(candidates, signature, token, options = {}) {
     if (!Array.isArray(candidates) || !candidates.length) return;
+    const forceNext = !!options?.forceNext;
+    if (!forceNext && backgroundImageQueueState.signature === signature) {
+      const currentBackgroundUrl = getCurrentBackgroundImageUrlFromCss();
+      if (currentBackgroundUrl && candidates.includes(currentBackgroundUrl)) {
+        const cssValue = createCssUrlValue(currentBackgroundUrl);
+        updateBackgroundImageCss(cssValue, true, token, currentBackgroundUrl);
+        return;
+      }
+    }
     const total = candidates.length;
     let attempts = 0;
     while (attempts < total && token === backgroundImageLoadToken) {
@@ -2689,6 +2701,16 @@ export function createSettingsManager(appContext) {
     return match ? match[2] : '';
   }
 
+  function getCurrentBackgroundImageUrlFromCss() {
+    try {
+      const style = getComputedStyle(document.documentElement);
+      const cssValue = (style.getPropertyValue('--cerebr-background-image') || '').trim();
+      return extractUrlFromCss(cssValue);
+    } catch (_) {
+      return '';
+    }
+  }
+
   function updateBackgroundImageCss(cssValue, hasImage, token, debugUrl) {
     if (token !== backgroundImageLoadToken) return;
     document.documentElement.style.setProperty('--cerebr-background-image', cssValue || 'none');
@@ -2789,13 +2811,13 @@ export function createSettingsManager(appContext) {
     }
 
     if (isInlineListSource(source)) {
-      applyBackgroundImage(source);
+      applyBackgroundImage(source, { forceNextListItem: true });
       return;
     }
 
     const normalizedForCheck = convertPotentialWindowsPath(trimmedSource);
     if (isTxtListSource(normalizedForCheck)) {
-      applyBackgroundImage(trimmedSource);
+      applyBackgroundImage(trimmedSource, { forceNextListItem: true });
       return;
     }
 
