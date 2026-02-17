@@ -8564,6 +8564,70 @@ export function createChatHistoryUI(appContext) {
     return trendSection;
   }
 
+  function ensureEscSettingsMenuMounted(panel) {
+    if (!panel) return null;
+    const settingsContent = panel.querySelector('.history-tab-content[data-tab="settings"]');
+    if (!settingsContent) return null;
+
+    let escSettingsMenu = settingsContent.querySelector('#esc-settings-menu');
+    if (!escSettingsMenu) {
+      escSettingsMenu = dom.escSettingsMenu || document.createElement('div');
+      escSettingsMenu.id = 'esc-settings-menu';
+      escSettingsMenu.classList.add('esc-settings-menu');
+    }
+    if (escSettingsMenu.parentElement !== settingsContent) {
+      settingsContent.appendChild(escSettingsMenu);
+    }
+    dom.escSettingsMenu = escSettingsMenu;
+    return escSettingsMenu;
+  }
+
+  function ensureSettingsTabInitialized(panel) {
+    const settingsContent = panel?.querySelector('.history-tab-content[data-tab="settings"]');
+    if (!settingsContent) return;
+
+    const escSettingsMenu = ensureEscSettingsMenuMounted(panel);
+    if (!escSettingsMenu) return;
+    if (settingsContent.dataset.lazyReady === '1' && escSettingsMenu.childElementCount > 0) return;
+
+    // 延迟到用户真正切换到“偏好设置”时再渲染，避免 Esc 首次打开时同步构建大量设置控件。
+    services.settingsManager?.refreshSettingsContainers?.();
+    settingsContent.dataset.lazyReady = escSettingsMenu.childElementCount > 0 ? '1' : '0';
+  }
+
+  function ensureStatsTabInitialized(panel) {
+    const statsContent = panel?.querySelector('.history-tab-content[data-tab="stats"]');
+    if (!statsContent) return;
+    if (statsContent.dataset.lazyReady === '1') return;
+
+    // 兼容旧 DOM：若内容已存在则直接标记，避免重复插入。
+    if (statsContent.childElementCount > 0) {
+      statsContent.dataset.lazyReady = '1';
+      return;
+    }
+
+    const statsTrendSection = renderStatsTrendSection();
+    const statsEntry = renderStatsEntry(statsContent, statsTrendSection);
+    statsContent.appendChild(statsEntry);
+    statsContent.appendChild(statsTrendSection);
+    statsContent.dataset.lazyReady = '1';
+  }
+
+  function ensureBackupTabInitialized(panel) {
+    const backupSettingsContent = panel?.querySelector('.history-tab-content[data-tab="backup-settings"]');
+    if (!backupSettingsContent) return;
+    if (backupSettingsContent.dataset.lazyReady === '1') return;
+
+    // 兼容旧 DOM：若内容已存在则直接标记，避免重复插入。
+    if (backupSettingsContent.childElementCount > 0) {
+      backupSettingsContent.dataset.lazyReady = '1';
+      return;
+    }
+
+    backupSettingsContent.appendChild(renderBackupSettingsPanelDownloadsOnly());
+    backupSettingsContent.dataset.lazyReady = '1';
+  }
+
   /**
    * 显示聊天记录面板
    */
@@ -8608,7 +8672,18 @@ export function createChatHistoryUI(appContext) {
       return;
     }
 
+    if (resolvedTabName === 'settings') {
+      ensureSettingsTabInitialized(panel);
+      return;
+    }
+
     if (resolvedTabName === 'stats') {
+      ensureStatsTabInitialized(panel);
+      return;
+    }
+
+    if (resolvedTabName === 'backup-settings') {
+      ensureBackupTabInitialized(panel);
       return;
     }
 
@@ -9354,14 +9429,12 @@ export function createChatHistoryUI(appContext) {
       const settingsContent = document.createElement('div');
       settingsContent.className = 'history-tab-content settings-tab-content';
       settingsContent.dataset.tab = 'settings';
+      settingsContent.dataset.lazyReady = '0';
       const escSettingsMenu = dom.escSettingsMenu || document.createElement('div');
       escSettingsMenu.id = 'esc-settings-menu';
       escSettingsMenu.classList.add('esc-settings-menu');
       settingsContent.appendChild(escSettingsMenu);
       dom.escSettingsMenu = escSettingsMenu;
-      if (escSettingsMenu && escSettingsMenu.childElementCount === 0) {
-        services.settingsManager?.refreshSettingsContainers?.();
-      }
 
       // 提示词设置标签内容（复用 sidebar.html 中的 DOM）
       const promptSettingsContent = dom.promptSettingsPanel;
@@ -9389,16 +9462,13 @@ export function createChatHistoryUI(appContext) {
       const statsContent = document.createElement('div');
       statsContent.className = 'history-tab-content stats-tab-content';
       statsContent.dataset.tab = 'stats';
-      const statsTrendSection = renderStatsTrendSection();
-      const statsEntry = renderStatsEntry(statsContent, statsTrendSection);
-      statsContent.appendChild(statsEntry);
-      statsContent.appendChild(statsTrendSection);
+      statsContent.dataset.lazyReady = '0';
       
       // 备份与恢复标签内容
       const backupSettingsContent = document.createElement('div');
       backupSettingsContent.className = 'history-tab-content';
       backupSettingsContent.dataset.tab = 'backup-settings';
-      backupSettingsContent.appendChild(renderBackupSettingsPanelDownloadsOnly());
+      backupSettingsContent.dataset.lazyReady = '0';
 
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
@@ -9417,9 +9487,6 @@ export function createChatHistoryUI(appContext) {
       });
       
       document.body.appendChild(panel);
-      if (escSettingsMenu && escSettingsMenu.childElementCount === 0) {
-        services.settingsManager?.refreshSettingsContainers?.();
-      }
     } else {
       // 兼容旧 DOM：如果历史面板是由旧版本创建出来的（没有 data-branch-view-mode），
       // 则补上默认值（关闭树状），以符合“打开时默认平铺”的行为。
@@ -9437,9 +9504,6 @@ export function createChatHistoryUI(appContext) {
       const existingEscSettingsMenu = panel.querySelector('#esc-settings-menu');
       if (existingEscSettingsMenu) {
         dom.escSettingsMenu = existingEscSettingsMenu;
-        if (existingEscSettingsMenu.childElementCount === 0) {
-          services.settingsManager?.refreshSettingsContainers?.();
-        }
       }
       const existingHeader = panel.querySelector('.panel-header');
       if (existingHeader) {
@@ -9484,6 +9548,14 @@ export function createChatHistoryUI(appContext) {
       && (snapshot.branchMode || '') === (panel.dataset.branchViewMode || '')
     );
     const restoreScrollTop = canRestoreScroll ? snapshot.scrollTop : null;
+    panel.style.display = 'flex';
+    restoreChatHistoryPanelFullscreenLayout(panel);
+    syncChatHistoryPanelLayoutMode(panel);
+    clampChatHistoryPanelSize(panel);
+    void panel.offsetWidth;  
+    panel.classList.add('visible');
+    syncChatHistoryPanelLayoutMode(panel);
+
     loadConversationHistories(panel, currentFilter, {
       keepExistingList: true,
       restoreScrollTop
@@ -9495,14 +9567,6 @@ export function createChatHistoryUI(appContext) {
     // 切换到目标标签（同步更新 active 类；耗时渲染逻辑异步执行）
     // 说明：这里不 await，避免打开面板被 “图片/统计/API加载” 阻塞。
     void activateChatHistoryTab(panel, initialTab);
-
-    panel.style.display = 'flex';
-    restoreChatHistoryPanelFullscreenLayout(panel);
-    syncChatHistoryPanelLayoutMode(panel);
-    clampChatHistoryPanelSize(panel);
-    void panel.offsetWidth;  
-    panel.classList.add('visible');
-    syncChatHistoryPanelLayoutMode(panel);
 
     // 预热全量元数据（idle），降低“首次全文搜索”的启动延迟
     scheduleConversationMetadataWarmup(panel);
