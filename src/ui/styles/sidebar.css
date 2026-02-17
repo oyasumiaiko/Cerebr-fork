@@ -3572,17 +3572,20 @@ input:checked + .slider::before {
     cursor: default;
 }
 
-/* 创建分支对话按钮样式 */
-.context-menu-item#fork-conversation {
+/* 线程分支相关按钮样式 */
+.context-menu-item#fork-conversation,
+.context-menu-item#flatten-thread-to-main {
   display: flex;
 }
 
-.context-menu-item#fork-conversation.disabled {
+.context-menu-item#fork-conversation.disabled,
+.context-menu-item#flatten-thread-to-main.disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.context-menu-item#fork-conversation.disabled:hover {
+.context-menu-item#fork-conversation.disabled:hover,
+.context-menu-item#flatten-thread-to-main.disabled:hover {
   background-color: transparent;
 }
 

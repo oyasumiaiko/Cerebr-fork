@@ -22,6 +22,7 @@ import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js'
  * @param {Function} appContext.services.messageSender.sendMessage - 发送消息函数
  * @param {Object} appContext.services.chatHistoryManager.chatHistory - 聊天历史数据对象
  * @param {HTMLElement} appContext.dom.forkConversationButton - 创建分支对话按钮
+ * @param {HTMLElement} [appContext.dom.flattenThreadToMainButton] - 线程展平到新聊天按钮
  * @param {Function} appContext.services.chatHistoryUI.createForkConversation - 创建分支对话函数
  * @returns {Object} 上下文菜单管理器实例
  */
@@ -44,13 +45,12 @@ export function createContextMenuManager(appContext) {
   const chatContainer = dom.chatContainer;
   const threadContainer = dom.threadContainer;
   const forkConversationButton = dom.forkConversationButton;
+  const flattenThreadToMainButton = dom.flattenThreadToMainButton;
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
   const editMessageButton = document.getElementById('edit-message');
   const insertMessageMenu = document.getElementById('insert-message-menu');
   const insertMessageSubmenu = insertMessageMenu?.querySelector('.context-menu-submenu');
   const insertMessageSubmenuList = insertMessageSubmenu?.querySelector('.context-menu-submenu-list');
-  const forkConversationSubmenu = forkConversationButton?.querySelector('.context-menu-submenu');
-  const forkConversationSubmenuList = forkConversationSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateSubmenu = regenerateButton?.querySelector('.context-menu-submenu');
   const regenerateSubmenuList = regenerateSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateApiHint = document.getElementById('regenerate-message-api-hint');
@@ -72,9 +72,6 @@ export function createContextMenuManager(appContext) {
   const SUBMENU_EDGE_GAP_PX = 6;
   const SUBMENU_VIEWPORT_MARGIN_PX = 8;
   const SUBMENU_HIDE_DELAY_MS = 120;
-  const FORK_ACTION_MAIN_CONVERSATION = 'main-conversation';
-  const FORK_ACTION_THREAD_BRANCH = 'thread-branch';
-  const FORK_ACTION_THREAD_FLATTEN_MAIN = 'thread-flatten-main';
   let activeContextSubmenu = null;
   let submenuHoverHideTimer = null;
 
@@ -583,68 +580,6 @@ export function createContextMenuManager(appContext) {
     });
   }
 
-  function buildForkSubmenuItems(messageElement, activeContainer) {
-    const items = [];
-    if (!messageElement) return items;
-
-    const messageId = messageElement.getAttribute('data-message-id') || '';
-    const isLoadingMessage = !!messageElement.classList?.contains?.('loading-message');
-
-    if (activeContainer === threadContainer) {
-      const selectionThreadManager = services.selectionThreadManager;
-      const canOperateThread = !!(
-        messageId
-        && !isLoadingMessage
-        && selectionThreadManager?.isThreadModeActive?.()
-      );
-      items.push({
-        action: FORK_ACTION_THREAD_BRANCH,
-        label: '创建分支线程',
-        disabled: !canOperateThread || !selectionThreadManager?.forkThreadFromMessage
-      });
-      items.push({
-        action: FORK_ACTION_THREAD_FLATTEN_MAIN,
-        label: '展平为主聊天',
-        disabled: !canOperateThread || !selectionThreadManager?.flattenThreadToMainConversation
-      });
-      return items;
-    }
-
-    const messageCount = activeContainer ? activeContainer.querySelectorAll('.message').length : 0;
-    items.push({
-      action: FORK_ACTION_MAIN_CONVERSATION,
-      label: '创建分支对话',
-      disabled: !messageId || isLoadingMessage || messageCount <= 1
-    });
-    return items;
-  }
-
-  function renderForkSubmenu(items) {
-    if (!forkConversationSubmenuList) return;
-    forkConversationSubmenuList.innerHTML = '';
-
-    if (!Array.isArray(items) || items.length === 0) {
-      const emptyItem = document.createElement('div');
-      emptyItem.className = 'context-menu-submenu-item is-disabled';
-      emptyItem.textContent = '暂无可用分支操作';
-      emptyItem.dataset.disabled = 'true';
-      forkConversationSubmenuList.appendChild(emptyItem);
-      return;
-    }
-
-    items.forEach((option) => {
-      const item = document.createElement('div');
-      item.className = 'context-menu-submenu-item';
-      item.textContent = option.label;
-      item.dataset.forkAction = option.action;
-      if (option.disabled) {
-        item.classList.add('is-disabled');
-        item.dataset.disabled = 'true';
-      }
-      forkConversationSubmenuList.appendChild(item);
-    });
-  }
-
   function clearSubmenuHideTimer() {
     if (!submenuHoverHideTimer) return;
     clearTimeout(submenuHoverHideTimer);
@@ -757,7 +692,6 @@ export function createContextMenuManager(appContext) {
     if (!target || !(target instanceof Element)) return false;
     if (regenerateSubmenu && regenerateSubmenu.contains(target)) return true;
     if (insertMessageSubmenu && insertMessageSubmenu.contains(target)) return true;
-    if (forkConversationSubmenu && forkConversationSubmenu.contains(target)) return true;
     return false;
   }
 
@@ -776,7 +710,6 @@ export function createContextMenuManager(appContext) {
     closeActiveContextSubmenu();
     ensureSubmenuPortal(regenerateSubmenu);
     ensureSubmenuPortal(insertMessageSubmenu);
-    ensureSubmenuPortal(forkConversationSubmenu);
 
     // 设置菜单位置
     contextMenu.style.display = 'block';
@@ -852,17 +785,41 @@ export function createContextMenuManager(appContext) {
         closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
       }
     }
-    // 分支入口统一使用子菜单：主聊天显示“创建分支对话”，线程聊天额外显示“展平为主聊天”。
+    const messageId = messageElement?.getAttribute?.('data-message-id') || '';
+    const isLoadingMessage = !!messageElement?.classList?.contains?.('loading-message');
+    const selectionThreadManager = services.selectionThreadManager;
+
+    // 分支入口：线程模式下显示“创建分支 + 展平到新聊天”两个独立菜单项。
     if (forkConversationButton) {
-      const forkSubmenuItems = buildForkSubmenuItems(messageElement, activeContainer);
-      const hasEnabledForkAction = forkSubmenuItems.some((item) => !item.disabled);
-      forkConversationButton.style.display = 'flex';
-      forkConversationButton.classList.toggle('disabled', !hasEnabledForkAction);
-      renderForkSubmenu(forkSubmenuItems);
-      if (forkSubmenuItems.length && forkConversationSubmenu) {
-        updateSubmenuDirection(forkConversationButton, forkConversationSubmenu);
+      let canFork = false;
+      if (activeContainer === threadContainer) {
+        canFork = !!(
+          messageId
+          && !isLoadingMessage
+          && selectionThreadManager?.isThreadModeActive?.()
+          && selectionThreadManager?.forkThreadFromMessage
+        );
       } else {
-        closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
+        const messageCount = activeContainer ? activeContainer.querySelectorAll('.message').length : 0;
+        canFork = !!(messageId && !isLoadingMessage && messageCount > 1);
+      }
+      forkConversationButton.style.display = 'flex';
+      forkConversationButton.classList.toggle('disabled', !canFork);
+    }
+
+    if (flattenThreadToMainButton) {
+      if (activeContainer === threadContainer) {
+        const canFlatten = !!(
+          messageId
+          && !isLoadingMessage
+          && selectionThreadManager?.isThreadModeActive?.()
+          && selectionThreadManager?.flattenThreadToMainConversation
+        );
+        flattenThreadToMainButton.style.display = 'flex';
+        flattenThreadToMainButton.classList.toggle('disabled', !canFlatten);
+      } else {
+        flattenThreadToMainButton.style.display = 'none';
+        flattenThreadToMainButton.classList.add('disabled');
       }
     }
   }
@@ -876,7 +833,6 @@ export function createContextMenuManager(appContext) {
     closeActiveContextSubmenu();
     closeContextSubmenu(regenerateSubmenu, regenerateButton);
     closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
-    closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
     currentMessageElement = null;
     currentMessageContainer = null;
   }
@@ -1194,7 +1150,7 @@ export function createContextMenuManager(appContext) {
    * 创建分支对话
    * 截取从开始到当前选中消息的对话，创建一个新的会话
    */
-  function forkConversation(action = null) {
+  function forkConversation() {
     if (currentMessageElement) {
       const messageId = currentMessageElement.getAttribute('data-message-id');
       if (!messageId) {
@@ -1206,22 +1162,6 @@ export function createContextMenuManager(appContext) {
       const activeContainer = resolveMessageContainer(currentMessageElement);
       if (activeContainer === threadContainer) {
         const selectionThreadManager = services.selectionThreadManager;
-        const resolvedAction = action || FORK_ACTION_THREAD_BRANCH;
-        if (resolvedAction === FORK_ACTION_THREAD_FLATTEN_MAIN) {
-          if (!selectionThreadManager?.flattenThreadToMainConversation) {
-            console.error('无法展平线程: selectionThreadManager 未就绪');
-            hideContextMenu();
-            return;
-          }
-          const task = selectionThreadManager.flattenThreadToMainConversation(messageId);
-          if (task?.catch) {
-            task.catch((error) => {
-              console.error('展平线程为主聊天失败:', error);
-            });
-          }
-          hideContextMenu();
-          return;
-        }
         if (!selectionThreadManager?.forkThreadFromMessage) {
           console.error('无法创建分支线程: selectionThreadManager 未就绪');
           hideContextMenu();
@@ -1247,6 +1187,34 @@ export function createContextMenuManager(appContext) {
       chatHistoryUI.createForkConversation(messageId);
       hideContextMenu();
     }
+  }
+
+  function flattenThreadToMainConversation() {
+    if (!currentMessageElement) return;
+    const messageId = currentMessageElement.getAttribute('data-message-id');
+    if (!messageId) {
+      console.error('无法展平线程: 缺少消息 ID');
+      hideContextMenu();
+      return;
+    }
+    const activeContainer = resolveMessageContainer(currentMessageElement);
+    if (activeContainer !== threadContainer) {
+      hideContextMenu();
+      return;
+    }
+    const selectionThreadManager = services.selectionThreadManager;
+    if (!selectionThreadManager?.flattenThreadToMainConversation) {
+      console.error('无法展平线程: selectionThreadManager 未就绪');
+      hideContextMenu();
+      return;
+    }
+    const task = selectionThreadManager.flattenThreadToMainConversation(messageId);
+    if (task?.catch) {
+      task.catch((error) => {
+        console.error('展平线程为主聊天失败:', error);
+      });
+    }
+    hideContextMenu();
   }
 
   /**
@@ -1502,10 +1470,8 @@ export function createContextMenuManager(appContext) {
 
     ensureSubmenuPortal(regenerateSubmenu);
     ensureSubmenuPortal(insertMessageSubmenu);
-    ensureSubmenuPortal(forkConversationSubmenu);
     bindPortalSubmenuHover(regenerateButton, regenerateSubmenu);
     bindPortalSubmenuHover(insertMessageMenu, insertMessageSubmenu);
-    bindPortalSubmenuHover(forkConversationButton, forkConversationSubmenu);
 
     window.addEventListener('resize', () => {
       if (contextMenu.style.display !== 'block') return;
@@ -1575,19 +1541,6 @@ export function createContextMenuManager(appContext) {
       });
     }
 
-    if (forkConversationSubmenuList) {
-      forkConversationSubmenuList.addEventListener('click', (event) => {
-        const target = event?.target instanceof Element ? event.target : null;
-        const item = target ? target.closest('.context-menu-submenu-item') : null;
-        if (!item) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (item.dataset.disabled === 'true') return;
-        const forkAction = item.dataset.forkAction || '';
-        if (!forkAction) return;
-        forkConversation(forkAction);
-      });
-    }
     clearChatContextButton.addEventListener('click', async () => {
       await clearChatHistory();
       hideContextMenu();
@@ -1601,9 +1554,16 @@ export function createContextMenuManager(appContext) {
       forkConversationButton.addEventListener('click', (event) => {
         const target = event?.target instanceof Element ? event.target : null;
         if (target && target.closest('.context-menu-submenu')) return;
-        if (forkConversationSubmenuList) return;
         if (!forkConversationButton.classList.contains('disabled')) {
-          forkConversation(null);
+          forkConversation();
+        }
+      });
+    }
+
+    if (flattenThreadToMainButton) {
+      flattenThreadToMainButton.addEventListener('click', () => {
+        if (!flattenThreadToMainButton.classList.contains('disabled')) {
+          flattenThreadToMainConversation();
         }
       });
     }
