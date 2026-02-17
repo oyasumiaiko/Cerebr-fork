@@ -1079,23 +1079,32 @@ export function createMessageProcessor(appContext) {
    * 切换美元符号数学渲染时，重新处理当前所有 AI 消息
    */
   function rerenderAiMessagesForMathSetting() {
-    if (!chatContainer) return;
-    const aiMessages = chatContainer.querySelectorAll('.message.ai-message');
-    if (!aiMessages.length) return;
+    const containers = [chatContainer, dom?.threadContainer].filter((container, index, arr) => (
+      !!container && arr.indexOf(container) === index
+    ));
+    if (!containers.length) return;
 
-    aiMessages.forEach((messageDiv) => {
-      const messageId = messageDiv.getAttribute('data-message-id');
-      const originalText = messageDiv.getAttribute('data-original-text');
-      if (!messageId || typeof originalText !== 'string') return;
+    const visitedMessageIds = new Set();
+    containers.forEach((container) => {
+      const aiMessages = container.querySelectorAll('.message.ai-message');
+      if (!aiMessages.length) return;
 
-      const historyNode = chatHistoryManager?.chatHistory?.messages?.find(msg => msg.id === messageId);
-      if (!historyNode) return;
+      aiMessages.forEach((messageDiv) => {
+        const messageId = messageDiv.getAttribute('data-message-id');
+        const originalText = messageDiv.getAttribute('data-original-text');
+        if (!messageId || typeof originalText !== 'string') return;
+        if (visitedMessageIds.has(messageId)) return;
+        visitedMessageIds.add(messageId);
 
-      try {
-        updateAIMessage(messageId, originalText, historyNode.thoughtsRaw ?? null);
-      } catch (error) {
-        console.error('重新渲染消息失败:', messageId, error);
-      }
+        const historyNode = chatHistoryManager?.chatHistory?.messages?.find(msg => msg.id === messageId);
+        if (!historyNode) return;
+
+        try {
+          updateAIMessage(messageId, originalText, historyNode.thoughtsRaw ?? null);
+        } catch (error) {
+          console.error('重新渲染消息失败:', messageId, error);
+        }
+      });
     });
   }
 
