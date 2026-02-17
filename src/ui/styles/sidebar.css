@@ -3582,6 +3582,10 @@ input:checked + .slider::before {
   cursor: not-allowed;
 }
 
+.context-menu-item#fork-conversation.disabled:hover {
+  background-color: transparent;
+}
+
 /* 划词线程气泡提示 */
 .selection-thread-bubble {
     position: absolute;

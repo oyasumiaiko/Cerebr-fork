@@ -1975,6 +1975,30 @@ export function createSelectionThreadManager(appContext) {
     return chain;
   }
 
+  // 从线程锚点回溯主链，构建“主链根 -> 锚点消息”的有序链路。
+  function buildMainChainToAnchor(anchorNode) {
+    if (!anchorNode) return [];
+    const nodes = chatHistoryManager?.chatHistory?.messages || [];
+    const findNode = (id) => nodes.find(m => m.id === id) || null;
+    const chain = [];
+    let current = anchorNode;
+    const visited = new Set();
+
+    while (current) {
+      if (!current.threadId && !current.threadHiddenSelection) {
+        chain.unshift(current);
+      }
+      if (visited.has(current.id)) break;
+      visited.add(current.id);
+      const parent = current.parentId ? findNode(current.parentId) : null;
+      if (!parent) break;
+      if (parent.threadId || parent.threadHiddenSelection) break;
+      current = parent;
+    }
+
+    return chain;
+  }
+
   async function forkThreadFromMessage(messageId) {
     if (!messageId) return null;
     const nodes = chatHistoryManager?.chatHistory?.messages || [];
@@ -2085,6 +2109,76 @@ export function createSelectionThreadManager(appContext) {
     await enterThread(created.id, { focusMessageId: created.lastMessageId });
     showNotification?.({ message: '已创建分支线程', type: 'info' });
     return created;
+  }
+
+  async function flattenThreadToMainConversation(messageId) {
+    if (!messageId) return null;
+    const nodes = chatHistoryManager?.chatHistory?.messages || [];
+    const targetNode = nodes.find(node => node.id === messageId);
+    if (!targetNode) {
+      showNotification?.({ message: '未找到要展平的线程消息', type: 'warning' });
+      return null;
+    }
+
+    const sourceThreadId = targetNode.threadId || state.activeThreadId;
+    if (!sourceThreadId) {
+      showNotification?.({ message: '当前消息不属于划词线程', type: 'warning' });
+      return null;
+    }
+
+    const sourceInfo = findThreadById(sourceThreadId);
+    const sourceAnnotation = repairThreadAnnotation(sourceThreadId) || sourceInfo?.annotation || null;
+    if (!sourceInfo || !sourceAnnotation) {
+      showNotification?.({ message: '未找到原线程信息，无法展平', type: 'warning' });
+      return null;
+    }
+
+    const anchorNode = nodes.find(node => node.id === sourceInfo.anchorMessageId) || null;
+    if (!anchorNode) {
+      showNotification?.({ message: '未找到线程锚点消息，无法展平', type: 'warning' });
+      return null;
+    }
+
+    const mainChain = buildMainChainToAnchor(anchorNode);
+    if (!mainChain.length) {
+      showNotification?.({ message: '未找到主聊天父级链路，无法展平', type: 'warning' });
+      return null;
+    }
+
+    const threadVisibleChain = buildThreadChainToNode(targetNode, sourceAnnotation)
+      .filter(node => !node?.threadHiddenSelection);
+    if (!threadVisibleChain.length) {
+      showNotification?.({ message: '未找到线程聊天链路，无法展平', type: 'warning' });
+      return null;
+    }
+
+    const flattenedSourceChain = [];
+    const seenIds = new Set();
+    for (const node of [...mainChain, ...threadVisibleChain]) {
+      if (!node?.id || seenIds.has(node.id)) continue;
+      seenIds.add(node.id);
+      flattenedSourceChain.push(node);
+    }
+    if (!flattenedSourceChain.length) {
+      showNotification?.({ message: '线程展平失败：链路为空', type: 'warning' });
+      return null;
+    }
+
+    if (!chatHistoryUI?.createForkConversation) {
+      showNotification?.({ message: '创建展平主聊天失败：历史模块未就绪', type: 'warning' });
+      return null;
+    }
+
+    await chatHistoryUI.createForkConversation(targetNode.id, {
+      sourceChain: flattenedSourceChain,
+      stripThreadMetadata: true,
+      successMessage: '已创建展平主聊天'
+    });
+    return {
+      anchorMessageId: anchorNode.id,
+      targetMessageId: targetNode.id,
+      messageCount: flattenedSourceChain.length
+    };
   }
 
   function showSelectionBubble(selectionInfo, messageElement, range) {
@@ -3124,6 +3218,7 @@ export function createSelectionThreadManager(appContext) {
     init,
     decorateMessageElement,
     forkThreadFromMessage,
+    flattenThreadToMainConversation,
     enterThread,
     exitThread,
     resetForClearChat,

@@ -12721,9 +12721,10 @@ export function createChatHistoryUI(appContext) {
   /**
    * 创建分支对话
    * @param {string} targetMessageId - 目标消息ID，将截取从开始到该消息的对话
+   * @param {{sourceChain?: Array<Object>, stripThreadMetadata?: boolean, successMessage?: string}} [options]
    * @returns {Promise<void>}
    */
-  async function createForkConversation(targetMessageId) {
+  async function createForkConversation(targetMessageId, options = {}) {
     if (!services.chatHistoryManager.chatHistory || !services.chatHistoryManager.chatHistory.messages || services.chatHistoryManager.chatHistory.messages.length === 0) {
       console.error('创建分支对话失败: 没有可用的聊天历史');
       return;
@@ -12741,14 +12742,29 @@ export function createChatHistoryUI(appContext) {
         console.error('创建分支对话失败: 找不到目标消息');
         return;
       }
-      
-      // 获取当前完整对话链
-      const currentChain = services.chatHistoryManager.getCurrentConversationChain();
-      
-      // 截取从开始到目标消息的对话
-      const targetIndex = currentChain.findIndex(msg => msg.id === targetMessageId);
+
+      const normalizedOptions = (options && typeof options === 'object') ? options : {};
+      const customSourceChain = Array.isArray(normalizedOptions.sourceChain)
+        ? normalizedOptions.sourceChain.filter(msg => msg && typeof msg.id === 'string' && msg.id)
+        : null;
+      const stripThreadMetadata = normalizedOptions.stripThreadMetadata === true;
+      const successMessage = (typeof normalizedOptions.successMessage === 'string' && normalizedOptions.successMessage.trim())
+        ? normalizedOptions.successMessage.trim()
+        : '已创建分支对话';
+
+      // 获取目标分支链：默认取当前主链，也支持由外部显式传入“自定义链路”（如线程展平）。
+      const sourceChain = (customSourceChain && customSourceChain.length > 0)
+        ? customSourceChain
+        : services.chatHistoryManager.getCurrentConversationChain();
+
+      const targetIndex = sourceChain.findIndex(msg => msg.id === targetMessageId);
       if (targetIndex === -1) {
-        console.error('创建分支对话失败: 目标消息不在当前对话链中');
+        console.error('创建分支对话失败: 目标消息不在可分支链路中');
+        return;
+      }
+      const selectedChain = sourceChain.slice(0, targetIndex + 1);
+      if (!selectedChain.length) {
+        console.error('创建分支对话失败: 可分支链路为空');
         return;
       }
       
@@ -12785,12 +12801,30 @@ export function createChatHistoryUI(appContext) {
         return '';
       };
 
+      const stripThreadFieldsForMainConversation = (messageNode) => {
+        if (!messageNode || typeof messageNode !== 'object') return;
+        const threadFieldKeys = [
+          'threadId',
+          'threadAnchorId',
+          'threadSelectionText',
+          'threadRootId',
+          'threadHiddenSelection',
+          'threadMatchIndex',
+          'threadAnnotations'
+        ];
+        threadFieldKeys.forEach((key) => {
+          if (key in messageNode) {
+            delete messageNode[key];
+          }
+        });
+      };
+
       const generateForkMessageId = () => `fork_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       // 复制截取的消息到新的ChatHistory
       let previousId = null;
-      for (let i = 0; i <= targetIndex; i++) {
-        const originalMsg = currentChain[i];
+      for (let i = 0; i < selectedChain.length; i++) {
+        const originalMsg = selectedChain[i];
         const resolvedContent = await resolveMessageContent(originalMsg);
         const newMsg = {
           ...cloneSafely(originalMsg), // 深拷贝（尽量不共享引用，避免后续修改污染原会话）
@@ -12799,6 +12833,9 @@ export function createChatHistoryUI(appContext) {
           children: [],
           content: normalizeStoredMessageContent(resolvedContent)
         };
+        if (stripThreadMetadata) {
+          stripThreadFieldsForMainConversation(newMsg);
+        }
         if (previousId) {
           const parentMsg = newChatHistory.messages.find(m => m.id === previousId);
           if (parentMsg) {
@@ -12810,7 +12847,7 @@ export function createChatHistoryUI(appContext) {
           newChatHistory.root = newMsg.id;
         }
         
-        if (i === targetIndex) {
+        if (i === selectedChain.length - 1) {
           newChatHistory.currentNode = newMsg.id;
         }
         
@@ -12822,9 +12859,12 @@ export function createChatHistoryUI(appContext) {
       const newConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       // 计算开始和结束时间
-      const timestamps = newChatHistory.messages.map(msg => msg.timestamp);
-      const startTime = Math.min(...timestamps);
-      const endTime = Math.max(...timestamps);
+      const timestamps = newChatHistory.messages
+        .map(msg => Number(msg.timestamp))
+        .filter(ts => Number.isFinite(ts));
+      const fallbackTime = Date.now();
+      const startTime = timestamps.length ? Math.min(...timestamps) : fallbackTime;
+      const endTime = timestamps.length ? Math.max(...timestamps) : fallbackTime;
       
       // 分支对话摘要：
       // - 优先使用父对话“现有标题 + (分支)”；
@@ -12919,7 +12959,7 @@ export function createChatHistoryUI(appContext) {
       console.log('成功创建分支对话:', newConversationId);
       
       // 提示用户操作成功
-      showNotification({ message: '已创建分支对话', duration: 2000 });
+      showNotification({ message: successMessage, duration: 2000 });
       
     } catch (error) {
       console.error('创建分支对话失败:', error);
