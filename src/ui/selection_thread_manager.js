@@ -1846,6 +1846,7 @@ export function createSelectionThreadManager(appContext) {
         return false;
       }
       decorateMessageElement(messageElement, anchorNode);
+      refreshThreadOverviewDrawerSafely();
       targetThread = created;
     }
 
@@ -1873,6 +1874,7 @@ export function createSelectionThreadManager(appContext) {
     if (messageElement) {
       decorateMessageElement(messageElement, anchorNode);
     }
+    refreshThreadOverviewDrawerSafely();
     enterThread(created.id);
     return created;
   }
@@ -2056,6 +2058,7 @@ export function createSelectionThreadManager(appContext) {
     if (anchorElement) {
       decorateMessageElement(anchorElement, anchorNode);
     }
+    refreshThreadOverviewDrawerSafely();
 
     if (chatHistoryUI?.saveCurrentConversation) {
       const savePromise = chatHistoryUI.saveCurrentConversation(true);
