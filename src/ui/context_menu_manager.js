@@ -73,6 +73,10 @@ export function createContextMenuManager(appContext) {
   const SUBMENU_EDGE_GAP_PX = 6;
   const SUBMENU_VIEWPORT_MARGIN_PX = 8;
   const SUBMENU_HIDE_DELAY_MS = 120;
+  const INSERT_SUBMENU_PLACEMENT_OPTIONS = Object.freeze({
+    anchorSelector: '.context-menu-submenu-item[data-insert-type="both"][data-insert-position="after"]',
+    anchorAlign: 'center'
+  });
   const FORK_ACTION_THREAD_FLATTEN_MAIN = 'thread-flatten-main';
   let activeContextSubmenu = null;
   let submenuHoverHideTimer = null;
@@ -641,7 +645,13 @@ export function createContextMenuManager(appContext) {
     }
   }
 
-  function resolveSubmenuPlacement(menuItem, submenu) {
+  /**
+   * 计算子菜单定位。
+   * placementOptions 为可选参数：
+   * - anchorSelector: 子菜单内用于对齐的锚点选择器；
+   * - anchorAlign: 'center' | 'top'，控制锚点与主菜单项的对齐方式。
+   */
+  function resolveSubmenuPlacement(menuItem, submenu, placementOptions = null) {
     const menuItemRect = menuItem.getBoundingClientRect();
     const submenuRect = submenu.getBoundingClientRect();
     const submenuWidth = Math.max(180, Math.round(submenuRect.width || submenu.offsetWidth || 180));
@@ -657,6 +667,23 @@ export function createContextMenuManager(appContext) {
       ? (menuItemRect.left - submenuWidth - SUBMENU_EDGE_GAP_PX)
       : (menuItemRect.right + SUBMENU_EDGE_GAP_PX);
     let top = menuItemRect.top;
+    const anchorSelector = (typeof placementOptions?.anchorSelector === 'string')
+      ? placementOptions.anchorSelector.trim()
+      : '';
+    if (anchorSelector) {
+      const anchorNode = submenu.querySelector(anchorSelector);
+      if (anchorNode instanceof HTMLElement) {
+        const anchorRect = anchorNode.getBoundingClientRect();
+        const alignMode = placementOptions?.anchorAlign === 'top' ? 'top' : 'center';
+        const menuAnchorY = alignMode === 'top'
+          ? menuItemRect.top
+          : (menuItemRect.top + menuItemRect.height / 2);
+        const submenuAnchorY = alignMode === 'top'
+          ? anchorRect.top
+          : (anchorRect.top + anchorRect.height / 2);
+        top = menuAnchorY - (submenuAnchorY - submenuRect.top);
+      }
+    }
 
     const maxLeft = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportWidth - submenuWidth - SUBMENU_VIEWPORT_MARGIN_PX);
     const maxTop = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportHeight - submenuHeight - SUBMENU_VIEWPORT_MARGIN_PX);
@@ -666,10 +693,10 @@ export function createContextMenuManager(appContext) {
     return { openLeft, left, top };
   }
 
-  function positionContextSubmenu(menuItem, submenu) {
+  function positionContextSubmenu(menuItem, submenu, placementOptions = null) {
     if (!menuItem || !submenu) return;
     ensureSubmenuPortal(submenu);
-    const placement = resolveSubmenuPlacement(menuItem, submenu);
+    const placement = resolveSubmenuPlacement(menuItem, submenu, placementOptions);
     menuItem.classList.toggle('context-menu-item--submenu-left', placement.openLeft);
     submenu.classList.toggle('context-menu-submenu--left', placement.openLeft);
     submenu.style.left = `${Math.round(placement.left)}px`;
@@ -696,7 +723,7 @@ export function createContextMenuManager(appContext) {
     closeContextSubmenu(submenu, menuItem);
   }
 
-  function openContextSubmenu(menuItem, submenu) {
+  function openContextSubmenu(menuItem, submenu, placementOptions = null) {
     if (!menuItem || !submenu) return;
     if (menuItem.classList?.contains('disabled')) return;
     if (submenu === forkConversationSubmenu) {
@@ -708,13 +735,13 @@ export function createContextMenuManager(appContext) {
     if (activeContextSubmenu?.submenu && activeContextSubmenu.submenu !== submenu) {
       closeActiveContextSubmenu();
     }
-    positionContextSubmenu(menuItem, submenu);
+    positionContextSubmenu(menuItem, submenu, placementOptions);
     submenu.classList.add('context-menu-submenu--visible');
-    activeContextSubmenu = { menuItem, submenu };
+    activeContextSubmenu = { menuItem, submenu, placementOptions };
   }
 
-  function updateSubmenuDirection(menuItem, submenu) {
-    positionContextSubmenu(menuItem, submenu);
+  function updateSubmenuDirection(menuItem, submenu, placementOptions = null) {
+    positionContextSubmenu(menuItem, submenu, placementOptions);
   }
 
   function isTargetInsideAnyContextSubmenu(target) {
@@ -792,7 +819,7 @@ export function createContextMenuManager(appContext) {
     regenerateButton.style.display = regenTarget ? 'flex' : 'none';
     if (regenTarget) {
       renderRegenerateSubmenu();
-      updateSubmenuDirection(regenerateButton, regenerateSubmenu);
+      updateSubmenuDirection(regenerateButton, regenerateSubmenu, null);
       updateRegenerateApiHint(regenTarget);
     } else {
       closeContextSubmenu(regenerateSubmenu, regenerateButton);
@@ -819,7 +846,7 @@ export function createContextMenuManager(appContext) {
             item.classList.toggle('is-disabled', !canInsertBefore);
           });
         }
-        updateSubmenuDirection(insertMessageMenu, insertMessageSubmenu);
+        updateSubmenuDirection(insertMessageMenu, insertMessageSubmenu, INSERT_SUBMENU_PLACEMENT_OPTIONS);
       } else {
         closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
       }
@@ -869,7 +896,7 @@ export function createContextMenuManager(appContext) {
       forkConversationArrow.style.display = isThreadContext ? '' : 'none';
     }
     if (isThreadContext && forkConversationSubmenu) {
-      updateSubmenuDirection(forkConversationButton, forkConversationSubmenu);
+      updateSubmenuDirection(forkConversationButton, forkConversationSubmenu, null);
     } else {
       closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
     }
@@ -1643,10 +1670,10 @@ export function createContextMenuManager(appContext) {
     attachContextMenuListeners(chatContainer);
     attachContextMenuListeners(threadContainer);
 
-    const bindPortalSubmenuHover = (menuItem, submenu) => {
+    const bindPortalSubmenuHover = (menuItem, submenu, placementOptions = null) => {
       if (!menuItem || !submenu) return;
-      menuItem.addEventListener('mouseenter', () => openContextSubmenu(menuItem, submenu));
-      menuItem.addEventListener('focusin', () => openContextSubmenu(menuItem, submenu));
+      menuItem.addEventListener('mouseenter', () => openContextSubmenu(menuItem, submenu, placementOptions));
+      menuItem.addEventListener('focusin', () => openContextSubmenu(menuItem, submenu, placementOptions));
       menuItem.addEventListener('mouseleave', scheduleSubmenuHide);
       submenu.addEventListener('mouseenter', clearSubmenuHideTimer);
       submenu.addEventListener('mouseleave', scheduleSubmenuHide);
@@ -1656,13 +1683,17 @@ export function createContextMenuManager(appContext) {
     ensureSubmenuPortal(insertMessageSubmenu);
     ensureSubmenuPortal(forkConversationSubmenu);
     bindPortalSubmenuHover(regenerateButton, regenerateSubmenu);
-    bindPortalSubmenuHover(insertMessageMenu, insertMessageSubmenu);
+    bindPortalSubmenuHover(insertMessageMenu, insertMessageSubmenu, INSERT_SUBMENU_PLACEMENT_OPTIONS);
     bindPortalSubmenuHover(forkConversationButton, forkConversationSubmenu);
 
     window.addEventListener('resize', () => {
       if (contextMenu.style.display !== 'block') return;
       if (!activeContextSubmenu?.menuItem || !activeContextSubmenu?.submenu) return;
-      positionContextSubmenu(activeContextSubmenu.menuItem, activeContextSubmenu.submenu);
+      positionContextSubmenu(
+        activeContextSubmenu.menuItem,
+        activeContextSubmenu.submenu,
+        activeContextSubmenu.placementOptions || null
+      );
     });
 
     // 按钮点击处理
