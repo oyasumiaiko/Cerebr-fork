@@ -28,9 +28,9 @@ export const AI_FOOTER_TEMPLATE_VARIABLES = Object.freeze([
   { key: 'usage_line', description: 'in/out/total 汇总（千分位）' },
   { key: 'usage_line_k', description: 'in/out/total 汇总（k/m/b）' },
   { key: 'timestamp', description: '消息时间戳（毫秒）' },
-  { key: 'time', description: '本地时间（toLocaleTimeString）' },
-  { key: 'date', description: '本地日期（toLocaleDateString）' },
-  { key: 'datetime', description: '本地日期时间（toLocaleString）' }
+  { key: 'time', description: '时间（HH:mm）' },
+  { key: 'date', description: '智能日期（非本日显示 M/D，非本年显示 YYYY/M/D）' },
+  { key: 'datetime', description: '智能日期 + 时间（date + HH:mm）' }
 ]);
 
 function toTrimmedText(value) {
@@ -84,6 +84,30 @@ function buildUsageLine(usage, formatter) {
   if (usage.completionTokens != null) parts.push(`out ${format(usage.completionTokens)}`);
   if (usage.totalTokens != null) parts.push(`total ${format(usage.totalTokens)}`);
   return parts.join(' · ');
+}
+
+// 日期展示策略：
+// - 今天：不显示日期（返回空字符串）；
+// - 同一年但非今天：显示 M/D；
+// - 非本年：显示 YYYY/M/D。
+function formatSmartDateLabel(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const sameMonth = date.getMonth() === now.getMonth();
+  const sameDay = date.getDate() === now.getDate();
+  if (sameYear && sameMonth && sameDay) return '';
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  if (sameYear) return `${month}/${day}`;
+  return `${date.getFullYear()}/${month}/${day}`;
+}
+
+function formatTimeHhMm(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 function hasTemplateValue(value) {
@@ -161,6 +185,9 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
   const totalTokensK = formatTokenCompact(usage?.totalTokens);
   const usageLine = buildUsageLine(usage, value => formatTokenWithThousands(value));
   const usageLineK = buildUsageLine(usage, value => formatTokenCompact(value));
+  const timeLabel = formatTimeHhMm(date);
+  const dateLabel = formatSmartDateLabel(date);
+  const dateTimeLabel = dateLabel ? `${dateLabel} ${timeLabel}`.trim() : timeLabel;
 
   const displayLabel = hasThoughtSignature
     ? (apiName ? `signatured · ${apiName}` : 'signatured')
@@ -196,9 +223,9 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
     usage_line: usageLine,
     usage_line_k: usageLineK,
     timestamp: timestampMs != null ? String(timestampMs) : '',
-    time: date ? date.toLocaleTimeString() : '',
-    date: date ? date.toLocaleDateString() : '',
-    datetime: date ? date.toLocaleString() : ''
+    time: timeLabel,
+    date: dateLabel,
+    datetime: dateTimeLabel
   };
 }
 
