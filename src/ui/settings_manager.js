@@ -5,6 +5,7 @@
 
 import { createThemeManager } from './theme_manager.js';
 import { queueStorageSet, queueStoragePrime } from '../utils/storage_write_queue_bridge.js';
+import { DEFAULT_AI_FOOTER_TEMPLATE } from '../utils/api_footer_template.js';
 
 /**
  * 创建设置管理器
@@ -132,6 +133,8 @@ export function createSettingsManager(appContext) {
     enableDollarMath: true,
     // 是否在输入框 placeholder 中显示当前模型名
     showModelNameInPlaceholder: true,
+    // AI 消息末尾的 API 元数据模板（支持 {{var}} 占位）
+    aiFooterTemplate: DEFAULT_AI_FOOTER_TEMPLATE,
     // 主题透明度拆分：背景层与元素层独立控制
     backgroundOpacity: 0.8,
     elementOpacity: 0.8,
@@ -643,6 +646,19 @@ export function createSettingsManager(appContext) {
       group: 'input',
       defaultValue: DEFAULT_SETTINGS.showModelNameInPlaceholder,
       apply: (v) => applyShowModelNameInPlaceholder(v)
+    },
+    {
+      key: 'aiFooterTemplate',
+      type: 'textarea',
+      label: 'AI 消息尾注模板',
+      group: 'display',
+      rows: 5,
+      placeholder: '示例：{{display_label}}\n可用变量：{{apiname}} {{time}} {{date}} {{datetime}} {{input_tokens}} {{output_tokens}} {{total_tokens}} {{api_uuid}} {{display_name}} {{model}} {{signature}} {{signature_prefix}} {{signature_source}}',
+      defaultValue: DEFAULT_SETTINGS.aiFooterTemplate,
+      readFromUI: (el) => (typeof el?.value === 'string' ? el.value : ''),
+      writeToUI: (el, value) => {
+        if (el) el.value = (typeof value === 'string') ? value : '';
+      }
     },
     {
       key: 'copyImageWidth',

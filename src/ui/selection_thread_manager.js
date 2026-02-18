@@ -1,5 +1,6 @@
 import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
 import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
+import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 
 /**
  * 划词线程管理器
@@ -749,48 +750,13 @@ export function createSelectionThreadManager(appContext) {
     })();
 
     const allConfigs = apiManager?.getAllConfigs?.() || [];
-    let label = '';
-    let matchedConfig = null;
-    if (node.apiUuid) {
-      matchedConfig = allConfigs.find(c => c.id === node.apiUuid) || null;
-    }
-    if (!label && matchedConfig && typeof matchedConfig.displayName === 'string' && matchedConfig.displayName.trim()) {
-      label = matchedConfig.displayName.trim();
-    }
-    if (!label && matchedConfig && typeof matchedConfig.modelName === 'string' && matchedConfig.modelName.trim()) {
-      label = matchedConfig.modelName.trim();
-    }
-    if (!label) label = (node.apiDisplayName || '').trim();
-    if (!label) label = (node.apiModelId || '').trim();
-
-    const hasThoughtSignature = !!node.thoughtSignature;
-    let displayLabel = label || '';
-    if (hasThoughtSignature) {
-      displayLabel = label ? `signatured · ${label}` : 'signatured';
-    }
-    footer.textContent = displayLabel;
-
-    const titleDisplayName = matchedConfig?.displayName || node.apiDisplayName || '-';
-    const titleModelId = matchedConfig?.modelName || node.apiModelId || '-';
-    const normalizeToken = (value) => {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed) || parsed < 0) return null;
-      return Math.round(parsed);
-    };
-    const usage = (node.apiUsage && typeof node.apiUsage === 'object') ? node.apiUsage : null;
-    const promptTokens = normalizeToken(usage?.promptTokens ?? usage?.prompt_tokens);
-    const completionTokens = normalizeToken(usage?.completionTokens ?? usage?.completion_tokens);
-    const totalTokens = normalizeToken(usage?.totalTokens ?? usage?.total_tokens);
-    const titleLines = [
-      `API uuid: ${node.apiUuid || '-'} | displayName: ${titleDisplayName} | model: ${titleModelId}`
-    ];
-    if (hasThoughtSignature) {
-      titleLines.push('thought_signature: stored');
-    }
-    if (promptTokens != null) titleLines.push(`prompt_tokens: ${promptTokens}`);
-    if (completionTokens != null) titleLines.push(`completion_tokens: ${completionTokens}`);
-    if (totalTokens != null) titleLines.push(`total_tokens: ${totalTokens}`);
-    footer.title = titleLines.join('\n');
+    const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const renderData = buildApiFooterRenderData(node, {
+      allConfigs,
+      template: footerTemplate
+    });
+    footer.textContent = renderData.text;
+    footer.title = renderData.title;
   }
 
   function collectThreadChain(annotation) {

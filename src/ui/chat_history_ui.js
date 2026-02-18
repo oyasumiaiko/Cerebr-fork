@@ -21,6 +21,7 @@ import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser
 import { generateCandidateUrls } from '../utils/url_candidates.js';
 import { buildConversationSummaryFromMessages } from '../utils/conversation_title.js';
 import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
+import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import {
   normalizeConversationApiLock,
   mergeConversationApiLockState,
@@ -51,8 +52,10 @@ export function createChatHistoryUI(appContext) {
   // Destructure dependencies from appContext
   const chatLayout = dom.chatLayout;
   const chatContainer = dom.chatContainer;
+  const threadContainer = dom.threadContainer;
   const chatInputElement = dom.messageInput; 
   const appendMessage = services.messageProcessor.appendMessage;
+  const settingsManager = services.settingsManager;
   
   // 修改: 直接使用 services.chatHistoryManager.chatHistory 访问数据对象
   // const chatHistory = services.chatHistoryManager.chatHistory; 
@@ -3127,6 +3130,64 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
+  function renderApiFooterForMessageElement(messageElem, msg, options = {}) {
+    if (!messageElem || !msg) return;
+    const normalizedRole = String(options.role ?? msg.role ?? '').toLowerCase();
+    const isAiMessage = normalizedRole === 'assistant' || normalizedRole === 'ai';
+    if (!isAiMessage) return;
+
+    const footer = messageElem.querySelector('.api-footer') || (() => {
+      const element = document.createElement('div');
+      element.className = 'api-footer';
+      messageElem.appendChild(element);
+      return element;
+    })();
+
+    const allConfigs = Array.isArray(options.allConfigs)
+      ? options.allConfigs
+      : (services.apiManager.getAllConfigs?.() || []);
+    const footerTemplate = (typeof options.template === 'string')
+      ? options.template
+      : settingsManager?.getSetting?.('aiFooterTemplate');
+    const renderData = buildApiFooterRenderData(msg, {
+      allConfigs,
+      template: footerTemplate
+    });
+    footer.textContent = renderData.text;
+    footer.title = renderData.title;
+  }
+
+  function refreshVisibleAiMessageFooters() {
+    const historyMessages = Array.isArray(services.chatHistoryManager?.chatHistory?.messages)
+      ? services.chatHistoryManager.chatHistory.messages
+      : [];
+    if (!historyMessages.length) return;
+    const nodeById = new Map(historyMessages.map(node => [node?.id, node]));
+    const allConfigs = services.apiManager.getAllConfigs?.() || [];
+    const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const containers = [chatContainer, threadContainer].filter(Boolean);
+
+    containers.forEach((container) => {
+      const messageElements = container.querySelectorAll('.message.ai-message[data-message-id]');
+      messageElements.forEach((messageElem) => {
+        const messageId = messageElem.getAttribute('data-message-id') || '';
+        const node = nodeById.get(messageId);
+        if (!node) return;
+        renderApiFooterForMessageElement(messageElem, node, {
+          role: 'ai',
+          allConfigs,
+          template: footerTemplate
+        });
+      });
+    });
+  }
+
+  settingsManager?.subscribe?.('aiFooterTemplate', () => {
+    try {
+      refreshVisibleAiMessageFooters();
+    } catch (_) {}
+  });
+
   /**
    * 加载选中的对话记录到当前聊天窗口
    * @param {Object} conversation - 对话记录对象
@@ -3170,6 +3231,8 @@ export function createChatHistoryUI(appContext) {
       }
       return set;
     };
+    const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const apiConfigsSnapshot = services.apiManager.getAllConfigs?.() || [];
 
     // 遍历对话中的每条消息并显示
     for (const msg of fullConversation.messages) {
@@ -3230,62 +3293,13 @@ export function createChatHistoryUI(appContext) {
         }
       }
       messageElem.setAttribute('data-message-id', msg.id);
-      // 渲染 API footer（按优先级：uuid->displayName->modelId），带 Thought Signature 的消息用文字标记
+      // 渲染 API footer（可由用户模板控制展示内容）
       try {
-        const footer = messageElem.querySelector('.api-footer') || (() => {
-          const f = document.createElement('div');
-          f.className = 'api-footer';
-          messageElem.appendChild(f);
-          return f;
-        })();
-        const allConfigs = appContext.services.apiManager.getAllConfigs?.() || [];
-        let label = '';
-        let matchedConfig = null;
-        if (msg.apiUuid) {
-          matchedConfig = allConfigs.find(c => c.id === msg.apiUuid) || null;
-        }
-        if (!label && matchedConfig && typeof matchedConfig.displayName === 'string' && matchedConfig.displayName.trim()) {
-          label = matchedConfig.displayName.trim();
-        }
-        if (!label && matchedConfig && typeof matchedConfig.modelName === 'string' && matchedConfig.modelName.trim()) {
-          label = matchedConfig.modelName.trim();
-        }
-        if (!label) label = (msg.apiDisplayName || '').trim();
-        if (!label) label = (msg.apiModelId || '').trim();
-        const hasThoughtSignature = !!msg.thoughtSignature;
-
-        if (role === 'ai') {
-          // footer：带 Thought Signature 的消息使用 "signatured · 模型名" 文本标记
-          let displayLabel = label || '';
-          if (hasThoughtSignature) {
-            displayLabel = label ? `signatured · ${label}` : 'signatured';
-          }
-          footer.textContent = displayLabel;
-        }
-
-        const titleDisplayName = matchedConfig?.displayName || msg.apiDisplayName || '-';
-        const titleModelId = matchedConfig?.modelName || msg.apiModelId || '-';
-        const normalizeToken = (value) => {
-          const parsed = Number(value);
-          if (!Number.isFinite(parsed) || parsed < 0) return null;
-          return Math.round(parsed);
-        };
-        const usage = (msg.apiUsage && typeof msg.apiUsage === 'object') ? msg.apiUsage : null;
-        const promptTokens = normalizeToken(usage?.promptTokens ?? usage?.prompt_tokens);
-        const completionTokens = normalizeToken(usage?.completionTokens ?? usage?.completion_tokens);
-        const totalTokens = normalizeToken(usage?.totalTokens ?? usage?.total_tokens);
-        const titleLines = [
-          `API uuid: ${msg.apiUuid || '-'} | displayName: ${titleDisplayName} | model: ${titleModelId}`
-        ];
-        if (hasThoughtSignature) {
-          titleLines.push('thought_signature: stored');
-        }
-        if (promptTokens != null) titleLines.push(`prompt_tokens: ${promptTokens}`);
-        if (completionTokens != null) titleLines.push(`completion_tokens: ${completionTokens}`);
-        if (totalTokens != null) titleLines.push(`total_tokens: ${totalTokens}`);
-        footer.title = (role === 'ai')
-          ? titleLines.join('\n')
-          : footer.title;
+        renderApiFooterForMessageElement(messageElem, msg, {
+          role,
+          allConfigs: apiConfigsSnapshot,
+          template: footerTemplate
+        });
       } catch (_) {}
 
       // 划词线程：根据历史节点补回高亮

@@ -11,6 +11,7 @@ import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttle
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { resolveResponseHandlingMode, planStreamingRenderTransition } from './response_flow_state.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
+import { buildApiFooterRenderData, normalizeApiUsageMeta } from '../utils/api_footer_template.js';
 
 /**
  * 创建消息发送器
@@ -3361,34 +3362,6 @@ export function createMessageSender(appContext) {
 
   // Message composition itself is delegated to composeMessages in message_composer.js.
 
-  function normalizeApiUsageMeta(rawUsage) {
-    if (!rawUsage || typeof rawUsage !== 'object') return null;
-    const normalizeValue = (value) => {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed) || parsed < 0) return null;
-      return Math.round(parsed);
-    };
-    const promptTokens = normalizeValue(rawUsage.prompt_tokens ?? rawUsage.promptTokens);
-    const completionTokens = normalizeValue(rawUsage.completion_tokens ?? rawUsage.completionTokens);
-    const totalTokens = normalizeValue(rawUsage.total_tokens ?? rawUsage.totalTokens);
-    if (promptTokens == null && completionTokens == null && totalTokens == null) return null;
-    return {
-      promptTokens,
-      completionTokens,
-      totalTokens
-    };
-  }
-
-  function buildApiUsageTitleLines(rawUsage) {
-    const usage = normalizeApiUsageMeta(rawUsage);
-    if (!usage) return [];
-    const lines = [];
-    if (usage.promptTokens != null) lines.push(`prompt_tokens: ${usage.promptTokens}`);
-    if (usage.completionTokens != null) lines.push(`completion_tokens: ${usage.completionTokens}`);
-    if (usage.totalTokens != null) lines.push(`total_tokens: ${usage.totalTokens}`);
-    return lines;
-  }
-
   /**
    * 统一封装 AI 响应 UI 副作用：
    * - API 元信息落库 + footer 渲染；
@@ -3417,39 +3390,13 @@ export function createMessageSender(appContext) {
           messageElement.appendChild(footer);
         }
         const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
-        let label = '';
-        let matchedConfig = null;
-        if (nodeLike.apiUuid) {
-          // 优先按 uuid 回查配置，避免 displayName/modelName 被后续重命名后展示漂移。
-          matchedConfig = allConfigs.find(c => c.id === nodeLike.apiUuid) || null;
-        }
-        if (!label && matchedConfig && typeof matchedConfig.displayName === 'string' && matchedConfig.displayName.trim()) {
-          label = matchedConfig.displayName.trim();
-        }
-        if (!label && matchedConfig && typeof matchedConfig.modelName === 'string' && matchedConfig.modelName.trim()) {
-          label = matchedConfig.modelName.trim();
-        }
-        if (!label) label = (nodeLike.apiDisplayName || '').trim();
-        if (!label) label = (nodeLike.apiModelId || '').trim();
-        const hasThoughtSignature = !!nodeLike.thoughtSignature;
-
-        // footer：带 Thought Signature 的消息使用 "signatured · 模型名" 文本标记
-        let displayLabel = label || '';
-        if (hasThoughtSignature) {
-          displayLabel = label ? `signatured · ${label}` : 'signatured';
-        }
-        footer.textContent = displayLabel;
-
-        const titleDisplayName = matchedConfig?.displayName || nodeLike.apiDisplayName || '-';
-        const titleModelId = matchedConfig?.modelName || nodeLike.apiModelId || '-';
-        const titleLines = [
-          `API uuid: ${nodeLike.apiUuid || '-'} | displayName: ${titleDisplayName} | model: ${titleModelId}`
-        ];
-        if (hasThoughtSignature) {
-          titleLines.push('thought_signature: stored');
-        }
-        titleLines.push(...buildApiUsageTitleLines(nodeLike.apiUsage));
-        footer.title = titleLines.join('\n');
+        const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+        const renderData = buildApiFooterRenderData(nodeLike, {
+          allConfigs,
+          template: footerTemplate
+        });
+        footer.textContent = renderData.text;
+        footer.title = renderData.title;
       } catch (e) {
         console.warn('渲染API footer失败:', e);
       }
