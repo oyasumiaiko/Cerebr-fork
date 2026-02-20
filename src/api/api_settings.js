@@ -49,6 +49,9 @@ export function createApiManager(appContext) {
   const MAX_CHAT_HISTORY_UNLIMITED = 2147483647;
   // 用于存储每个配置下次应使用的 API Key 索引 (内存中)
   const apiKeyUsageIndex = {};
+  // 本地 key 文件的运行时缓存（仅内存）：避免每次请求都读磁盘。
+  // 设计：首次读取后复用；仅在“当前 key 不可用/无可用 key”时触发一次强制重读。
+  const apiKeyFileRuntimeCache = new Map();
   // API Key 黑名单（本地持久化），结构为 Map<key, expiresAtMs>
   // 约定：429 时加入黑名单 24 小时；403 与“非 bad request 的 400”写入 -1 表示永久失效
   const BLACKLIST_STORAGE_KEY = 'apiKeyBlacklist';
@@ -278,6 +281,37 @@ export function createApiManager(appContext) {
     return (typeof apiKeyFilePath === 'string') ? apiKeyFilePath.trim() : '';
   }
 
+  function getApiKeyFileCacheEntry(config, filePath) {
+    const normalizedPath = normalizeApiKeyFilePath(filePath);
+    if (!normalizedPath) return null;
+    const configId = getConfigIdentifier(config || {});
+    const cached = apiKeyFileRuntimeCache.get(configId);
+    if (!cached || cached.filePath !== normalizedPath) return null;
+    if (!Array.isArray(cached.keys) || cached.keys.length === 0) return null;
+    return {
+      configId,
+      filePath: normalizedPath,
+      keys: cached.keys.slice(),
+      loadedAt: Number(cached.loadedAt) || 0
+    };
+  }
+
+  function setApiKeyFileCacheEntry(config, filePath, keys) {
+    const normalizedPath = normalizeApiKeyFilePath(filePath);
+    if (!normalizedPath || !Array.isArray(keys) || keys.length === 0) return;
+    const configId = getConfigIdentifier(config || {});
+    apiKeyFileRuntimeCache.set(configId, {
+      filePath: normalizedPath,
+      keys: keys.slice(),
+      loadedAt: Date.now()
+    });
+  }
+
+  function clearApiKeyFileCacheEntry(config) {
+    const configId = getConfigIdentifier(config || {});
+    apiKeyFileRuntimeCache.delete(configId);
+  }
+
   // 将用户输入的本地文件路径规范为可 fetch 的 file:// URL。
   // 支持：file://、Windows 盘符路径、UNC 路径、Unix 绝对路径。
   function toLocalFileUrl(rawPath) {
@@ -319,54 +353,123 @@ export function createApiManager(appContext) {
     return Array.from(new Set(keys));
   }
 
+  // 本地 key 文件读取重试参数：
+  // - 默认最多尝试 3 次；
+  // - 使用指数退避 + 轻微随机抖动，降低瞬时失败（文件尚未写完/短暂权限抖动）带来的误报。
+  const LOCAL_KEY_FILE_READ_MAX_ATTEMPTS = 3;
+  const LOCAL_KEY_FILE_READ_BASE_DELAY_MS = 120;
+  const LOCAL_KEY_FILE_READ_MAX_DELAY_MS = 1200;
+
+  function getLocalKeyFileRetryDelayMs(attemptIndex) {
+    const safeIndex = Math.max(0, Number(attemptIndex) || 0);
+    const expDelay = LOCAL_KEY_FILE_READ_BASE_DELAY_MS * Math.pow(2, safeIndex);
+    const jitterMs = Math.floor(Math.random() * 80);
+    return Math.min(LOCAL_KEY_FILE_READ_MAX_DELAY_MS, expDelay + jitterMs);
+  }
+
+  function sleepMs(ms) {
+    const delay = Math.max(0, Number(ms) || 0);
+    return new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
   async function loadApiKeysFromLocalFile(apiKeyFilePath) {
     const filePath = normalizeApiKeyFilePath(apiKeyFilePath);
     if (!filePath) return { keys: [], error: 'empty_path', detail: '' };
     const fileUrl = toLocalFileUrl(filePath);
     if (!fileUrl) return { keys: [], error: 'invalid_path', detail: '仅支持绝对路径或 file:// 路径' };
-    try {
-      const response = await fetch(fileUrl, { method: 'GET', cache: 'no-store' });
-      if (!response.ok) {
-        return { keys: [], error: 'http_error', detail: `HTTP ${response.status}` };
+    let lastError = 'read_failed';
+    let lastDetail = '';
+    const maxAttempts = Math.max(1, LOCAL_KEY_FILE_READ_MAX_ATTEMPTS);
+
+    for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex += 1) {
+      try {
+        const response = await fetch(fileUrl, { method: 'GET', cache: 'no-store' });
+        if (!response.ok) {
+          lastError = 'http_error';
+          lastDetail = `HTTP ${response.status}`;
+        } else {
+          const text = await response.text();
+          const keys = parseApiKeysFromFileText(text);
+          if (keys.length > 0) {
+            return { keys, error: '', detail: '', attempts: attemptIndex + 1 };
+          }
+          lastError = 'empty_file';
+          lastDetail = '文件中未找到有效 key（支持每行一个，或逗号分隔）';
+        }
+      } catch (e) {
+        lastError = 'read_failed';
+        lastDetail = (e && typeof e.message === 'string') ? e.message : String(e || '未知读取错误');
       }
-      const text = await response.text();
-      const keys = parseApiKeysFromFileText(text);
-      if (keys.length === 0) {
-        return { keys: [], error: 'empty_file', detail: '文件中未找到有效 key（支持每行一个，或逗号分隔）' };
+
+      const hasNextAttempt = attemptIndex < (maxAttempts - 1);
+      if (hasNextAttempt) {
+        await sleepMs(getLocalKeyFileRetryDelayMs(attemptIndex));
       }
-      return { keys, error: '', detail: '' };
-    } catch (e) {
-      return {
-        keys: [],
-        error: 'read_failed',
-        detail: (e && typeof e.message === 'string') ? e.message : String(e || '未知读取错误')
-      };
     }
+
+    const detailWithRetry = lastDetail
+      ? `读取失败（已重试 ${maxAttempts} 次）：${lastDetail}`
+      : `读取失败（已重试 ${maxAttempts} 次）`;
+    return {
+      keys: [],
+      error: lastError || 'read_failed',
+      detail: detailWithRetry,
+      attempts: maxAttempts
+    };
   }
 
-  async function resolveRuntimeApiKeys(config, emitStatus) {
+  async function resolveRuntimeApiKeys(config, emitStatus, options = {}) {
+    const forceFileReload = !!options?.forceFileReload;
     const inlineKeys = normalizeApiKeys(config?.apiKey);
     const filePath = normalizeApiKeyFilePath(config?.apiKeyFilePath);
     if (!filePath) {
       return { keys: inlineKeys, source: 'inline', detail: '' };
     }
 
+    const cached = getApiKeyFileCacheEntry(config, filePath);
+    if (!forceFileReload && cached?.keys?.length > 0) {
+      return { keys: cached.keys, source: 'file_cache', detail: '', attempts: 0 };
+    }
+
     const loaded = await loadApiKeysFromLocalFile(filePath);
     if (loaded.keys.length > 0) {
+      setApiKeyFileCacheEntry(config, filePath, loaded.keys);
       emitStatus({
         stage: 'api_key_file_loaded',
         keyCount: loaded.keys.length,
+        readAttempts: loaded.attempts || 1,
+        loadedFrom: forceFileReload ? 'file_reload' : 'file',
         apiBase: config?.baseUrl || '',
         modelName: config?.modelName || ''
       });
-      return { keys: loaded.keys, source: 'file', detail: '' };
+      return { keys: loaded.keys, source: forceFileReload ? 'file_reload' : 'file', detail: '' };
+    }
+
+    if (cached?.keys?.length > 0) {
+      emitStatus({
+        stage: 'api_key_file_load_failed',
+        willFallback: true,
+        fallbackSource: 'file_cache',
+        fallbackKeyCount: cached.keys.length,
+        readAttempts: loaded.attempts || LOCAL_KEY_FILE_READ_MAX_ATTEMPTS,
+        reason: loaded?.detail || loaded?.error || 'unknown',
+        apiBase: config?.baseUrl || '',
+        modelName: config?.modelName || ''
+      });
+      return {
+        keys: cached.keys,
+        source: 'file_cache_fallback',
+        detail: loaded?.detail || loaded?.error || ''
+      };
     }
 
     const hasFallback = inlineKeys.length > 0;
     emitStatus({
       stage: 'api_key_file_load_failed',
       willFallback: hasFallback,
+      fallbackSource: hasFallback ? 'inline' : '',
       fallbackKeyCount: inlineKeys.length,
+      readAttempts: loaded.attempts || LOCAL_KEY_FILE_READ_MAX_ATTEMPTS,
       reason: loaded?.detail || loaded?.error || 'unknown',
       apiBase: config?.baseUrl || '',
       modelName: config?.modelName || ''
@@ -1284,12 +1387,16 @@ export function createApiManager(appContext) {
     // --- 输入变化时保存 ---
     [baseUrlInput, displayNameInput, modelNameInput].forEach(input => {
       input.addEventListener('change', () => {
+        const previousConfig = { ...apiConfigs[index] };
         apiConfigs[index] = {
           ...apiConfigs[index],
           baseUrl: baseUrlInput.value,
           displayName: displayNameInput.value,
           modelName: modelNameInput.value,
         };
+        // baseUrl/modelName 变化会影响缓存键，主动清理避免沿用旧缓存。
+        clearApiKeyFileCacheEntry(previousConfig);
+        clearApiKeyFileCacheEntry(apiConfigs[index]);
         // 更新标题
         titleElement.textContent = apiConfigs[index].displayName || apiConfigs[index].modelName || apiConfigs[index].baseUrl || '新配置';
         saveAPIConfigs();
@@ -1326,7 +1433,9 @@ export function createApiManager(appContext) {
     // API Key 本地文件路径变化处理（每次请求会按该路径实时读取；失败时回退到输入框 key）。
     if (apiKeyFilePathInput) {
       apiKeyFilePathInput.addEventListener('change', () => {
+        clearApiKeyFileCacheEntry(apiConfigs[index]);
         apiConfigs[index].apiKeyFilePath = (apiKeyFilePathInput.value || '').trim();
+        clearApiKeyFileCacheEntry(apiConfigs[index]);
         saveAPIConfigs();
       });
     }
@@ -1467,6 +1576,7 @@ export function createApiManager(appContext) {
           // 删除对应的轮询状态
           const deletedConfigId = getConfigIdentifier(deletedConfig);
           delete apiKeyUsageIndex[deletedConfigId];
+          clearApiKeyFileCacheEntry(deletedConfig);
 
           if (selectedConfigIndex >= apiConfigs.length) {
             selectedConfigIndex = apiConfigs.length - 1;
@@ -2094,13 +2204,16 @@ export function createApiManager(appContext) {
     // 选择可用的 Key：成功不轮换；429 临时黑名单；bad request 的 400 不拉黑；其余 400/403 永久黑名单
     const tried = new Set();
     let lastErrorResponse = null;
+    const hasApiKeyFilePath = !!normalizeApiKeyFilePath(config?.apiKeyFilePath);
+    let hasReloadedFileKeys = false;
 
     // 计算候选 key：
     // - 默认使用输入框中的 apiKey；
-    // - 若配置了 apiKeyFilePath，则优先从本地文件实时读取（读取失败时回退到输入框 key）。
-    const resolvedKeys = await resolveRuntimeApiKeys(config, emitStatus);
-    const keysArray = Array.isArray(resolvedKeys?.keys) ? resolvedKeys.keys : [];
-    const isArrayKeys = keysArray.length > 1;
+    // - 若配置了 apiKeyFilePath，则优先从文件读取；首次成功后走内存缓存；
+    // - 仅在“当前 key 不可用/无可用 key”时，才会强制重读文件一次。
+    let resolvedKeys = await resolveRuntimeApiKeys(config, emitStatus);
+    let keysArray = Array.isArray(resolvedKeys?.keys) ? resolvedKeys.keys : [];
+    let isArrayKeys = keysArray.length > 1;
     if (keysArray.length === 0) {
       console.error('API Key 缺失或无效:', { modelName: config?.modelName, baseUrl: config?.baseUrl, source: resolvedKeys?.source });
       const detailText = (typeof resolvedKeys?.detail === 'string' && resolvedKeys.detail.trim())
@@ -2114,6 +2227,32 @@ export function createApiManager(appContext) {
       apiKeyUsageIndex[configId] = 0;
     }
 
+    const tryReloadKeysFromFileOnce = async (reason = '') => {
+      if (!hasApiKeyFilePath || hasReloadedFileKeys) return false;
+      hasReloadedFileKeys = true;
+
+      emitStatus({
+        stage: 'api_key_file_reload_start',
+        reason,
+        apiBase: config?.baseUrl || '',
+        modelName: config?.modelName || ''
+      });
+
+      const refreshed = await resolveRuntimeApiKeys(config, emitStatus, { forceFileReload: true });
+      const refreshedKeys = Array.isArray(refreshed?.keys) ? refreshed.keys : [];
+      if (refreshedKeys.length === 0) return false;
+
+      resolvedKeys = refreshed;
+      keysArray = refreshedKeys;
+      isArrayKeys = keysArray.length > 1;
+      if (isArrayKeys && typeof apiKeyUsageIndex[configId] !== 'number') {
+        apiKeyUsageIndex[configId] = 0;
+      } else if (isArrayKeys) {
+        apiKeyUsageIndex[configId] = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), keysArray.length - 1);
+      }
+      return true;
+    };
+
     while (true) {
       let selectedIndex = 0;
       let selectedKey = '';
@@ -2122,6 +2261,10 @@ export function createApiManager(appContext) {
         const startIndex = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), keysArray.length - 1);
         const idx = getNextUsableKeyIndex({ apiKey: keysArray }, startIndex, tried);
         if (idx === -1) {
+          const reloaded = await tryReloadKeysFromFileOnce('no_usable_key_before_request');
+          if (reloaded) {
+            continue;
+          }
           // 无可用 key
           if (lastErrorResponse) return lastErrorResponse; // 返回最后一次错误响应，让上层按原逻辑处理
           throw new Error('没有可用的 API Key（全部黑名单或被删除）');
@@ -2209,13 +2352,23 @@ export function createApiManager(appContext) {
           // 轮换到下一个可用 key（并更新“当前使用”索引）
           const nextIdx = getNextUsableKeyIndex({ apiKey: keysArray }, (selectedIndex + 1) % keysArray.length, tried);
           if (nextIdx === -1) {
+            const reloaded = await tryReloadKeysFromFileOnce('rate_limited_no_next_key');
+            if (reloaded) {
+              continue;
+            }
             return response; // 无可用 key，返回 429 响应
           }
           apiKeyUsageIndex[configId] = nextIdx;
           // 循环继续自动重试
           continue;
         }
-        // 单 key 无法继续
+        // 单 key：仅在使用本地文件 key 时尝试一次重读（便于立即接入新 key），否则按原逻辑返回。
+        {
+          const reloaded = await tryReloadKeysFromFileOnce('rate_limited_single_key');
+          if (reloaded) {
+            continue;
+          }
+        }
         return response;
       }
 
@@ -2249,10 +2402,20 @@ export function createApiManager(appContext) {
         if (isArrayKeys) {
           const nextIdx = getNextUsableKeyIndex({ apiKey: keysArray }, (selectedIndex + 1) % keysArray.length, tried);
           if (nextIdx === -1) {
+            const reloaded = await tryReloadKeysFromFileOnce('key_blacklisted_no_next_key');
+            if (reloaded) {
+              continue;
+            }
             return response;
           }
           apiKeyUsageIndex[configId] = nextIdx;
           continue;
+        }
+        {
+          const reloaded = await tryReloadKeysFromFileOnce('key_blacklisted_single_key');
+          if (reloaded) {
+            continue;
+          }
         }
         return response;
       }

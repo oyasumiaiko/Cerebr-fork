@@ -1381,12 +1381,20 @@ export function createMessageSender(appContext) {
           );
           break;
         }
+        case 'api_key_file_reload_start': {
+          updateLoadingStatus(
+            loadingMessage,
+            '当前 Key 不可用，正在重读本地 Key 文件...',
+            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
+          );
+          break;
+        }
         case 'api_key_selected': {
           const keyCount = Number(evt.keyCount) || 1;
           const keyIndex = Number(evt.keyIndex);
           const hasIndex = Number.isFinite(keyIndex) && keyIndex >= 0;
           const keySource = (typeof evt.keySource === 'string') ? evt.keySource : 'inline';
-          const sourceText = keySource === 'file'
+          const sourceText = keySource.startsWith('file')
             ? '（来源：本地文件）'
             : (keySource === 'inline_fallback' ? '（来源：输入框回退）' : '');
           const text = keyCount > 1 && hasIndex
