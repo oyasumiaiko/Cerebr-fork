@@ -2261,6 +2261,21 @@ export function createMessageSender(appContext) {
     if (!messageElement || typeof retryFn !== 'function') return;
     if (messageElement.querySelector('.error-retry-actions')) return;
 
+    /**
+     * 清理错误态样式与重试按钮，避免重试后遗留红字/旧操作区。
+     * @param {HTMLElement|null} element
+     */
+    const resetErrorUiState = (element) => {
+      if (!element) return;
+      try {
+        element.classList.remove('error-message');
+        element.classList.remove('loading-message');
+      } catch (_) {}
+      try {
+        element.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
+      } catch (_) {}
+    };
+
     const actions = document.createElement('div');
     actions.className = 'error-retry-actions';
 
@@ -2273,6 +2288,16 @@ export function createMessageSender(appContext) {
       event.preventDefault();
       event.stopPropagation();
       if (retryBtn.disabled) return;
+      const boundMessageId = (messageElement.getAttribute('data-message-id') || '').trim();
+      const isEphemeralErrorMessage = !boundMessageId;
+      resetErrorUiState(messageElement);
+      if (isEphemeralErrorMessage) {
+        messageElement.textContent = '正在重试...';
+        messageElement.classList.add('loading-message');
+        messageElement.classList.add('updating');
+      } else {
+        messageElement.classList.add('updating');
+      }
       retryBtn.disabled = true;
       const originalText = retryBtn.textContent;
       retryBtn.textContent = '重试中...';
@@ -2281,6 +2306,10 @@ export function createMessageSender(appContext) {
       } catch (error) {
         console.error('手动重试执行失败:', error);
       } finally {
+        // 无 message-id 的错误占位不会被后续请求复用，重试结束后移除，避免残留状态干扰阅读。
+        if (isEphemeralErrorMessage && messageElement.isConnected) {
+          messageElement.remove();
+        }
         if (retryBtn.isConnected) {
           retryBtn.disabled = false;
           retryBtn.textContent = originalText;
@@ -2851,6 +2880,12 @@ export function createMessageSender(appContext) {
             attempt.preserveReadingPosition = true;
             attempt.preserveTargetMessageId = normalizedTargetAiMessageId;
             if (el) {
+              // 若该消息曾进入错误态（红字/重试按钮），开始重试前先清理，避免视觉状态遗留。
+              try {
+                el.classList.remove('error-message');
+                el.classList.remove('loading-message');
+                el.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
+              } catch (_) {}
               resetThoughtsToggleStateForRegenerate(el);
               try {
                 el.classList.add('updating');

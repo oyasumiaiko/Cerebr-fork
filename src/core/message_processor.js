@@ -1038,6 +1038,14 @@ export function createMessageProcessor(appContext) {
       return true;
     }
 
+    // 统一清理“错误态”残留，避免重试成功后仍显示红字/旧重试按钮。
+    try {
+      messageDiv.classList.remove('error-message');
+      messageDiv.classList.remove('loading-message');
+      const retryActions = messageDiv.querySelectorAll('.error-retry-actions');
+      retryActions.forEach((actionEl) => actionEl.remove());
+    } catch (_) {}
+
     messageDiv.setAttribute('data-original-text', safeAnswerContent);
     // 思考过程文本由 setupThoughtsDisplay 统一处理
 
