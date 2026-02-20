@@ -179,6 +179,16 @@ input, textarea, select {
     --cerebr-button-disabled-color: color-mix(in srgb, #ffffff 65%, var(--cerebr-text-color) 35%);
 }
 
+/* 让浏览器原生控件（尤其是 select 弹出的下拉面板）跟随当前主题深浅色。 */
+:root.light-theme {
+    color-scheme: light;
+}
+
+:root.dark-theme,
+:root.night-theme {
+    color-scheme: dark;
+}
+
 /* 全局滚动条样式（统一定义在 :root/html/body） */
 html, body, :root {
     scrollbar-width: thin;
@@ -458,6 +468,16 @@ select {
     background-size: 6px 6px, 6px 6px, 1px 1.6em;
     background-repeat: no-repeat;
     padding-right: 2.5em;
+}
+
+select option,
+select optgroup {
+    background: var(--cerebr-tooltip-bg);
+    color: var(--cerebr-text-color);
+}
+
+select option:disabled {
+    color: color-mix(in srgb, var(--cerebr-text-color) 55%, transparent);
 }
 
 body.standalone-mode {
