@@ -3539,6 +3539,51 @@ export function createMessageSender(appContext) {
       hasStartedResponse: false,
       hasEverShownAnswerContent: false
     };
+
+    // 将接口错误对象压缩为可读文本，确保“控制台有信息”时聊天框也能看到关键信息。
+    function toDisplayableErrorText(raw, maxLen = 500) {
+      if (raw == null) return '';
+      if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (!trimmed) return '';
+        return trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}...` : trimmed;
+      }
+      try {
+        const serialized = JSON.stringify(raw);
+        if (!serialized) return '';
+        return serialized.length > maxLen ? `${serialized.slice(0, maxLen)}...` : serialized;
+      } catch (_) {
+        const text = String(raw || '').trim();
+        if (!text) return '';
+        return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+      }
+    }
+
+    // 统一构造“可展示给用户”的错误文案，避免仅在控制台可见而聊天框无感知。
+    function buildStreamApiErrorMessage(errorPayload, fallback = 'Unknown API error') {
+      if (!errorPayload) return fallback;
+      if (typeof errorPayload === 'string') {
+        const text = errorPayload.trim();
+        return text || fallback;
+      }
+
+      const messageText = toDisplayableErrorText(
+        errorPayload?.message || errorPayload?.error?.message || '',
+        600
+      );
+      const code = errorPayload?.code ?? errorPayload?.error?.code;
+      const status = errorPayload?.status ?? errorPayload?.error?.status;
+      const type = errorPayload?.type ?? errorPayload?.error?.type;
+      const metaParts = [];
+      if (code !== undefined && code !== null && String(code).trim() !== '') metaParts.push(`code=${code}`);
+      if (status !== undefined && status !== null && String(status).trim() !== '') metaParts.push(`status=${status}`);
+      if (type !== undefined && type !== null && String(type).trim() !== '') metaParts.push(`type=${type}`);
+
+      const detail = messageText || toDisplayableErrorText(errorPayload, 600) || fallback;
+      if (metaParts.length === 0) return detail;
+      return `${detail} (${metaParts.join(', ')})`;
+    }
+
     const reader = response.body.getReader();
     // 累积 AI 的主回答文本（仅文本部分，包含代码块、内联图片等 Markdown/HTML 内容）
     let aiResponse = '';
@@ -3901,8 +3946,13 @@ export function createMessageSender(appContext) {
         }
       } catch (e) {
         console.error('解析SSE事件JSON出错:', e, 'Event data:', `'${fullEventData}'`);
-        // 将错误抛出到上层，让 sendMessage 的 catch 将错误展示到 UI
-        throw e;
+        // 将解析错误转为可读文本后抛出，确保聊天框也能看到与控制台一致的关键报错。
+        const parseErrorText = toDisplayableErrorText(e?.message || e, 220) || '未知解析错误';
+        const eventPreview = toDisplayableErrorText(fullEventData, 320);
+        const readableError = eventPreview
+          ? `流式事件解析失败：${parseErrorText}；事件数据片段：${eventPreview}`
+          : `流式事件解析失败：${parseErrorText}`;
+        throw new Error(readableError);
       }
     }
 
@@ -3912,7 +3962,7 @@ export function createMessageSender(appContext) {
      */
     async function handleGeminiEvent(data) {
       if (data.error) {
-        const errorMessage = data.error.message || 'Unknown Gemini error';
+        const errorMessage = buildStreamApiErrorMessage(data.error, 'Unknown Gemini error');
         console.error('Gemini API error:', data.error);
         // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
         throw new Error(errorMessage);
@@ -4106,7 +4156,7 @@ export function createMessageSender(appContext) {
 	    function handleOpenAIEvent(data) {
 	      // 检查API返回的错误信息
 	      if (data.error) {
-          const msg = data.error.message || 'Unknown OpenAI error';
+          const msg = buildStreamApiErrorMessage(data.error, 'Unknown OpenAI error');
           console.error('OpenAI API error:', data.error);
           // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
           // 抛出错误，让外层`sendMessage`的try...catch块捕获并处理
@@ -4114,7 +4164,7 @@ export function createMessageSender(appContext) {
       }
       // 检查 choices 数组中的错误信息
       if (data.choices?.[0]?.error) {
-          const msg = data.choices[0].error.message || 'Unknown OpenAI model error';
+          const msg = buildStreamApiErrorMessage(data.choices[0].error, 'Unknown OpenAI model error');
           console.error('OpenAI Model error:', data.choices[0].error);
           // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
           throw new Error(msg);
