@@ -1398,6 +1398,14 @@ export function createMessageSender(appContext) {
           );
           break;
         }
+        case 'http_400_bad_request_not_blacklisted': {
+          updateLoadingStatus(
+            loadingMessage,
+            '请求参数错误 (HTTP 400)，本次不会拉黑 API Key。',
+            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus: 400 }
+          );
+          break;
+        }
         case 'http_auth_or_bad_request_key_blacklisted': {
           const httpStatus = Number(evt.status);
           const willRetry = !!evt.willRetry;

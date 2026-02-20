@@ -50,7 +50,7 @@ export function createApiManager(appContext) {
   // 用于存储每个配置下次应使用的 API Key 索引 (内存中)
   const apiKeyUsageIndex = {};
   // API Key 黑名单（本地持久化），结构为 Map<key, expiresAtMs>
-  // 约定：429 时加入黑名单 24 小时；400/403 等不可恢复错误写入 -1 表示永久失效
+  // 约定：429 时加入黑名单 24 小时；403 与“非 bad request 的 400”写入 -1 表示永久失效
   const BLACKLIST_STORAGE_KEY = 'apiKeyBlacklist';
   let apiKeyBlacklist = {};
   // 拖动排序用的临时状态，避免在拖动过程中频繁写入。
@@ -267,6 +267,85 @@ export function createApiManager(appContext) {
     if (!raw) return [];
     if (!raw.includes(',')) return [raw];
     return raw.split(',').map(k => k.trim()).filter(Boolean);
+  }
+
+  // 仅用于识别“请求体/参数错误”的 400。命中后不拉黑 key，避免误伤可用 key。
+  // 细化依据：Gemini 后端常见 payload 错误会返回 INVALID_ARGUMENT，并伴随以下文案。
+  const BAD_REQUEST_400_HINTS = [
+    'contents is not specified',
+    'request contains an invalid argument',
+    'invalid value at',
+    'unknown name',
+    'please use a valid role: user, model',
+    'generatecontentrequest.contents',
+    'invalid_request_error',
+    'malformed',
+    'parse error',
+    'invalid json payload',
+    'missing required parameter',
+    'cannot find field',
+    'unsupported parameter',
+    'parameter is required',
+    'messages is required'
+  ];
+
+  // 一些后端会把鉴权失败也放在 400，需要优先识别，避免被 bad request 关键词误判。
+  const AUTH_RELATED_400_HINTS = [
+    'api key not valid',
+    'key not valid',
+    'invalid api key',
+    'incorrect api key',
+    'api_key_invalid',
+    'invalid_api_key',
+    'not_authorized',
+    'unauthorized',
+    'authentication',
+    'permission denied',
+    'service_disabled',
+    'api has not been used'
+  ];
+
+  async function isBadRequest400(response) {
+    if (!response || response.status !== 400) return false;
+    let responseText = '';
+    try {
+      responseText = await response.clone().text();
+    } catch (_) {
+      // 无法读取错误体时，保守处理为“非 bad request”，由上层继续走拉黑逻辑。
+      return false;
+    }
+
+    const baseText = (responseText || '').toLowerCase();
+    if (!baseText) return false;
+
+    // 优先解析结构化错误体，避免仅靠字符串匹配导致误判。
+    let parsedMessage = '';
+    let parsedStatus = '';
+    let parsedDetails = '';
+    try {
+      const parsed = JSON.parse(responseText);
+      parsedMessage = String(parsed?.error?.message || '').toLowerCase();
+      parsedStatus = String(parsed?.error?.status || '').toLowerCase();
+      parsedDetails = JSON.stringify(parsed?.error?.details || '').toLowerCase();
+    } catch (_) {
+      // 解析失败时退化为纯文本匹配即可。
+    }
+    const normalized = [baseText, parsedMessage, parsedStatus, parsedDetails].filter(Boolean).join('\n');
+
+    const hasAuthHint = AUTH_RELATED_400_HINTS.some((hint) => normalized.includes(hint));
+    if (hasAuthHint) return false;
+
+    const hasBadRequestHint = BAD_REQUEST_400_HINTS.some((hint) => normalized.includes(hint));
+    if (!hasBadRequestHint) return false;
+
+    // Gemini 常见 bad request 状态；注意：鉴权失败也可能复用 INVALID_ARGUMENT，
+    // 因此必须先过鉴权关键词，再结合 payload 关键词一起判断。
+    if (parsedStatus === 'invalid_argument' || parsedStatus === 'bad_request') {
+      return true;
+    }
+
+    // 兼容其它后端只返回 message 文案、不带结构化 status 的情况。
+    return hasBadRequestHint;
   }
 
   async function saveConfigsToSyncChunked(configs, options = {}) {
@@ -1871,7 +1950,7 @@ export function createApiManager(appContext) {
       try { await loadApiKeyBlacklist(); } catch (_) {}
     }
 
-    // 选择可用的 Key：成功不轮换；429 临时黑名单；400/403 永久黑名单
+    // 选择可用的 Key：成功不轮换；429 临时黑名单；bad request 的 400 不拉黑；其余 400/403 永久黑名单
     const tried = new Set();
     let lastErrorResponse = null;
 
@@ -1992,7 +2071,22 @@ export function createApiManager(appContext) {
         return response;
       }
 
-      // 处理 400/403：标记 key 永久不可用
+      // 处理 400：若明确是 bad request（请求体/参数错误），不拉黑 key。
+      if (response.status === 400) {
+        const badRequest = await isBadRequest400(response);
+        if (badRequest) {
+          emitStatus({
+            stage: 'http_400_bad_request_not_blacklisted',
+            status: 400,
+            willRetry: false,
+            apiBase: config?.baseUrl || '',
+            modelName: config?.modelName || ''
+          });
+          return response;
+        }
+      }
+
+      // 处理“非 bad request 的 400”与 403：标记 key 永久不可用
       if (response.status === 400 || response.status === 403) {
         emitStatus({
           stage: 'http_auth_or_bad_request_key_blacklisted',
