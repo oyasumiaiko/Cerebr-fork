@@ -5767,10 +5767,38 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .chat-history-context-menu-option--danger {
     display: block;
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    --delete-hold-progress: 0;
+    transition: color 0.16s ease;
+}
+
+.chat-history-context-menu-option--danger::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    transform-origin: left center;
+    transform: scaleX(var(--delete-hold-progress));
+    background: linear-gradient(
+        105deg,
+        color-mix(in srgb, #ff4d4f 88%, transparent) 0%,
+        color-mix(in srgb, #ff6a6d 94%, transparent) 42%,
+        color-mix(in srgb, #ff2f3a 92%, transparent) 74%,
+        color-mix(in srgb, #ff6a6d 96%, transparent) 100%
+    );
+    background-size: 220% 100%;
+    opacity: 0.78;
+    filter: saturate(1.02);
+    transition: transform 0.06s linear, opacity 0.16s ease, filter 0.18s ease;
+    pointer-events: none;
 }
 
 .chat-history-context-menu-option--danger::after {
-    content: '按住 Shift 确认';
+    content: '长按删除';
+    position: relative;
+    z-index: 1;
     display: block;
     max-height: 0;
     margin-top: 0;
@@ -5789,17 +5817,69 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     opacity: 0.85;
 }
 
-.chat-history-context-menu-option--danger.is-shift-armed {
+.chat-history-context-menu-option--danger.is-holding {
+    color: color-mix(in srgb, #fff 92%, #ff4d4f 8%);
+}
+
+.chat-history-context-menu-option--danger.is-holding:hover {
+    color: #fff;
+}
+
+.chat-history-context-menu-option--danger.is-holding::after {
+    content: '继续按住...';
+    max-height: 14px;
+    margin-top: 4px;
+    opacity: 0.95;
+    color: #ff8c8e;
+}
+
+.chat-history-context-menu-option--danger.is-holding.is-hold-pointer-outside::before,
+.chat-history-context-menu-option--danger.is-hold-ready.is-hold-pointer-outside::before {
+    opacity: 0.34;
+    filter: saturate(0.9);
+}
+
+.chat-history-context-menu-option--danger.is-holding.is-hold-pointer-outside::after,
+.chat-history-context-menu-option--danger.is-hold-ready.is-hold-pointer-outside::after {
+    content: '移回按钮内再松开';
+    color: #ffc7c8;
+}
+
+.chat-history-context-menu-option--danger.is-hold-ready {
+    color: #fff;
+    text-shadow: 0 0 8px color-mix(in srgb, #ff8d8f 48%, transparent);
+}
+
+.chat-history-context-menu-option--danger.is-hold-ready::before {
+    opacity: 0.94;
+    filter: saturate(1.08) brightness(1.04);
+}
+
+.chat-history-context-menu-option--danger.is-hold-ready::after {
+    content: '松开确认删除';
+    max-height: 14px;
+    margin-top: 4px;
+    opacity: 0.98;
+    color: #ffd1d2;
+}
+
+.chat-history-context-menu-option--danger.is-hold-armed {
     background-color: color-mix(in srgb, #ff4d4f 24%, transparent);
     color: #ff4d4f;
 }
 
-.chat-history-context-menu-option--danger.is-shift-armed:hover {
+.chat-history-context-menu-option--danger.is-hold-armed:hover {
     background-color: color-mix(in srgb, #ff4d4f 34%, transparent);
 }
 
-.chat-history-context-menu-option--danger.is-shift-armed::after {
-    content: '点击删除';
+.chat-history-context-menu-option--danger.is-hold-armed::before {
+    transform: scaleX(1);
+    opacity: 1;
+    filter: saturate(1.14) brightness(1.08);
+}
+
+.chat-history-context-menu-option--danger.is-hold-armed::after {
+    content: '正在删除...';
     max-height: 14px;
     margin-top: 4px;
     opacity: 0.95;

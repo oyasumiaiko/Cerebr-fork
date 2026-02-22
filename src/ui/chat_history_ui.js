@@ -3935,6 +3935,8 @@ export function createChatHistoryUI(appContext) {
     menu.classList.add('chat-history-context-menu');
     const menuCleanupCallbacks = [];
     let menuClosed = false;
+    // 防抖：用于忽略长按删除释放后紧随其后的“外部点击关闭菜单”。
+    let ignoreMenuAutoCloseUntil = 0;
     const closeMenu = () => {
       if (menuClosed) return;
       menuClosed = true;
@@ -3958,6 +3960,11 @@ export function createChatHistoryUI(appContext) {
         ? event.target.closest(HISTORY_MENU_ACTION_SELECTOR)
         : null;
       if (!option) return;
+      if (option.dataset?.triggerMode === 'hold') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       option.dispatchEvent(new MouseEvent('click', {
@@ -4200,48 +4207,201 @@ export function createChatHistoryUI(appContext) {
     const deleteOption = document.createElement('div');
     deleteOption.textContent = '删除聊天记录';
     deleteOption.classList.add('chat-history-context-menu-option', 'chat-history-context-menu-option--danger');
-    deleteOption.title = '按住 Shift 并点击以确认删除';
-    let deleteShiftArmed = false;
-    const syncDeleteOptionShiftArmed = (armed) => {
-      deleteShiftArmed = !!armed;
-      deleteOption.dataset.shiftArmed = deleteShiftArmed ? '1' : '0';
-      deleteOption.classList.toggle('is-shift-armed', deleteShiftArmed);
-      deleteOption.title = deleteShiftArmed
-        ? '已按住 Shift：点击将删除聊天记录'
-        : '按住 Shift 并点击以确认删除';
-    };
-    syncDeleteOptionShiftArmed(false);
+    deleteOption.dataset.triggerMode = 'hold';
+    const DELETE_HOLD_DURATION_SECONDS = 0.72;
+    let deleteHoldPointerId = null;
+    let deleteHoldStartedAt = 0;
+    let deleteHoldProgress = 0;
+    let deleteHoldReady = false;
+    let deleteHoldRafId = null;
+    let deletePointerInsideOption = true;
+    let deletingConversation = false;
 
-    const onDeleteGuardKeyDown = (event) => {
-      if (event.key !== 'Shift') return;
-      syncDeleteOptionShiftArmed(true);
+    const setDeleteHoldProgress = (progress) => {
+      const normalized = Math.min(1, Math.max(0, Number(progress) || 0));
+      deleteHoldProgress = normalized;
+      deleteOption.style.setProperty('--delete-hold-progress', normalized.toFixed(4));
     };
-    const onDeleteGuardKeyUp = (event) => {
-      if (event.key !== 'Shift') return;
-      syncDeleteOptionShiftArmed(false);
-    };
-    const onDeleteGuardBlur = () => {
-      syncDeleteOptionShiftArmed(false);
-    };
-    window.addEventListener('keydown', onDeleteGuardKeyDown, true);
-    window.addEventListener('keyup', onDeleteGuardKeyUp, true);
-    window.addEventListener('blur', onDeleteGuardBlur);
-    menuCleanupCallbacks.push(() => window.removeEventListener('keydown', onDeleteGuardKeyDown, true));
-    menuCleanupCallbacks.push(() => window.removeEventListener('keyup', onDeleteGuardKeyUp, true));
-    menuCleanupCallbacks.push(() => window.removeEventListener('blur', onDeleteGuardBlur));
 
-    deleteOption.addEventListener('click', async (e) => {
-      e.stopPropagation(); // <--- 添加阻止冒泡
-      if (!(e.shiftKey || deleteShiftArmed)) {
-        showNotification?.({ message: '请按住 Shift 后再点击删除', type: 'warning', duration: 1800 });
+    const syncDeleteOptionHoldState = (state) => {
+      const normalizedState = (typeof state === 'string' && state) ? state : 'idle';
+      deleteOption.dataset.holdState = normalizedState;
+      deleteOption.classList.toggle('is-holding', normalizedState === 'holding');
+      deleteOption.classList.toggle('is-hold-ready', normalizedState === 'ready');
+      deleteOption.classList.toggle('is-hold-armed', normalizedState === 'armed');
+      const showOutsideHint = (normalizedState === 'holding' || normalizedState === 'ready') && !deletePointerInsideOption;
+      deleteOption.classList.toggle('is-hold-pointer-outside', showOutsideHint);
+      if (normalizedState === 'holding') {
+        deleteOption.title = showOutsideHint
+          ? '保持按住，并移回按钮内后松开'
+          : '继续按住，填满红色进度后松开即可删除';
+      } else if (normalizedState === 'ready') {
+        deleteOption.title = showOutsideHint
+          ? '进度已完成：请移回按钮内再松开'
+          : '松开确认删除';
+      } else if (normalizedState === 'armed') {
+        deleteOption.title = '正在删除聊天记录...';
+      } else {
+        deleteOption.title = '按住删除按钮，进度满后在按钮内松开确认';
+      }
+    };
+    setDeleteHoldProgress(0);
+    syncDeleteOptionHoldState('idle');
+
+    const isPointerInsideDeleteOption = (event) => {
+      if (!event || !deleteOption || typeof event.clientX !== 'number' || typeof event.clientY !== 'number') {
+        return true;
+      }
+      const rect = deleteOption.getBoundingClientRect();
+      return event.clientX >= rect.left
+        && event.clientX <= rect.right
+        && event.clientY >= rect.top
+        && event.clientY <= rect.bottom;
+    };
+
+    const stopDeleteHoldAnimation = () => {
+      if (deleteHoldRafId === null) return;
+      cancelAnimationFrame(deleteHoldRafId);
+      deleteHoldRafId = null;
+    };
+
+    const resetDeleteHoldState = (state = 'idle') => {
+      stopDeleteHoldAnimation();
+      deleteHoldPointerId = null;
+      deleteHoldStartedAt = 0;
+      deleteHoldReady = false;
+      deletePointerInsideOption = true;
+      setDeleteHoldProgress(0);
+      syncDeleteOptionHoldState(state);
+    };
+
+    const updateDeleteHoldProgressFrame = (now) => {
+      if (deletingConversation) return;
+      if (deleteHoldPointerId === null || deleteHoldStartedAt <= 0) return;
+      const elapsedSeconds = Math.max(0, (Number(now) - deleteHoldStartedAt) / 1000);
+      const progress = elapsedSeconds / DELETE_HOLD_DURATION_SECONDS;
+      setDeleteHoldProgress(progress);
+      if (progress >= 1) {
+        deleteHoldReady = true;
+        syncDeleteOptionHoldState('ready');
+        stopDeleteHoldAnimation();
         return;
       }
+      deleteHoldRafId = requestAnimationFrame(updateDeleteHoldProgressFrame);
+    };
+
+    const triggerDeleteConversation = async () => {
+      if (deletingConversation) return;
+      deletingConversation = true;
+      setDeleteHoldProgress(1);
+      syncDeleteOptionHoldState('armed');
       try {
         await deleteConversationRecord(conversationId);
       } finally {
         closeMenu();
       }
-    });
+    };
+
+    const startDeleteLongPress = (event) => {
+      if (!event || deletingConversation) return;
+      const button = Number(event.button);
+      // 允许左键/右键长按触发删除。
+      if (button !== 0 && button !== 2) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+      deleteHoldPointerId = pointerId;
+      deleteHoldStartedAt = performance.now();
+      deleteHoldReady = false;
+      deletePointerInsideOption = true;
+      setDeleteHoldProgress(0);
+      syncDeleteOptionHoldState('holding');
+
+      try {
+        if (pointerId !== null && typeof deleteOption.setPointerCapture === 'function') {
+          deleteOption.setPointerCapture(pointerId);
+        }
+      } catch (_) {}
+
+      stopDeleteHoldAnimation();
+      deleteHoldRafId = requestAnimationFrame(updateDeleteHoldProgressFrame);
+    };
+
+    const updateDeletePointerInsideState = (event) => {
+      if (!event) return;
+      if (deleteHoldPointerId !== null && Number.isFinite(event.pointerId) && event.pointerId !== deleteHoldPointerId) {
+        return;
+      }
+      deletePointerInsideOption = isPointerInsideDeleteOption(event);
+      if (deleteHoldReady) {
+        syncDeleteOptionHoldState('ready');
+      } else if (deleteHoldPointerId !== null) {
+        syncDeleteOptionHoldState('holding');
+      }
+    };
+
+    const onDeletePointerDown = (event) => startDeleteLongPress(event);
+    const onDeletePointerMove = (event) => {
+      if (deletingConversation) return;
+      if (deleteHoldPointerId === null) return;
+      updateDeletePointerInsideState(event);
+    };
+    const onDeletePointerUp = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (deletingConversation) return;
+      if (deleteHoldPointerId !== null && Number.isFinite(event.pointerId) && event.pointerId !== deleteHoldPointerId) {
+        return;
+      }
+      updateDeletePointerInsideState(event);
+      ignoreMenuAutoCloseUntil = Date.now() + 220;
+
+      if (deleteHoldReady && deletePointerInsideOption) {
+        void triggerDeleteConversation();
+        return;
+      }
+      resetDeleteHoldState('idle');
+    };
+    const onDeletePointerCancel = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (deleteHoldPointerId !== null && Number.isFinite(event.pointerId) && event.pointerId !== deleteHoldPointerId) {
+        return;
+      }
+      ignoreMenuAutoCloseUntil = Date.now() + 160;
+      resetDeleteHoldState('idle');
+    };
+    const onDeleteLostPointerCapture = () => {
+      if (deletingConversation) return;
+      if (deleteHoldPointerId === null) return;
+      resetDeleteHoldState('idle');
+    };
+    const onDeleteContextMenu = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onDeleteClick = (event) => {
+      // 删除动作由长按触发，click 仅拦截默认行为，避免误删或触发外层关闭逻辑。
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    deleteOption.addEventListener('pointerdown', onDeletePointerDown);
+    deleteOption.addEventListener('pointermove', onDeletePointerMove);
+    deleteOption.addEventListener('pointerup', onDeletePointerUp);
+    deleteOption.addEventListener('pointercancel', onDeletePointerCancel);
+    deleteOption.addEventListener('lostpointercapture', onDeleteLostPointerCapture);
+    deleteOption.addEventListener('contextmenu', onDeleteContextMenu);
+    deleteOption.addEventListener('click', onDeleteClick);
+    menuCleanupCallbacks.push(() => resetDeleteHoldState('idle'));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('pointerdown', onDeletePointerDown));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('pointermove', onDeletePointerMove));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('pointerup', onDeletePointerUp));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('pointercancel', onDeletePointerCancel));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('lostpointercapture', onDeleteLostPointerCapture));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('contextmenu', onDeleteContextMenu));
+    menuCleanupCallbacks.push(() => deleteOption.removeEventListener('click', onDeleteClick));
 
     menu.appendChild(copyOption);
     appendMenuSeparator();
@@ -4254,6 +4414,9 @@ export function createChatHistoryUI(appContext) {
 
     // 点击其他地方时移除菜单
     const onDocClick = () => {
+      if (Date.now() < ignoreMenuAutoCloseUntil) {
+        return;
+      }
       closeMenu();
     };
     document.addEventListener('click', onDocClick);
