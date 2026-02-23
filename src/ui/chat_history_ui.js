@@ -213,7 +213,11 @@ export function createChatHistoryUI(appContext) {
 
   function hasUsableApiCredential(config) {
     if (!config || typeof config !== 'object') return false;
-    return hasValidApiKey(config.apiKey) || hasValidApiKeyFilePath(config.apiKeyFilePath);
+    if (hasValidApiKey(config.apiKey) || hasValidApiKeyFilePath(config.apiKeyFilePath)) {
+      return true;
+    }
+    // 允许所有连接方式在 key 留空时走“免 key”请求（例如本地反代统一鉴权）。
+    return true;
   }
 
   function hasValidApiBaseUrl(config) {

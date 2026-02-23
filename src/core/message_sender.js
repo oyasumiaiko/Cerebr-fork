@@ -1446,6 +1446,14 @@ export function createMessageSender(appContext) {
           });
           break;
         }
+        case 'api_key_omitted': {
+          updateLoadingStatus(
+            loadingMessage,
+            '未提供 API Key，按免 key 模式发起请求...',
+            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
+          );
+          break;
+        }
         case 'http_request_start': {
           updateLoadingStatus(loadingMessage, '正在建立连接并上传请求载荷...', {
             stage,
@@ -1483,11 +1491,16 @@ export function createMessageSender(appContext) {
         case 'http_auth_or_bad_request_key_blacklisted': {
           const httpStatus = Number(evt.status);
           const willRetry = !!evt.willRetry;
+          const noApiKey = !!evt.noApiKey;
           updateLoadingStatus(
             loadingMessage,
-            willRetry
-              ? `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，正在切换 Key 重试...`
-              : `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})...`,
+            noApiKey
+              ? `请求被拒绝 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，当前为免 key 模式。`
+              : (
+                willRetry
+                  ? `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，正在切换 Key 重试...`
+                  : `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})...`
+              ),
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus }
           );
           break;
@@ -2461,7 +2474,11 @@ export function createMessageSender(appContext) {
 
   function hasUsableApiCredential(config) {
     if (!config || typeof config !== 'object') return false;
-    return hasValidApiKey(config.apiKey) || hasValidApiKeyFilePath(config.apiKeyFilePath);
+    if (hasValidApiKey(config.apiKey) || hasValidApiKeyFilePath(config.apiKeyFilePath)) {
+      return true;
+    }
+    // 允许所有连接方式在 key 留空时走“免 key”请求（常见于本地反代/网关注入鉴权）。
+    return true;
   }
 
   function validateApiConfig(config) {

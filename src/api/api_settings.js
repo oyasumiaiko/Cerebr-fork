@@ -202,8 +202,9 @@ export function createApiManager(appContext) {
       parsedUrl.pathname = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
     }
 
-    if (!hasKeyPlaceholder && !parsedUrl.searchParams.has('key')) {
-      parsedUrl.searchParams.set('key', apiKey);
+    const normalizedApiKey = (typeof apiKey === 'string') ? apiKey.trim() : '';
+    if (!hasKeyPlaceholder && !parsedUrl.searchParams.has('key') && normalizedApiKey) {
+      parsedUrl.searchParams.set('key', normalizedApiKey);
     }
     if (useStreaming) {
       if (!parsedUrl.searchParams.has('alt')) {
@@ -1235,13 +1236,13 @@ export function createApiManager(appContext) {
         if (baseUrlLabel) baseUrlLabel.textContent = 'Gemini API 端点（可自定义）';
         baseUrlInput.placeholder = '例如 https://generativelanguage.googleapis.com 或你的代理地址';
         if (baseUrlHint) {
-          baseUrlHint.textContent = '支持填写官方地址或 Gemini 代理地址；会自动补全 models/{model}:{method} 与 key 参数。';
+          baseUrlHint.textContent = '支持填写官方地址或 Gemini 代理地址；会自动补全 models/{model}:{method}。填写 key 时会附带 key 参数，留空则省略。';
         }
       } else {
         if (baseUrlLabel) baseUrlLabel.textContent = 'API 端点 URL';
         baseUrlInput.placeholder = `例如 ${OPENAI_DEFAULT_BASE_URL}`;
         if (baseUrlHint) {
-          baseUrlHint.textContent = 'OpenAI 兼容模式会使用 chat/completions 请求体，并通过 Authorization: Bearer 发送 API Key。';
+          baseUrlHint.textContent = 'OpenAI 兼容模式会使用 chat/completions 请求体；填写 API Key 时走 Bearer 鉴权，留空则按免 key 模式请求。';
         }
       }
     };
@@ -2435,7 +2436,7 @@ export function createApiManager(appContext) {
    * @param {AbortSignal} [options.signal] - 中止信号
    * @param {(evt: {stage: string, [key: string]: any}) => void} [options.onStatus] - 状态回调（用于 UI 展示更细粒度的请求阶段；不得包含敏感信息）
    * @returns {Promise<Response>} Fetch 响应对象
-   * @throws {Error} 如果 API Key 无效或缺失
+   * @throws {Error} 如果鉴权信息无效（当未填写 key/文件路径时会走免 key 请求）
    */
   async function sendRequest({ requestBody, config, signal, onStatus }) {
     // 说明：Fetch API 无法精确提供“上传进度/已上传完毕”的事件。
@@ -2465,6 +2466,8 @@ export function createApiManager(appContext) {
     const tried = new Set();
     let lastErrorResponse = null;
     const hasApiKeyFilePath = !!normalizeApiKeyFilePath(config?.apiKeyFilePath);
+    const hasInlineApiKey = normalizeApiKeys(config?.apiKey).length > 0;
+    const allowRequestWithoutApiKey = !hasApiKeyFilePath && !hasInlineApiKey;
     let hasReloadedFileKeys = false;
 
     // 计算候选 key：
@@ -2474,12 +2477,22 @@ export function createApiManager(appContext) {
     let resolvedKeys = await resolveRuntimeApiKeys(config, emitStatus);
     let keysArray = Array.isArray(resolvedKeys?.keys) ? resolvedKeys.keys : [];
     let isArrayKeys = keysArray.length > 1;
+    const isKeylessMode = allowRequestWithoutApiKey && keysArray.length === 0;
     if (keysArray.length === 0) {
+      if (isKeylessMode) {
+        emitStatus({
+          stage: 'api_key_omitted',
+          keySource: 'none',
+          apiBase: statusApiBase,
+          modelName: statusModelName
+        });
+      } else {
       console.error('API Key 缺失或无效:', { modelName: config?.modelName, baseUrl: config?.baseUrl, source: resolvedKeys?.source });
       const detailText = (typeof resolvedKeys?.detail === 'string' && resolvedKeys.detail.trim())
         ? ` (${resolvedKeys.detail.trim()})`
         : '';
       throw new Error(`API Key for ${config.displayName || config.modelName} is missing or invalid${detailText}.`);
+      }
     }
 
     // 查找当前使用索引（若未设置，默认为 0）
@@ -2516,7 +2529,10 @@ export function createApiManager(appContext) {
     while (true) {
       let selectedIndex = 0;
       let selectedKey = '';
-      if (isArrayKeys) {
+      if (isKeylessMode) {
+        selectedIndex = -1;
+        selectedKey = '';
+      } else if (isArrayKeys) {
         // 从当前索引开始，选择第一个不在黑名单且未尝试过的 key
         const startIndex = Math.min(Math.max(0, apiKeyUsageIndex[configId] || 0), keysArray.length - 1);
         const idx = getNextUsableKeyIndex({ apiKey: keysArray }, startIndex, tried);
@@ -2537,21 +2553,23 @@ export function createApiManager(appContext) {
         selectedKey = keysArray[0];
       }
 
-      if (!selectedKey) {
+      if (!selectedKey && !isKeylessMode) {
         if (lastErrorResponse) return lastErrorResponse;
         throw new Error(`Selected API Key for ${config.displayName || config.modelName} is empty.`);
       }
 
-      emitStatus({
-        stage: 'api_key_selected',
-        keyIndex: selectedIndex,
-        keyCount: isArrayKeys ? keysArray.length : 1,
-        triedCount: tried.size,
-        isKeyRotation: isArrayKeys,
-        keySource: resolvedKeys?.source || 'inline',
-        apiBase: statusApiBase,
-        modelName: statusModelName
-      });
+      if (!isKeylessMode) {
+        emitStatus({
+          stage: 'api_key_selected',
+          keyIndex: selectedIndex,
+          keyCount: isArrayKeys ? keysArray.length : 1,
+          triedCount: tried.size,
+          isKeyRotation: isArrayKeys,
+          keySource: resolvedKeys?.source || 'inline',
+          apiBase: statusApiBase,
+          modelName: statusModelName
+        });
+      }
 
       // 组装请求
       let endpointUrl = effectiveBaseUrl;
@@ -2577,7 +2595,9 @@ export function createApiManager(appContext) {
         if (protocol !== 'http:' && protocol !== 'https:') {
           throw new Error(`API Base URL 协议不受支持：${protocol || 'unknown'}`);
         }
-        headers['Authorization'] = `Bearer ${selectedKey}`;
+        if (selectedKey) {
+          headers['Authorization'] = `Bearer ${selectedKey}`;
+        }
       }
 
       emitStatus({
@@ -2643,13 +2663,15 @@ export function createApiManager(appContext) {
       if (response.status === 429) {
         emitStatus({
           stage: 'http_429_rate_limited',
-          willRetry: !!isArrayKeys,
+          willRetry: !!(isArrayKeys && !isKeylessMode),
           apiBase: statusApiBase,
           modelName: statusModelName
         });
         lastErrorResponse = response;
-        try { await blacklistKey(selectedKey, 24 * 60 * 60 * 1000); } catch (_) {}
-        tried.add(selectedKey);
+        if (selectedKey) {
+          try { await blacklistKey(selectedKey, 24 * 60 * 60 * 1000); } catch (_) {}
+          tried.add(selectedKey);
+        }
         if (isArrayKeys) {
           // 轮换到下一个可用 key（并更新“当前使用”索引）
           const nextIdx = getNextUsableKeyIndex({ apiKey: keysArray }, (selectedIndex + 1) % keysArray.length, tried);
@@ -2694,10 +2716,14 @@ export function createApiManager(appContext) {
         emitStatus({
           stage: 'http_auth_or_bad_request_key_blacklisted',
           status: response.status,
-          willRetry: !!isArrayKeys,
+          willRetry: !!(isArrayKeys && !isKeylessMode),
+          noApiKey: !selectedKey,
           apiBase: statusApiBase,
           modelName: statusModelName
         });
+        if (!selectedKey) {
+          return response;
+        }
         lastErrorResponse = response;
         tried.add(selectedKey);
         try { await blacklistKey(selectedKey, -1); } catch (_) {}
