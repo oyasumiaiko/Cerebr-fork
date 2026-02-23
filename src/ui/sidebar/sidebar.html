@@ -299,8 +299,16 @@
                                 <div class="api-key-file-path-hint">填写后将优先按请求实时读取本地文件；读取失败时自动回退到上方 API Key 输入框。</div>
                             </div>
                             <div class="form-group">
-                                <label>API 端点 URL</label>
+                                <label>连接方式</label>
+                                <select class="connection-type">
+                                    <option value="openai">OpenAI 兼容</option>
+                                    <option value="gemini">Gemini</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="base-url-label">API 端点 URL</label>
                                 <input type="text" class="base-url" placeholder="输入 Base URL">
+                                <div class="base-url-hint">OpenAI 兼容模式会使用 chat/completions 请求体，并通过 Authorization: Bearer 发送 API Key。</div>
                             </div>
                             <div class="form-group">
                                 <label>模型ID</label>

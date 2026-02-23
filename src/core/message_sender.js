@@ -522,6 +522,29 @@ export function createMessageSender(appContext) {
     return cleaned;
   }
 
+  function normalizeApiConnectionType(value) {
+    const normalized = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+    if (normalized === 'gemini') return 'gemini';
+    if (normalized === 'openai') return 'openai';
+    return '';
+  }
+
+  function isGeminiApiConfig(config) {
+    const connectionType = normalizeApiConnectionType(config?.connectionType);
+    if (connectionType) return connectionType === 'gemini';
+    const baseUrl = (typeof config?.baseUrl === 'string') ? config.baseUrl.trim().toLowerCase() : '';
+    return baseUrl === 'genai' || baseUrl.includes('generativelanguage.googleapis.com');
+  }
+
+  function isGeminiApiResponse(response, config) {
+    const explicitType = normalizeApiConnectionType(config?.connectionType);
+    if (explicitType === 'gemini') return true;
+    if (explicitType === 'openai') return false;
+    if (isGeminiApiConfig(config)) return true;
+    const url = (typeof response?.url === 'string') ? response.url.toLowerCase() : '';
+    return url.includes('generativelanguage.googleapis.com') && !url.includes('openai');
+  }
+
   async function extractConversationTitleFromResponse(response, apiConfig) {
     let payload = null;
     try {
@@ -536,8 +559,7 @@ export function createMessageSender(appContext) {
       throw new Error(msg);
     }
 
-    const isGeminiApi = response.url.includes('generativelanguage.googleapis.com')
-      || apiConfig?.baseUrl === 'genai';
+    const isGeminiApi = isGeminiApiResponse(response, apiConfig);
     if (isGeminiApi) {
       const parts = payload?.candidates?.[0]?.content?.parts || [];
       const textParts = parts
@@ -667,7 +689,7 @@ export function createMessageSender(appContext) {
     const resolvedApi = (typeof apiManager.resolveApiParam === 'function')
       ? apiManager.resolveApiParam(apiPref)
       : apiManager.getSelectedConfig();
-    if (!resolvedApi?.baseUrl || !hasUsableApiCredential(resolvedApi)) return;
+    if (!hasValidApiBaseUrl(resolvedApi?.baseUrl, resolvedApi) || !hasUsableApiCredential(resolvedApi)) return;
 
     const chain = (typeof chatHistoryManager?.getCurrentConversationChain === 'function')
       ? chatHistoryManager.getCurrentConversationChain()
@@ -739,7 +761,7 @@ export function createMessageSender(appContext) {
     const resolvedApi = (typeof apiManager.resolveApiParam === 'function')
       ? apiManager.resolveApiParam(apiPref)
       : apiManager.getSelectedConfig();
-    if (!resolvedApi?.baseUrl || !hasUsableApiCredential(resolvedApi)) {
+    if (!hasValidApiBaseUrl(resolvedApi?.baseUrl, resolvedApi) || !hasUsableApiCredential(resolvedApi)) {
       return { ok: false, reason: 'missing_api' };
     }
 
@@ -2432,7 +2454,8 @@ export function createMessageSender(appContext) {
     return (typeof apiKeyFilePath === 'string') && apiKeyFilePath.trim().length > 0;
   }
 
-  function hasValidApiBaseUrl(baseUrl) {
+  function hasValidApiBaseUrl(baseUrl, config) {
+    if (isGeminiApiConfig(config)) return true;
     return (typeof baseUrl === 'string') && baseUrl.trim().length > 0;
   }
 
@@ -2443,7 +2466,7 @@ export function createMessageSender(appContext) {
 
   function validateApiConfig(config) {
     const target = config || apiManager.getSelectedConfig();
-    if (!hasValidApiBaseUrl(target?.baseUrl) || !hasUsableApiCredential(target)) {
+    if (!hasValidApiBaseUrl(target?.baseUrl, target) || !hasUsableApiCredential(target)) {
       messageProcessor.appendMessage('请在设置中完善 API 配置', 'ai', true);
       return false;
     }
@@ -3200,7 +3223,7 @@ export function createMessageSender(appContext) {
       /** 构造 API 请求体（可能包含异步图片加载，例如本地文件转 Base64） */
       const requestOverrides = {};
       // 仅在 Gemini 场景下注入宽高比控制，保留 imageSize 由用户配置或后续默认值决定
-      if (aspectRatioOverride && config?.baseUrl === 'genai') {
+      if (aspectRatioOverride && isGeminiApiConfig(config)) {
         requestOverrides.generationConfig = {
           responseModalities: ['IMAGE'],
           imageConfig: {
@@ -3218,6 +3241,7 @@ export function createMessageSender(appContext) {
       // 根据统一纯函数规则选择流式/非流式处理（提前判定，便于状态文案与分支逻辑一致）。
       const responseHandlingMode = resolveResponseHandlingMode({
         apiBase: effectiveApiConfig?.baseUrl,
+        connectionType: effectiveApiConfig?.connectionType,
         geminiUseStreaming: effectiveApiConfig?.useStreaming,
         requestBodyStream: !!(requestBody && requestBody.stream)
       });
@@ -3821,7 +3845,7 @@ export function createMessageSender(appContext) {
     // 每次流式请求开始时重置思考块状态
     isInStreamingThoughtBlock = false;
     // 标记是否为 Gemini 流式接口
-    const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') && !response.url.includes('openai');
+    const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
     // SSE 行缓冲
     let incomingDataBuffer = ''; 
     const decoder = new TextDecoder();
@@ -4533,7 +4557,7 @@ export function createMessageSender(appContext) {
       throw new Error(msg);
     }
 
-    const isGeminiApi = response.url.includes('generativelanguage.googleapis.com') || usedApiConfig?.baseUrl === 'genai';
+    const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
     if (isGeminiApi) {
       // 优先检测 Gemini 返回的「安全拦截但 HTTP 为 200」场景，交给上层自动重试逻辑处理
       const safetyBlock = detectGeminiSafetyBlock(json, { hasExistingContent: false });

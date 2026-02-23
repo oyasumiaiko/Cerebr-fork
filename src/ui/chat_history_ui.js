@@ -179,7 +179,23 @@ export function createChatHistoryUI(appContext) {
     return a.id === b.id
       && a.displayName === b.displayName
       && a.modelName === b.modelName
-      && a.baseUrl === b.baseUrl;
+      && a.baseUrl === b.baseUrl
+      && a.connectionType === b.connectionType;
+  }
+
+  function normalizeApiConnectionType(value) {
+    const normalized = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+    if (normalized === 'gemini') return 'gemini';
+    if (normalized === 'openai') return 'openai';
+    return '';
+  }
+
+  function getApiConfigConnectionType(config) {
+    const explicit = normalizeApiConnectionType(config?.connectionType);
+    if (explicit) return explicit;
+    const baseUrl = typeof config?.baseUrl === 'string' ? config.baseUrl.trim().toLowerCase() : '';
+    if (baseUrl === 'genai' || baseUrl.includes('generativelanguage.googleapis.com')) return 'gemini';
+    return 'openai';
   }
 
   function hasValidApiKey(apiKey) {
@@ -200,12 +216,24 @@ export function createChatHistoryUI(appContext) {
     return hasValidApiKey(config.apiKey) || hasValidApiKeyFilePath(config.apiKeyFilePath);
   }
 
+  function hasValidApiBaseUrl(config) {
+    const connectionType = getApiConfigConnectionType(config);
+    const baseUrl = typeof config?.baseUrl === 'string' ? config.baseUrl.trim() : '';
+    if (connectionType === 'gemini' || baseUrl.toLowerCase() === 'genai') return true;
+    return baseUrl.length > 0;
+  }
+
   function resolveApiConfigFromLock(lock) {
     if (!lock || !services.apiManager?.resolveApiParam) return null;
+    const lockConnectionType = normalizeApiConnectionType(lock.connectionType);
+    const isLockConnectionTypeMatched = (config) => {
+      if (!lockConnectionType) return true;
+      return getApiConfigConnectionType(config) === lockConnectionType;
+    };
     // 若锁定信息包含 id，则必须按 id 命中配置，避免误用其它同名/同基址配置
     if (lock.id) {
       const resolvedById = services.apiManager.resolveApiParam({ id: lock.id });
-      if (resolvedById?.baseUrl && hasUsableApiCredential(resolvedById)) {
+      if (isLockConnectionTypeMatched(resolvedById) && hasValidApiBaseUrl(resolvedById) && hasUsableApiCredential(resolvedById)) {
         return resolvedById;
       }
       return null;
@@ -214,17 +242,20 @@ export function createChatHistoryUI(appContext) {
     let resolved = null;
     if (!resolved && lock.displayName) {
       resolved = services.apiManager.resolveApiParam(lock.displayName);
+      if (resolved && !isLockConnectionTypeMatched(resolved)) resolved = null;
     }
     if (!resolved && lock.modelName) {
       resolved = services.apiManager.resolveApiParam(lock.modelName);
+      if (resolved && !isLockConnectionTypeMatched(resolved)) resolved = null;
     }
     if (!resolved && lock.baseUrl && lock.modelName) {
       resolved = services.apiManager.resolveApiParam({
         baseUrl: lock.baseUrl,
-        modelName: lock.modelName
+        modelName: lock.modelName,
+        ...(lockConnectionType ? { connectionType: lockConnectionType } : {})
       });
     }
-    if (!resolved?.baseUrl || !hasUsableApiCredential(resolved)) return null;
+    if (!isLockConnectionTypeMatched(resolved) || !hasValidApiBaseUrl(resolved) || !hasUsableApiCredential(resolved)) return null;
     return resolved;
   }
 
@@ -6746,18 +6777,33 @@ export function createChatHistoryUI(appContext) {
     const lock = normalizeConversationApiLock(rawLock);
     if (!lock) return null;
     const configs = services.apiManager?.getAllConfigs?.() || [];
+    const lockConnectionType = normalizeApiConnectionType(lock.connectionType);
+    const matchConnectionType = (config) => {
+      if (!lockConnectionType) return true;
+      return getApiConfigConnectionType(config) === lockConnectionType;
+    };
     let matched = null;
     if (lock.id) {
       matched = configs.find(c => c.id === lock.id) || null;
     } else {
       if (!matched && lock.displayName) {
-        matched = configs.find(c => (c.displayName || '').trim() === lock.displayName) || null;
+        matched = configs.find(c =>
+          (c.displayName || '').trim() === lock.displayName
+          && matchConnectionType(c)
+        ) || null;
       }
       if (!matched && lock.modelName) {
-        matched = configs.find(c => (c.modelName || '').trim() === lock.modelName) || null;
+        matched = configs.find(c =>
+          (c.modelName || '').trim() === lock.modelName
+          && matchConnectionType(c)
+        ) || null;
       }
       if (!matched && lock.baseUrl && lock.modelName) {
-        matched = configs.find(c => c.baseUrl === lock.baseUrl && c.modelName === lock.modelName) || null;
+        matched = configs.find(c =>
+          c.baseUrl === lock.baseUrl
+          && c.modelName === lock.modelName
+          && matchConnectionType(c)
+        ) || null;
       }
     }
 

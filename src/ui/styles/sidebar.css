@@ -2596,6 +2596,13 @@ input:checked + .slider::before {
     opacity: 0.68;
 }
 
+.base-url-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    opacity: 0.68;
+}
+
 .custom-params-group textarea.custom-params {
     min-height: 140px;
     resize: none;
@@ -2684,7 +2691,8 @@ input:checked + .slider::before {
 
 /* 移除 headers 相关样式（已不需要） */
 
-.form-group input {
+.form-group input,
+.form-group select {
     width: 100%;
     background: var(--cerebr-input-bg);
     border: none;

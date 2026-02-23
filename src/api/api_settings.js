@@ -40,6 +40,11 @@ const USER_MESSAGE_TEMPLATE_INJECT_SNIPPET = [
   '这里是紧跟其后的用户追问',
   '{{/user}}'
 ].join('\n');
+const CONNECTION_TYPE_OPENAI = 'openai';
+const CONNECTION_TYPE_GEMINI = 'gemini';
+const GEMINI_LEGACY_BASE_URL = 'genai';
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1/chat/completions';
+const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 
 export function createApiManager(appContext) {
   // 私有状态
@@ -100,6 +105,117 @@ export function createApiManager(appContext) {
     }
   }
 
+  function normalizeConnectionType(rawType) {
+    const normalized = (typeof rawType === 'string') ? rawType.trim().toLowerCase() : '';
+    if (normalized === CONNECTION_TYPE_GEMINI) return CONNECTION_TYPE_GEMINI;
+    if (normalized === CONNECTION_TYPE_OPENAI) return CONNECTION_TYPE_OPENAI;
+    return '';
+  }
+
+  function isLegacyGeminiBaseUrl(baseUrl) {
+    return (typeof baseUrl === 'string') && baseUrl.trim().toLowerCase() === GEMINI_LEGACY_BASE_URL;
+  }
+
+  function getConfigConnectionType(config) {
+    const byField = normalizeConnectionType(config?.connectionType);
+    if (byField) return byField;
+    const normalizedBaseUrl = (typeof config?.baseUrl === 'string') ? config.baseUrl.trim().toLowerCase() : '';
+    if (normalizedBaseUrl === GEMINI_LEGACY_BASE_URL) return CONNECTION_TYPE_GEMINI;
+    if (normalizedBaseUrl.includes('generativelanguage.googleapis.com')) return CONNECTION_TYPE_GEMINI;
+    return CONNECTION_TYPE_OPENAI;
+  }
+
+  function isGeminiConnectionConfig(config) {
+    return getConfigConnectionType(config) === CONNECTION_TYPE_GEMINI;
+  }
+
+  function normalizeConfigBaseUrlByConnection(connectionType, baseUrl) {
+    const normalizedType = normalizeConnectionType(connectionType) || CONNECTION_TYPE_OPENAI;
+    const trimmed = (typeof baseUrl === 'string') ? baseUrl.trim() : '';
+    if (normalizedType === CONNECTION_TYPE_GEMINI) {
+      if (!trimmed || isLegacyGeminiBaseUrl(trimmed)) {
+        return GEMINI_DEFAULT_BASE_URL;
+      }
+      return trimmed;
+    }
+    return trimmed;
+  }
+
+  function normalizeGeminiModelName(modelName) {
+    const trimmed = (typeof modelName === 'string') ? modelName.trim() : '';
+    if (!trimmed) return '';
+    return trimmed.replace(/^models\//i, '');
+  }
+
+  function buildGeminiEndpointUrl({ baseUrl, modelName, apiKey, useStreaming }) {
+    const normalizedModelName = normalizeGeminiModelName(modelName);
+    if (!normalizedModelName) {
+      throw new Error('Gemini 模型名为空，请在 API 设置中填写 modelName');
+    }
+
+    const action = useStreaming ? 'streamGenerateContent' : 'generateContent';
+    const encodedModelName = encodeURIComponent(normalizedModelName);
+    const normalizedBase = normalizeConfigBaseUrlByConnection(CONNECTION_TYPE_GEMINI, baseUrl);
+
+    // 支持在 baseUrl 中通过占位符自定义完整路径（例如代理服务）。
+    const candidate = normalizedBase
+      .replace(/\{model\}/gi, encodedModelName)
+      .replace(/\{action\}/gi, action)
+      .replace(/\{method\}/gi, action)
+      .replace(/\{key\}/gi, encodeURIComponent(apiKey));
+
+    let parsedUrl = null;
+    try {
+      parsedUrl = new URL(candidate);
+    } catch (_) {
+      throw new Error(`Gemini API 端点无效：${candidate || '(empty)'}`);
+    }
+
+    const protocol = String(parsedUrl?.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      throw new Error(`Gemini API 端点协议不受支持：${protocol || 'unknown'}`);
+    }
+
+    const path = parsedUrl.pathname || '/';
+    const hasModelPlaceholder = /\{model\}/i.test(baseUrl || '');
+    const hasActionPlaceholder = /\{action\}|\{method\}/i.test(baseUrl || '');
+    const hasKeyPlaceholder = /\{key\}/i.test(baseUrl || '');
+    const hasGeminiMethodSuffix = /:(streamGenerateContent|generateContent)$/i.test(path);
+    const hasModelPathWithoutMethod = /\/models\/[^/]+$/i.test(path);
+
+    let normalizedPath = path.replace(/\/+$/, '');
+    if (!normalizedPath) normalizedPath = '';
+    if (hasGeminiMethodSuffix) {
+      normalizedPath = normalizedPath.replace(/:(streamGenerateContent|generateContent)$/i, `:${action}`);
+      parsedUrl.pathname = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
+    } else if (hasModelPathWithoutMethod) {
+      parsedUrl.pathname = `${normalizedPath}:${action}`;
+    } else if (!hasModelPlaceholder && !hasActionPlaceholder) {
+      const lowered = normalizedPath.toLowerCase();
+      if (/\/v\d+(alpha|beta)?$/i.test(normalizedPath)) {
+        normalizedPath = `${normalizedPath}/models/${encodedModelName}:${action}`;
+      } else if (lowered.endsWith('/models')) {
+        normalizedPath = `${normalizedPath}/${encodedModelName}:${action}`;
+      } else {
+        normalizedPath = `${normalizedPath}/v1beta/models/${encodedModelName}:${action}`;
+      }
+      parsedUrl.pathname = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
+    }
+
+    if (!hasKeyPlaceholder && !parsedUrl.searchParams.has('key')) {
+      parsedUrl.searchParams.set('key', apiKey);
+    }
+    if (useStreaming) {
+      if (!parsedUrl.searchParams.has('alt')) {
+        parsedUrl.searchParams.set('alt', 'sse');
+      }
+    } else if (parsedUrl.searchParams.get('alt') === 'sse') {
+      parsedUrl.searchParams.delete('alt');
+    }
+
+    return parsedUrl.toString();
+  }
+
   function setSelectedIndexInternal(index) {
     if (!Number.isFinite(index)) return false;
     if (index < 0 || index >= apiConfigs.length) return false;
@@ -118,6 +234,7 @@ export function createApiManager(appContext) {
         // 当配置了“本地 key 文件路径”时，不把内联 key 同步到 sync，避免长 key 列表撞配额。
         apiKey: apiKeyFilePath ? '' : c.apiKey,
         apiKeyFilePath,
+        connectionType: getConfigConnectionType(c),
         baseUrl: c.baseUrl,
         modelName: c.modelName,
         displayName: c.displayName,
@@ -708,6 +825,16 @@ export function createApiManager(appContext) {
               needResave = true;
             }
           }
+          const normalizedConnectionType = getConfigConnectionType(config);
+          if (config.connectionType !== normalizedConnectionType) {
+            config.connectionType = normalizedConnectionType;
+            needResave = true;
+          }
+          const normalizedBaseUrlByConnection = normalizeConfigBaseUrlByConnection(config.connectionType, config.baseUrl);
+          if (normalizedBaseUrlByConnection !== config.baseUrl) {
+            config.baseUrl = normalizedBaseUrlByConnection;
+            needResave = true;
+          }
           if (typeof config.modelName !== 'string') {
             config.modelName = '';
             needResave = true;
@@ -790,7 +917,8 @@ export function createApiManager(appContext) {
           id: generateUUID(),
           apiKey: '', // 初始为空字符串
           apiKeyFilePath: '',
-          baseUrl: 'https://api.openai.com/v1/chat/completions',
+          connectionType: CONNECTION_TYPE_OPENAI,
+          baseUrl: OPENAI_DEFAULT_BASE_URL,
           modelName: 'gpt-4o',
           displayName: '',
           temperature: 1,
@@ -820,7 +948,8 @@ export function createApiManager(appContext) {
         id: generateUUID(),
         apiKey: '',
         apiKeyFilePath: '',
-        baseUrl: 'https://api.openai.com/v1/chat/completions',
+        connectionType: CONNECTION_TYPE_OPENAI,
+        baseUrl: OPENAI_DEFAULT_BASE_URL,
         modelName: 'gpt-4o',
         displayName: '',
         temperature: 1,
@@ -972,8 +1101,9 @@ export function createApiManager(appContext) {
    * @returns {string} 唯一标识符
    */
   function getConfigIdentifier(config) {
-    // 使用 baseUrl 和 modelName 组合作为唯一标识符
-    return `${config.baseUrl}|${config.modelName}`;
+    // 使用 connectionType + baseUrl + modelName 组合作为唯一标识符，避免同名模型跨协议冲突。
+    const connectionType = getConfigConnectionType(config);
+    return `${connectionType}|${config.baseUrl}|${config.modelName}`;
   }
 
   // 将卡片索引安全转为数字，非法值返回 null。
@@ -1048,6 +1178,7 @@ export function createApiManager(appContext) {
    * @param {Object} config - API 配置对象
    * @param {string | string[]} [config.apiKey] - API 密钥 (可以是单个字符串或字符串数组)
    * @param {string} [config.apiKeyFilePath] - 本地 Key 文件路径（可选，每行一个 key）
+   * @param {'openai'|'gemini'} [config.connectionType] - 连接方式（OpenAI 兼容 / Gemini）
    * @param {string} [config.baseUrl] - API 基础 URL
    * @param {string} [config.modelName] - 模型名称
    * @param {number} [config.temperature] - temperature 值（可为 0）
@@ -1076,6 +1207,9 @@ export function createApiManager(appContext) {
 
     const apiKeyInput = template.querySelector('.api-key');
     const apiKeyFilePathInput = template.querySelector('.api-key-file-path');
+    const connectionTypeSelect = template.querySelector('.connection-type');
+    const baseUrlLabel = template.querySelector('.base-url-label');
+    const baseUrlHint = template.querySelector('.base-url-hint');
     const baseUrlInput = template.querySelector('.base-url');
     const displayNameInput = template.querySelector('.display-name');
     const modelNameInput = template.querySelector('.model-name');
@@ -1091,6 +1225,26 @@ export function createApiManager(appContext) {
     const userMessageTemplateIncludeHistoryToggle = template.querySelector('.user-message-template-include-history');
     const userMessageTemplateHelpBtn = template.querySelector('.template-help-icon');
     const userMessageTemplateCopyBtn = template.querySelector('.template-inject-copy-btn');
+    const applyConnectionTypeUiState = (rawConnectionType) => {
+      const normalizedType = normalizeConnectionType(rawConnectionType) || CONNECTION_TYPE_OPENAI;
+      if (connectionTypeSelect) {
+        connectionTypeSelect.value = normalizedType;
+      }
+      if (!baseUrlInput) return;
+      if (normalizedType === CONNECTION_TYPE_GEMINI) {
+        if (baseUrlLabel) baseUrlLabel.textContent = 'Gemini API 端点（可自定义）';
+        baseUrlInput.placeholder = '例如 https://generativelanguage.googleapis.com 或你的代理地址';
+        if (baseUrlHint) {
+          baseUrlHint.textContent = '支持填写官方地址或 Gemini 代理地址；会自动补全 models/{model}:{method} 与 key 参数。';
+        }
+      } else {
+        if (baseUrlLabel) baseUrlLabel.textContent = 'API 端点 URL';
+        baseUrlInput.placeholder = `例如 ${OPENAI_DEFAULT_BASE_URL}`;
+        if (baseUrlHint) {
+          baseUrlHint.textContent = 'OpenAI 兼容模式会使用 chat/completions 请求体，并通过 Authorization: Bearer 发送 API Key。';
+        }
+      }
+    };
 
     // 在 temperature 设置后添加“聊天历史裁剪”设置：分别控制 user / AI(assistant) 的历史消息条数
     // 背景：超长对话时，AI 回复往往更长；允许只保留最近 N 条 AI，同时保留更多用户指令上下文。
@@ -1291,7 +1445,18 @@ export function createApiManager(appContext) {
     }
     // ------------------------
 
-    baseUrlInput.value = config.baseUrl ?? 'https://api.openai.com/v1/chat/completions';
+    const currentConnectionType = getConfigConnectionType(config);
+    if (apiConfigs[index].connectionType !== currentConnectionType) {
+      apiConfigs[index].connectionType = currentConnectionType;
+    }
+    applyConnectionTypeUiState(currentConnectionType);
+    if (currentConnectionType === CONNECTION_TYPE_GEMINI) {
+      baseUrlInput.value = normalizeConfigBaseUrlByConnection(CONNECTION_TYPE_GEMINI, config.baseUrl);
+    } else {
+      baseUrlInput.value = (typeof config.baseUrl === 'string' && config.baseUrl.trim())
+        ? config.baseUrl.trim()
+        : OPENAI_DEFAULT_BASE_URL;
+    }
     displayNameInput.value = config.displayName ?? '';
     modelNameInput.value = config.modelName ?? 'gpt-4o';
     temperatureInput.value = config.temperature ?? 1;
@@ -1405,22 +1570,46 @@ export function createApiManager(appContext) {
     });
 
     // --- 输入变化时保存 ---
+    const saveCardBasicFields = () => {
+      const previousConfig = { ...apiConfigs[index] };
+      const previousConnectionType = getConfigConnectionType(previousConfig);
+      const nextConnectionType = connectionTypeSelect
+        ? (normalizeConnectionType(connectionTypeSelect.value) || CONNECTION_TYPE_OPENAI)
+        : getConfigConnectionType(apiConfigs[index]);
+      let rawBaseUrlInput = (baseUrlInput.value || '').trim();
+      if (previousConnectionType !== nextConnectionType) {
+        if (nextConnectionType === CONNECTION_TYPE_GEMINI) {
+          if (!rawBaseUrlInput || rawBaseUrlInput === OPENAI_DEFAULT_BASE_URL) {
+            rawBaseUrlInput = GEMINI_DEFAULT_BASE_URL;
+          }
+        } else if (!rawBaseUrlInput || rawBaseUrlInput === GEMINI_DEFAULT_BASE_URL || isLegacyGeminiBaseUrl(rawBaseUrlInput)) {
+          rawBaseUrlInput = OPENAI_DEFAULT_BASE_URL;
+        }
+      }
+      const nextBaseUrl = normalizeConfigBaseUrlByConnection(nextConnectionType, rawBaseUrlInput);
+      if (baseUrlInput.value !== nextBaseUrl) {
+        baseUrlInput.value = nextBaseUrl;
+      }
+      applyConnectionTypeUiState(nextConnectionType);
+      apiConfigs[index] = {
+        ...apiConfigs[index],
+        connectionType: nextConnectionType,
+        baseUrl: nextBaseUrl,
+        displayName: displayNameInput.value,
+        modelName: (modelNameInput.value || '').trim(),
+      };
+      // connectionType/baseUrl/modelName 变化会影响缓存键，主动清理避免沿用旧缓存。
+      clearApiKeyFileCacheEntry(previousConfig);
+      clearApiKeyFileCacheEntry(apiConfigs[index]);
+      // 更新标题
+      titleElement.textContent = apiConfigs[index].displayName || apiConfigs[index].modelName || apiConfigs[index].baseUrl || '新配置';
+      saveAPIConfigs();
+    };
+    if (connectionTypeSelect) {
+      connectionTypeSelect.addEventListener('change', saveCardBasicFields);
+    }
     [baseUrlInput, displayNameInput, modelNameInput].forEach(input => {
-      input.addEventListener('change', () => {
-        const previousConfig = { ...apiConfigs[index] };
-        apiConfigs[index] = {
-          ...apiConfigs[index],
-          baseUrl: (baseUrlInput.value || '').trim(),
-          displayName: displayNameInput.value,
-          modelName: (modelNameInput.value || '').trim(),
-        };
-        // baseUrl/modelName 变化会影响缓存键，主动清理避免沿用旧缓存。
-        clearApiKeyFileCacheEntry(previousConfig);
-        clearApiKeyFileCacheEntry(apiConfigs[index]);
-        // 更新标题
-        titleElement.textContent = apiConfigs[index].displayName || apiConfigs[index].modelName || apiConfigs[index].baseUrl || '新配置';
-        saveAPIConfigs();
-      });
+      input.addEventListener('change', saveCardBasicFields);
     });
 
     // API Key 输入变化处理
@@ -2000,7 +2189,7 @@ export function createApiManager(appContext) {
       return parts;
     };
 
-    if (config.baseUrl === 'genai') {
+    if (isGeminiConnectionConfig(config)) {
       // Gemini API 请求格式（包含 Gemini 3 思维链签名 Thought Signature 的回传）
       const contents = (await Promise.all(normalizedMessages.map(async (msg) => {
         // Gemini API 使用 'user' 和 'model' 角色
@@ -2244,7 +2433,12 @@ export function createApiManager(appContext) {
     const configId = getConfigIdentifier(config);
     const normalizedBaseUrl = (typeof config?.baseUrl === 'string') ? config.baseUrl.trim() : '';
     const normalizedModelName = (typeof config?.modelName === 'string') ? config.modelName.trim() : '';
-    const statusApiBase = normalizedBaseUrl || String(config?.baseUrl || '');
+    const connectionType = getConfigConnectionType(config);
+    const isGeminiConnection = connectionType === CONNECTION_TYPE_GEMINI;
+    const effectiveBaseUrl = isGeminiConnection
+      ? normalizeConfigBaseUrlByConnection(CONNECTION_TYPE_GEMINI, normalizedBaseUrl)
+      : normalizedBaseUrl;
+    const statusApiBase = effectiveBaseUrl || String(config?.baseUrl || '');
     const statusModelName = normalizedModelName || String(config?.modelName || '');
     // 确保黑名单已加载（若未调用过 loadAPIConfigs）
     if (!apiKeyBlacklist || typeof apiKeyBlacklist !== 'object') {
@@ -2344,18 +2538,15 @@ export function createApiManager(appContext) {
       });
 
       // 组装请求
-      let endpointUrl = normalizedBaseUrl;
+      let endpointUrl = effectiveBaseUrl;
       const headers = { 'Content-Type': 'application/json' };
-      if (normalizedBaseUrl === 'genai') {
-        if (!normalizedModelName) {
-          throw new Error('Gemini 模型名为空，请在 API 设置中填写 modelName');
-        }
-        const encodedKey = encodeURIComponent(selectedKey);
-        if (config.useStreaming !== false) {
-          endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModelName}:streamGenerateContent?key=${encodedKey}&alt=sse`;
-        } else {
-          endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModelName}:generateContent?key=${encodedKey}`;
-        }
+      if (isGeminiConnection) {
+        endpointUrl = buildGeminiEndpointUrl({
+          baseUrl: effectiveBaseUrl,
+          modelName: normalizedModelName,
+          apiKey: selectedKey,
+          useStreaming: (config.useStreaming !== false)
+        });
       } else {
         if (!endpointUrl) {
           throw new Error('API Base URL 为空，请在 API 设置中填写有效地址');
@@ -2377,14 +2568,19 @@ export function createApiManager(appContext) {
         stage: 'http_request_start',
         apiBase: statusApiBase,
         modelName: statusModelName,
-        useStreaming: normalizedBaseUrl === 'genai' ? (config.useStreaming !== false) : !!requestBody?.stream
+        useStreaming: isGeminiConnection ? (config.useStreaming !== false) : !!requestBody?.stream
       });
 
       // 重要：先创建 fetch Promise 再 emit “已发出请求”，让 UI 可以在等待响应头阶段展示更明确的状态。
       // 这里不向 onStatus 透出 endpointUrl，避免 Gemini 场景下 URL 携带 key 造成泄漏风险。
       const endpointHint = (() => {
-        if (normalizedBaseUrl === 'genai') {
-          return `genai:${normalizedModelName}`;
+        if (isGeminiConnection) {
+          try {
+            const parsed = new URL(endpointUrl);
+            return `gemini:${parsed.host}${parsed.pathname}`;
+          } catch (_) {
+            return `gemini:${normalizedModelName}`;
+          }
         }
         try {
           const parsed = new URL(endpointUrl);
@@ -2634,6 +2830,7 @@ export function createApiManager(appContext) {
   /**
    * 从部分配置信息中获取完整的 API 配置
    * @param {Object} partialConfig - 部分 API 配置信息
+   * @param {'openai'|'gemini'} [partialConfig.connectionType] - 连接方式（可选）
    * @param {string} partialConfig.baseUrl - API 基础 URL
    * @param {string} partialConfig.modelName - 模型名称
    * @param {string} [partialConfig.apiKeyFilePath] - 本地 Key 文件路径（可选）
@@ -2644,14 +2841,23 @@ export function createApiManager(appContext) {
    * @returns {Object|null} 完整的 API 配置对象或 null
    */
   function getApiConfigFromPartial(partialConfig) {
-    if (!partialConfig || !partialConfig.baseUrl || !partialConfig.modelName) {
+    if (!partialConfig || !partialConfig.modelName) {
       return null;
     }
+    const partialConnectionType = normalizeConnectionType(partialConfig.connectionType);
+    const inferredTypeForBase = partialConnectionType
+      || (isLegacyGeminiBaseUrl(partialConfig.baseUrl) ? CONNECTION_TYPE_GEMINI : CONNECTION_TYPE_OPENAI);
+    const normalizedPartialBaseUrl = normalizeConfigBaseUrlByConnection(inferredTypeForBase, partialConfig.baseUrl);
+    if (!normalizedPartialBaseUrl) return null;
 
     // 尝试按 baseUrl 和 modelName 查找现有配置
     let matchedConfig = apiConfigs.find(config =>
       (partialConfig.id && config.id === partialConfig.id) ||
-      (config.baseUrl === partialConfig.baseUrl && config.modelName === partialConfig.modelName)
+      (
+        config.baseUrl === normalizedPartialBaseUrl
+        && config.modelName === partialConfig.modelName
+        && (!partialConnectionType || getConfigConnectionType(config) === partialConnectionType)
+      )
     );
 
     // 如果找到完全匹配，返回该配置 (确保包含 apiKey 和轮询状态)
@@ -2665,16 +2871,23 @@ export function createApiManager(appContext) {
     }
 
     // 如果没有找到完全匹配，尝试仅按 URL 匹配以获取可能的 API Key
-    const urlMatchedConfig = apiConfigs.find(config => config.baseUrl === partialConfig.baseUrl);
+    const urlMatchedConfig = apiConfigs.find(config =>
+      config.baseUrl === normalizedPartialBaseUrl
+      && (!partialConnectionType || getConfigConnectionType(config) === partialConnectionType)
+    );
 
     // 获取当前选中配置的 apiKey 作为备选
     const currentSelectedConfig = apiConfigs[selectedConfigIndex];
     const fallbackApiKey = currentSelectedConfig ? currentSelectedConfig.apiKey : '';
     const fallbackApiKeyFilePath = currentSelectedConfig ? currentSelectedConfig.apiKeyFilePath : '';
 
+    const inferredConnectionType = partialConnectionType
+      || (urlMatchedConfig ? getConfigConnectionType(urlMatchedConfig) : inferredTypeForBase);
+
     // 创建新的配置对象
     const newConfig = {
-      baseUrl: partialConfig.baseUrl,
+      connectionType: inferredConnectionType,
+      baseUrl: normalizeConfigBaseUrlByConnection(inferredConnectionType, normalizedPartialBaseUrl),
       // 优先使用 URL 匹配到的配置的 apiKey，其次是当前选中的，最后是空字符串
       // 注意：这里 apiKey 可能是数组或字符串
       apiKey: urlMatchedConfig?.apiKey || fallbackApiKey || '',
@@ -2757,7 +2970,8 @@ export function createApiManager(appContext) {
       id: generateUUID(),
       apiKey: '',
       apiKeyFilePath: '',
-      baseUrl: 'https://api.openai.com/v1/chat/completions',
+      connectionType: CONNECTION_TYPE_OPENAI,
+      baseUrl: OPENAI_DEFAULT_BASE_URL,
       modelName: 'new-model',
       displayName: '新配置',
       temperature: 1,
@@ -2776,6 +2990,8 @@ export function createApiManager(appContext) {
     if (typeof newConfig.apiKey === 'string' && newConfig.apiKey.includes(',')) {
       newConfig.apiKey = newConfig.apiKey.split(',').map(k => k.trim()).filter(Boolean);
     }
+    newConfig.connectionType = getConfigConnectionType(newConfig);
+    newConfig.baseUrl = normalizeConfigBaseUrlByConnection(newConfig.connectionType, newConfig.baseUrl);
     newConfig.apiKeyFilePath = normalizeApiKeyFilePath(newConfig.apiKeyFilePath);
     // 初始化轮询状态
     const newConfigId = getConfigIdentifier(newConfig);

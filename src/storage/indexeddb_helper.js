@@ -130,12 +130,23 @@ function computeConversationMessageStats(messages) {
  */
 function compactConversationApiLock(rawLock) {
   if (!rawLock || typeof rawLock !== 'object') return null;
+  const normalizeConnectionType = (value) => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (normalized === 'gemini') return 'gemini';
+    if (normalized === 'openai') return 'openai';
+    return '';
+  };
   const id = typeof rawLock.id === 'string' ? rawLock.id.trim() : '';
   const displayName = typeof rawLock.displayName === 'string' ? rawLock.displayName.trim() : '';
   const modelName = typeof rawLock.modelName === 'string' ? rawLock.modelName.trim() : '';
   const baseUrl = typeof rawLock.baseUrl === 'string' ? rawLock.baseUrl.trim() : '';
+  let connectionType = normalizeConnectionType(rawLock.connectionType);
+  const normalizedBaseUrl = baseUrl.toLowerCase();
+  if (!connectionType && (normalizedBaseUrl === 'genai' || normalizedBaseUrl.includes('generativelanguage.googleapis.com'))) {
+    connectionType = 'gemini';
+  }
   if (!id && !displayName && !modelName && !baseUrl) return null;
-  return { id, displayName, modelName, baseUrl };
+  return { id, displayName, modelName, baseUrl, connectionType };
 }
 
 function compactConversationToMetadata(conv) {

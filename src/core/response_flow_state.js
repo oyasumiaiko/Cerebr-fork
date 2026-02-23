@@ -13,11 +13,19 @@ function normalizeApiBase(value) {
   return (typeof value === 'string') ? value.trim().toLowerCase() : '';
 }
 
+function normalizeConnectionType(value) {
+  const normalized = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+  if (normalized === 'gemini') return 'gemini';
+  if (normalized === 'openai') return 'openai';
+  return '';
+}
+
 /**
  * 统一判定本次请求应走流式还是非流式。
  *
  * @param {{
  *   apiBase?: string,
+ *   connectionType?: 'openai'|'gemini',
  *   geminiUseStreaming?: boolean,
  *   requestBodyStream?: boolean
  * }} [input]
@@ -25,10 +33,17 @@ function normalizeApiBase(value) {
  */
 export function resolveResponseHandlingMode(input = {}) {
   const apiBase = normalizeApiBase(input?.apiBase);
+  const connectionType = normalizeConnectionType(input?.connectionType);
   const geminiUseStreaming = input?.geminiUseStreaming !== false;
   const requestBodyStream = input?.requestBodyStream === true;
 
   // Gemini 族接口不依赖 requestBody.stream，而是沿用配置项 useStreaming 作为单一真源。
+  if (connectionType === 'gemini') {
+    return geminiUseStreaming ? 'stream' : 'non_stream';
+  }
+  if (connectionType === 'openai') {
+    return requestBodyStream ? 'stream' : 'non_stream';
+  }
   if (apiBase === 'genai') {
     return geminiUseStreaming ? 'stream' : 'non_stream';
   }

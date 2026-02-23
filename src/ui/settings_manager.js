@@ -228,7 +228,7 @@ export function createSettingsManager(appContext) {
 
     apiConfigs.forEach((config) => {
       if (!config) return;
-      const fallbackValue = `${config.baseUrl || ''}|${config.modelName || ''}`;
+      const fallbackValue = `${config.connectionType || ''}|${config.baseUrl || ''}|${config.modelName || ''}`;
       const value = config.id || fallbackValue;
       const label = (config.displayName && String(config.displayName).trim())
         || (config.modelName && String(config.modelName).trim())
