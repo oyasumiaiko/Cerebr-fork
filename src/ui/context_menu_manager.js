@@ -785,11 +785,7 @@ export function createContextMenuManager(appContext) {
     } else {
       stopUpdateButton.style.display = 'none';
     }
-    // 每次打开菜单时刷新 click 处理，保证调用最新的 messageSender.abortCurrentRequest()
-    stopUpdateButton.onclick = () => {
-      if (messageSender) messageSender.abortCurrentRequest(currentMessageElement || messageElement);
-      hideContextMenu();
-    };
+    // 停止更新动作由 menuactivate 统一触发，这里不再动态绑定 onclick。
 
     // 根据是否点击代码块显示或隐藏复制代码按钮
     if (codeBlock) {
@@ -1643,15 +1639,28 @@ export function createContextMenuManager(appContext) {
   function setupEventListeners() {
     // 右键菜单行为对齐 Windows：在菜单项上“释放鼠标按键”时触发。
     // 说明：
-    // - 左键本身由 click（mouseup 后触发）覆盖；
-    // - 右键默认不会触发 click，这里在 mouseup(button=2) 时补发一次 click；
-    // - 这样可以保证“按下不触发、释放才触发”。
+    // - 左键与右键都在 pointerup 时触发；
+    // - 不依赖浏览器 click（click 要求 down/up 落在同一元素，不符合菜单释放语义）。
     const ACTIONABLE_SELECTOR = '.context-menu-item, .context-menu-submenu-item';
-    const dispatchClickOnRightRelease = (event) => {
-      if (!event || event.button !== 2) return;
-      const target = event.target instanceof Element
+    const MENU_ACTIVATE_EVENT = 'menuactivate';
+    const resolveActionTargetOnRelease = (event) => {
+      if (!event) return null;
+      const hasCoordinates = typeof event.clientX === 'number' && typeof event.clientY === 'number';
+      if (hasCoordinates && typeof document.elementFromPoint === 'function') {
+        const releasePointElement = document.elementFromPoint(event.clientX, event.clientY);
+        return releasePointElement instanceof Element
+          ? releasePointElement.closest(ACTIONABLE_SELECTOR)
+          : null;
+      }
+      return event.target instanceof Element
         ? event.target.closest(ACTIONABLE_SELECTOR)
         : null;
+    };
+    const dispatchMenuActivateOnRelease = (event) => {
+      if (!event) return;
+      const button = Number(event.button);
+      if (button !== 0 && button !== 2) return;
+      const target = resolveActionTargetOnRelease(event);
       if (!target) return;
       if (
         target.classList.contains('is-disabled')
@@ -1665,15 +1674,23 @@ export function createContextMenuManager(appContext) {
 
       event.preventDefault();
       event.stopPropagation();
-      target.dispatchEvent(new MouseEvent('click', {
+      target.dispatchEvent(new CustomEvent(MENU_ACTIVATE_EVENT, {
         bubbles: true,
         cancelable: true,
-        view: window,
-        ctrlKey: !!event.ctrlKey,
-        shiftKey: !!event.shiftKey,
-        altKey: !!event.altKey,
-        metaKey: !!event.metaKey
+        detail: {
+          sourceEvent: event,
+          button
+        }
       }));
+    };
+    const preventNativeClickOnActionable = (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest(ACTIONABLE_SELECTOR)
+        : null;
+      if (!target) return;
+      // 所有菜单动作都走 menuactivate，屏蔽原生 click 避免双触发与“按下/释放同元素”限制。
+      event.preventDefault();
+      event.stopPropagation();
     };
     const preventNativeContextMenuOnActionable = (event) => {
       const target = event.target instanceof Element
@@ -1685,7 +1702,8 @@ export function createContextMenuManager(appContext) {
 
     [contextMenu, regenerateSubmenu, insertMessageSubmenu, forkConversationSubmenu].forEach((menuLikeEl) => {
       if (!menuLikeEl) return;
-      menuLikeEl.addEventListener('mouseup', dispatchClickOnRightRelease);
+      menuLikeEl.addEventListener('pointerup', dispatchMenuActivateOnRelease);
+      menuLikeEl.addEventListener('click', preventNativeClickOnActionable, true);
       menuLikeEl.addEventListener('contextmenu', preventNativeContextMenuOnActionable);
     });
 
@@ -1745,33 +1763,33 @@ export function createContextMenuManager(appContext) {
     });
 
     // 按钮点击处理
-    copyMessageButton.addEventListener('click', copyMessageContent);
-    copyCodeButton.addEventListener('click', copyCodeContent);
+    copyMessageButton.addEventListener(MENU_ACTIVATE_EVENT, copyMessageContent);
+    copyCodeButton.addEventListener(MENU_ACTIVATE_EVENT, copyCodeContent);
     // 重新编辑消息
-    editMessageButton.addEventListener('click', () => {
+    editMessageButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
       if (!currentMessageElement || isEditing) return;
       startInlineEdit(currentMessageElement);
       hideContextMenu();
     });
     // 修复：使用 messageSender.abortCurrentRequest()，避免未定义的 abortCurrentRequest 引发错误
-    stopUpdateButton.addEventListener('click', () => {
+    stopUpdateButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
       if (messageSender) messageSender.abortCurrentRequest(currentMessageElement);
       hideContextMenu();
     });
-    deleteMessageButton.addEventListener('click', () => {
+    deleteMessageButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
       if (currentMessageElement) {
         utils.deleteMessageContent(currentMessageElement);
       } else {
         console.error('消息元素未找到。');
       }
     });
-    regenerateButton.addEventListener('click', (event) => {
+    regenerateButton.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
       const target = event?.target instanceof Element ? event.target : null;
       if (target && target.closest('.context-menu-submenu')) return;
       regenerateMessage(event);
     });
     if (regenerateSubmenuList) {
-      regenerateSubmenuList.addEventListener('click', (event) => {
+      regenerateSubmenuList.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
         const target = event?.target instanceof Element ? event.target : null;
         const item = target ? target.closest('.context-menu-submenu-item') : null;
         if (!item) return;
@@ -1785,7 +1803,7 @@ export function createContextMenuManager(appContext) {
     }
 
     if (insertMessageSubmenuList) {
-      insertMessageSubmenuList.addEventListener('click', (event) => {
+      insertMessageSubmenuList.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
         const target = event?.target instanceof Element ? event.target : null;
         const item = target ? target.closest('.context-menu-submenu-item') : null;
         if (!item) return;
@@ -1821,7 +1839,7 @@ export function createContextMenuManager(appContext) {
     }
 
     if (forkConversationSubmenuList) {
-      forkConversationSubmenuList.addEventListener('click', (event) => {
+      forkConversationSubmenuList.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
         const target = event?.target instanceof Element ? event.target : null;
         const item = target ? target.closest('.context-menu-submenu-item') : null;
         if (!item) return;
@@ -1835,17 +1853,17 @@ export function createContextMenuManager(appContext) {
       });
     }
 
-    clearChatContextButton.addEventListener('click', async () => {
+    clearChatContextButton.addEventListener(MENU_ACTIVATE_EVENT, async () => {
       await clearChatHistory();
       hideContextMenu();
     });
     
     // 添加复制为图片按钮点击事件
-    copyAsImageButton.addEventListener('click', copyMessageAsImage);
+    copyAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, copyMessageAsImage);
 
     // 添加创建分支对话按钮点击事件
     if (forkConversationButton) {
-      forkConversationButton.addEventListener('click', (event) => {
+      forkConversationButton.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
         const target = event?.target instanceof Element ? event.target : null;
         if (target && target.closest('.context-menu-submenu')) return;
         if (!forkConversationButton.classList.contains('disabled')) {

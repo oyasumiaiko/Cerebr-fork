@@ -3529,6 +3529,8 @@ input:checked + .slider::before {
     display: none;
     backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     border: 1px solid rgba(255, 255, 255, 0.1);
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .context-menu-item {
@@ -3542,6 +3544,8 @@ input:checked + .slider::before {
     border-radius: 6px;
     margin: 2px 0;
     transition: background-color 0.2s ease;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .context-menu-item:hover {
@@ -3618,6 +3622,8 @@ input:checked + .slider::before {
     transition: opacity 0.15s ease, transform 0.15s ease;
     pointer-events: none;
     z-index: 2001;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .context-menu-submenu::before {
@@ -3684,6 +3690,7 @@ input:checked + .slider::before {
     font-size: 12px;
     color: var(--cerebr-text-color);
     user-select: none;
+    -webkit-user-select: none;
     transition: background-color 0.2s ease;
 }
 
@@ -5745,6 +5752,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
     -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 /* 右键菜单选项 */
@@ -5752,6 +5761,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     padding: 6px 16px;
     cursor: pointer;
     color: var(--cerebr-text-color);
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .chat-history-context-menu-separator {

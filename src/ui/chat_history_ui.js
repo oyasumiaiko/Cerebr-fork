@@ -3952,13 +3952,27 @@ export function createChatHistoryUI(appContext) {
     menu.__closeMenu = closeMenu;
 
     // 右键菜单行为对齐 Windows：在选项上“释放鼠标按键”时触发。
-    // 左键由 click 覆盖；右键在 mouseup(button=2) 时补发 click。
+    // 说明：左键与右键都在 pointerup 时触发，不依赖原生 click（click 需要 down/up 同元素）。
     const HISTORY_MENU_ACTION_SELECTOR = '.chat-history-context-menu-option';
-    const dispatchHistoryMenuClickOnRightRelease = (event) => {
-      if (!event || event.button !== 2) return;
-      const option = event.target instanceof Element
+    const HISTORY_MENU_ACTIVATE_EVENT = 'menuactivate';
+    const resolveHistoryMenuOptionOnRelease = (event) => {
+      if (!event) return null;
+      const hasCoordinates = typeof event.clientX === 'number' && typeof event.clientY === 'number';
+      if (hasCoordinates && typeof document.elementFromPoint === 'function') {
+        const releasePointElement = document.elementFromPoint(event.clientX, event.clientY);
+        return releasePointElement instanceof Element
+          ? releasePointElement.closest(HISTORY_MENU_ACTION_SELECTOR)
+          : null;
+      }
+      return event.target instanceof Element
         ? event.target.closest(HISTORY_MENU_ACTION_SELECTOR)
         : null;
+    };
+    const dispatchHistoryMenuActivateOnRelease = (event) => {
+      if (!event) return;
+      const button = Number(event.button);
+      if (button !== 0 && button !== 2) return;
+      const option = resolveHistoryMenuOptionOnRelease(event);
       if (!option) return;
       if (option.dataset?.triggerMode === 'hold') {
         event.preventDefault();
@@ -3967,15 +3981,23 @@ export function createChatHistoryUI(appContext) {
       }
       event.preventDefault();
       event.stopPropagation();
-      option.dispatchEvent(new MouseEvent('click', {
+      option.dispatchEvent(new CustomEvent(HISTORY_MENU_ACTIVATE_EVENT, {
         bubbles: true,
         cancelable: true,
-        view: window,
-        ctrlKey: !!event.ctrlKey,
-        shiftKey: !!event.shiftKey,
-        altKey: !!event.altKey,
-        metaKey: !!event.metaKey
+        detail: {
+          sourceEvent: event,
+          button
+        }
       }));
+    };
+    const preventNativeHistoryMenuClick = (event) => {
+      const option = event.target instanceof Element
+        ? event.target.closest(HISTORY_MENU_ACTION_SELECTOR)
+        : null;
+      if (!option) return;
+      // 所有动作都走 menuactivate，避免 click 语义导致“按下 A、松开 B 不触发 B”。
+      event.preventDefault();
+      event.stopPropagation();
     };
     const preventNativeContextMenuOnHistoryOption = (event) => {
       const option = event.target instanceof Element
@@ -3984,9 +4006,11 @@ export function createChatHistoryUI(appContext) {
       if (!option) return;
       event.preventDefault();
     };
-    menu.addEventListener('mouseup', dispatchHistoryMenuClickOnRightRelease);
+    menu.addEventListener('pointerup', dispatchHistoryMenuActivateOnRelease);
+    menu.addEventListener('click', preventNativeHistoryMenuClick, true);
     menu.addEventListener('contextmenu', preventNativeContextMenuOnHistoryOption);
-    menuCleanupCallbacks.push(() => menu.removeEventListener('mouseup', dispatchHistoryMenuClickOnRightRelease));
+    menuCleanupCallbacks.push(() => menu.removeEventListener('pointerup', dispatchHistoryMenuActivateOnRelease));
+    menuCleanupCallbacks.push(() => menu.removeEventListener('click', preventNativeHistoryMenuClick, true));
     menuCleanupCallbacks.push(() => menu.removeEventListener('contextmenu', preventNativeContextMenuOnHistoryOption));
 
     const appendMenuSeparator = () => {
@@ -4002,7 +4026,7 @@ export function createChatHistoryUI(appContext) {
     const pinToggleOption = document.createElement('div');
     pinToggleOption.textContent = isPinned ? '取消置顶' : '置顶';
     pinToggleOption.classList.add('chat-history-context-menu-option');
-    pinToggleOption.addEventListener('click', async (e) => {
+    pinToggleOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
       if (isPinned) {
         await unpinConversation(conversationId);
@@ -4019,7 +4043,7 @@ export function createChatHistoryUI(appContext) {
     const renameOption = document.createElement('div');
     renameOption.textContent = '重命名对话';
     renameOption.classList.add('chat-history-context-menu-option');
-    renameOption.addEventListener('click', async (e) => {
+    renameOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
       closeMenu(); // 先关闭菜单
       try {
@@ -4083,7 +4107,7 @@ export function createChatHistoryUI(appContext) {
     const autoTitleOption = document.createElement('div');
     autoTitleOption.textContent = '自动生成标题';
     autoTitleOption.classList.add('chat-history-context-menu-option');
-    autoTitleOption.addEventListener('click', async (e) => {
+    autoTitleOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (e) => {
       e.stopPropagation();
       closeMenu();
       try {
@@ -4114,7 +4138,7 @@ export function createChatHistoryUI(appContext) {
     const apiLockOption = document.createElement('div');
     apiLockOption.textContent = hasApiLock ? '取消固定 API' : '固定当前 API';
     apiLockOption.classList.add('chat-history-context-menu-option');
-    apiLockOption.addEventListener('click', async (e) => {
+    apiLockOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (e) => {
       e.stopPropagation();
       closeMenu();
       if (hasApiLock) {
@@ -4134,7 +4158,7 @@ export function createChatHistoryUI(appContext) {
     const openUrlOption = document.createElement('div');
     openUrlOption.textContent = '打开对话页面';
     openUrlOption.classList.add('chat-history-context-menu-option');
-    openUrlOption.addEventListener('click', async (event) => {
+    openUrlOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (event) => {
       event.stopPropagation();
       closeMenu();
       try {
@@ -4167,7 +4191,7 @@ export function createChatHistoryUI(appContext) {
     copyOption.textContent = '以 JSON 格式复制';
     copyOption.classList.add('chat-history-context-menu-option');
 
-    copyOption.addEventListener('click', async (e) => {
+    copyOption.addEventListener(HISTORY_MENU_ACTIVATE_EVENT, async (e) => {
       e.stopPropagation(); // <--- 添加阻止冒泡
       try {
         // 获取完整会话内容
