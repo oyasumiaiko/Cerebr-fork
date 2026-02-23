@@ -2336,8 +2336,7 @@ input:checked + .slider::before {
     gap: 10px;
 }
 
-.connection-source-item-grid .connection-source-field:nth-child(3),
-.connection-source-item-grid .connection-source-field:nth-child(5) {
+.connection-source-item-grid .connection-source-field:nth-child(3) {
     grid-column: 1 / -1;
 }
 
@@ -2346,8 +2345,7 @@ input:checked + .slider::before {
         grid-template-columns: 1fr;
     }
 
-    .connection-source-item-grid .connection-source-field:nth-child(3),
-    .connection-source-item-grid .connection-source-field:nth-child(5) {
+    .connection-source-item-grid .connection-source-field:nth-child(3) {
         grid-column: auto;
     }
 }

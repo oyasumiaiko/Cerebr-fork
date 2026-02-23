@@ -1599,6 +1599,17 @@ export function createApiManager(appContext) {
     }
     if (apiKeyInput) {
       apiKeyInput.addEventListener('change', persistSourceChanges);
+      // 聚焦时临时明文显示，便于检查/编辑；失焦后恢复密码态，降低肩窥风险。
+      apiKeyInput.addEventListener('focus', () => {
+        if (apiKeyInput.type !== 'text') {
+          apiKeyInput.type = 'text';
+        }
+      });
+      apiKeyInput.addEventListener('blur', () => {
+        if (apiKeyInput.type !== 'password') {
+          apiKeyInput.type = 'password';
+        }
+      });
     }
     if (apiKeyFilePathInput) {
       apiKeyFilePathInput.addEventListener('change', persistSourceChanges);
