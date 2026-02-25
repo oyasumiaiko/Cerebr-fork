@@ -122,6 +122,25 @@
       return Math.min(max, Math.max(min, v));
     }
 
+    function getDocumentZoomFactor() {
+      const root = document.documentElement;
+      if (!root) return 1;
+      const inlineZoom = Number.parseFloat(root.style.zoom || '');
+      if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
+      const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
+      if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
+      return 1;
+    }
+
+    // 独立页面使用 html zoom 时，getBoundingClientRect 返回“视觉像素”，
+    // 而 left/top/width 样式写入需要“布局像素”，这里统一做反向换算。
+    function toLayoutPixels(value, zoomFactor = getDocumentZoomFactor()) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 0;
+      if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
+      return numeric / zoomFactor;
+    }
+
     function escapeMessageIdForSelector(id) {
       const raw = (id == null) ? '' : String(id);
       if (!raw) return '';
@@ -703,6 +722,14 @@
       state.root.classList.toggle('chat-scroll-minimap--right', effectiveSide === 'right');
       const layoutRect = chatLayout.getBoundingClientRect();
       const containerRect = state.container.getBoundingClientRect();
+      const zoomFactor = getDocumentZoomFactor();
+      const layoutLeft = toLayoutPixels(layoutRect.left, zoomFactor);
+      const layoutTop = toLayoutPixels(layoutRect.top, zoomFactor);
+      const layoutWidth = toLayoutPixels(layoutRect.width, zoomFactor);
+      const containerLeft = toLayoutPixels(containerRect.left, zoomFactor);
+      const containerRight = toLayoutPixels(containerRect.right, zoomFactor);
+      const containerTop = toLayoutPixels(containerRect.top, zoomFactor);
+      const containerHeight = toLayoutPixels(containerRect.height, zoomFactor);
       let paddingLeft = 0;
       let paddingRight = 0;
       try {
@@ -712,21 +739,21 @@
       } catch (_) {}
 
       const minLeft = 4;
-      const maxLeft = Math.max(minLeft, layoutRect.width - minimapWidth - 4);
+      const maxLeft = Math.max(minLeft, layoutWidth - minimapWidth - 4);
       let left = minLeft;
       if (effectiveSide === 'right') {
-        const contentRight = containerRect.right - paddingRight;
-        const preferredLeft = (contentRight - layoutRect.left) + MINIMAP_OUTER_GAP;
+        const contentRight = containerRight - paddingRight;
+        const preferredLeft = (contentRight - layoutLeft) + MINIMAP_OUTER_GAP;
         left = Math.round(clampNumber(preferredLeft, minLeft, maxLeft));
       } else {
         // 左侧缩略图锚定在“内容列左边界”，确保全屏单列（大内边距）下不会跑出可视区域。
-        const contentLeft = containerRect.left + paddingLeft;
-        const preferredLeft = (contentLeft - layoutRect.left) - minimapWidth - MINIMAP_OUTER_GAP;
-        const fallbackLeft = (containerRect.left - layoutRect.left) + 4;
+        const contentLeft = containerLeft + paddingLeft;
+        const preferredLeft = (contentLeft - layoutLeft) - minimapWidth - MINIMAP_OUTER_GAP;
+        const fallbackLeft = (containerLeft - layoutLeft) + 4;
         left = Math.round(clampNumber((preferredLeft >= minLeft ? preferredLeft : fallbackLeft), minLeft, maxLeft));
       }
-      const top = Math.round(Math.max(0, containerRect.top - layoutRect.top + MINIMAP_VERTICAL_GAP));
-      const height = Math.round(Math.max(MINIMAP_MIN_HEIGHT, containerRect.height - MINIMAP_VERTICAL_GAP * 2));
+      const top = Math.round(Math.max(0, containerTop - layoutTop + MINIMAP_VERTICAL_GAP));
+      const height = Math.round(Math.max(MINIMAP_MIN_HEIGHT, containerHeight - MINIMAP_VERTICAL_GAP * 2));
 
       state.root.style.width = `${minimapWidth}px`;
       state.root.style.left = `${left}px`;

@@ -62,6 +62,23 @@ export function createUIManager(appContext) {
     return Math.min(max, Math.max(min, numeric));
   }
 
+  function getDocumentZoomFactor() {
+    const root = document.documentElement;
+    if (!root) return 1;
+    const inlineZoom = Number.parseFloat(root.style.zoom || '');
+    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
+    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
+    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
+    return 1;
+  }
+
+  function toLayoutPixels(value, zoomFactor = getDocumentZoomFactor()) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
+    return numeric / zoomFactor;
+  }
+
   /**
    * 将“...”菜单提升到 body 下，避免受输入框层叠上下文与 backdrop-filter 影响。
    */
@@ -76,7 +93,10 @@ export function createUIManager(appContext) {
    */
   function positionSettingsMenu() {
     if (!dom.settingsMenu || !dom.settingsButton) return;
+    const zoomFactor = getDocumentZoomFactor();
     const buttonRect = dom.settingsButton.getBoundingClientRect();
+    const buttonTop = toLayoutPixels(buttonRect.top, zoomFactor);
+    const buttonRight = toLayoutPixels(buttonRect.right, zoomFactor);
     const menu = dom.settingsMenu;
     const viewportWidth = Math.max(
       Number(document.documentElement?.clientWidth) || 0,
@@ -86,8 +106,15 @@ export function createUIManager(appContext) {
       Number(document.documentElement?.clientHeight) || 0,
       Number(window.innerHeight) || 0
     );
-    const menuWidth = Math.max(1, Number(menu.offsetWidth) || Number(menu.getBoundingClientRect().width) || 1);
-    const menuHeight = Math.max(1, Number(menu.offsetHeight) || Number(menu.getBoundingClientRect().height) || 1);
+    const menuRect = menu.getBoundingClientRect();
+    const menuWidth = Math.max(
+      1,
+      Number(menu.offsetWidth) || toLayoutPixels(menuRect.width, zoomFactor) || 1
+    );
+    const menuHeight = Math.max(
+      1,
+      Number(menu.offsetHeight) || toLayoutPixels(menuRect.height, zoomFactor) || 1
+    );
 
     const leftMin = SETTINGS_MENU_VIEWPORT_MARGIN_PX;
     const leftMax = viewportWidth - menuWidth - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
@@ -95,8 +122,8 @@ export function createUIManager(appContext) {
     const topMax = viewportHeight - menuHeight - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
 
     // 与旧布局保持一致：右侧对齐按钮并留 8px 缝隙，默认显示在按钮上方。
-    const preferredLeft = buttonRect.right - SETTINGS_MENU_VIEWPORT_MARGIN_PX - menuWidth;
-    const preferredTop = buttonRect.top - menuHeight - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
+    const preferredLeft = buttonRight - SETTINGS_MENU_VIEWPORT_MARGIN_PX - menuWidth;
+    const preferredTop = buttonTop - menuHeight - SETTINGS_MENU_VIEWPORT_MARGIN_PX;
     const left = clampToRange(preferredLeft, leftMin, leftMax);
     const top = clampToRange(preferredTop, topMin, topMax);
 

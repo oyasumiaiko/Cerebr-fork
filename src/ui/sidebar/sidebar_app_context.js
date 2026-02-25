@@ -133,12 +133,30 @@ export function createSidebarAppContext(isStandalone) {
  * @param {ReturnType<typeof createSidebarAppContext>} appContext - 已初始化的上下文。
  */
 export function registerSidebarUtilities(appContext) {
+  const getDocumentZoomFactor = () => {
+    const root = document.documentElement;
+    if (!root) return 1;
+    const inlineZoom = Number.parseFloat(root.style.zoom || '');
+    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
+    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
+    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
+    return 1;
+  };
+
+  const toLayoutPixels = (value, zoomFactor = getDocumentZoomFactor()) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
+    return numeric / zoomFactor;
+  };
+
   function updateInputContainerHeightVar() {
     const input = appContext.dom.inputContainer || document.getElementById('input-container');
     const root = document.documentElement;
     if (input && root) {
       const rect = input.getBoundingClientRect();
-      root.style.setProperty('--input-container-height', `${Math.ceil(rect.height)}px`);
+      const zoomFactor = getDocumentZoomFactor();
+      root.style.setProperty('--input-container-height', `${Math.ceil(toLayoutPixels(rect.height, zoomFactor))}px`);
     }
   }
 
@@ -191,13 +209,15 @@ export function registerSidebarUtilities(appContext) {
       if (aiMessages.length > 0) {
         const latestAiMessage = aiMessages[aiMessages.length - 1];
         const rect = latestAiMessage.getBoundingClientRect();
+        const zoomFactor = getDocumentZoomFactor();
+        const messageHeight = toLayoutPixels(rect.height, zoomFactor);
         if (stopAtTop) {
           top = latestAiMessage.offsetTop - 8;
           messageSender.setShouldAutoScroll(false);
         } else {
           const computedStyle = window.getComputedStyle(latestAiMessage);
           const marginBottom = parseInt(computedStyle.marginBottom, 10);
-          top = latestAiMessage.offsetTop + rect.height - marginBottom;
+          top = latestAiMessage.offsetTop + messageHeight - marginBottom;
         }
       }
       chatContainer.scrollTo({ top, behavior: 'smooth' });
