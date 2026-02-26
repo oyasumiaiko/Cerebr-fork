@@ -545,6 +545,128 @@ export function createMessageSender(appContext) {
     return url.includes('generativelanguage.googleapis.com') && !url.includes('openai');
   }
 
+  function normalizeApiPathForEndpointDetection(rawUrl) {
+    const value = (typeof rawUrl === 'string') ? rawUrl.trim() : '';
+    if (!value) return '';
+    try {
+      return (new URL(value).pathname || '').toLowerCase();
+    } catch (_) {
+      return value.split('?')[0].split('#')[0].toLowerCase();
+    }
+  }
+
+  function isResponsesApiPath(pathname) {
+    const path = (typeof pathname === 'string') ? pathname.trim().toLowerCase() : '';
+    if (!path) return false;
+    return /(^|\/)responses(?:\/[^/?#]+)?\/?$/.test(path);
+  }
+
+  function isOpenAIResponsesApiConfig(config) {
+    if (isGeminiApiConfig(config)) return false;
+    return isResponsesApiPath(normalizeApiPathForEndpointDetection(config?.baseUrl));
+  }
+
+  function isOpenAIResponsesApiResponse(response, config) {
+    if (isOpenAIResponsesApiConfig(config)) return true;
+    return isResponsesApiPath(normalizeApiPathForEndpointDetection(response?.url));
+  }
+
+  function isOpenAIResponsesPayload(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    if (String(payload?.object || '').toLowerCase() === 'response') return true;
+    if (Array.isArray(payload?.output)) return true;
+    if (typeof payload?.output_text === 'string' || Array.isArray(payload?.output_text)) return true;
+    return false;
+  }
+
+  function readResponsesOutputTextField(payload) {
+    const outputText = payload?.output_text;
+    if (typeof outputText === 'string') return outputText;
+    if (!Array.isArray(outputText)) return '';
+    return outputText.map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item.text === 'string') return item.text;
+      return '';
+    }).join('');
+  }
+
+  function extractOpenAIResponsesOutput(payload) {
+    const answerParts = [];
+    const thoughtParts = [];
+    const toolCalls = [];
+    const outputItems = Array.isArray(payload?.output) ? payload.output : [];
+
+    const pushAnswer = (text) => {
+      if (typeof text === 'string' && text) answerParts.push(text);
+    };
+    const pushThought = (text) => {
+      if (typeof text === 'string' && text) thoughtParts.push(text);
+    };
+
+    for (const item of outputItems) {
+      if (!item || typeof item !== 'object') continue;
+      const itemType = String(item.type || '').toLowerCase();
+
+      if (itemType === 'message') {
+        const contentParts = Array.isArray(item.content) ? item.content : [];
+        for (const part of contentParts) {
+          if (!part || typeof part !== 'object') continue;
+          const partType = String(part.type || '').toLowerCase();
+          if (partType === 'refusal') continue;
+          if (typeof part.text === 'string') {
+            if (partType.includes('reasoning')) {
+              pushThought(part.text);
+            } else {
+              pushAnswer(part.text);
+            }
+            continue;
+          }
+          if (typeof part.output_text === 'string') {
+            pushAnswer(part.output_text);
+          }
+        }
+        continue;
+      }
+
+      if (itemType.includes('reasoning')) {
+        if (Array.isArray(item.summary)) {
+          for (const section of item.summary) {
+            if (typeof section?.text === 'string') pushThought(section.text);
+          }
+        }
+        if (typeof item.summary_text === 'string') pushThought(item.summary_text);
+        if (typeof item.text === 'string') pushThought(item.text);
+        continue;
+      }
+
+      if (itemType === 'function_call') {
+        const callId = (typeof item.call_id === 'string' && item.call_id)
+          || (typeof item.id === 'string' && item.id)
+          || '';
+        const fnName = (typeof item.name === 'string') ? item.name : '';
+        const fnArgs = (typeof item.arguments === 'string') ? item.arguments : '';
+        toolCalls.push({
+          id: callId,
+          type: 'function',
+          function: {
+            name: fnName,
+            arguments: fnArgs
+          }
+        });
+      }
+    }
+
+    const answerFromOutput = answerParts.join('');
+    const answerFromField = readResponsesOutputTextField(payload);
+    const answer = answerFromOutput || answerFromField || '';
+    const thoughts = thoughtParts.join('');
+    return {
+      answer,
+      thoughts,
+      toolCalls: toolCalls.length > 0 ? toolCalls : null
+    };
+  }
+
   async function extractConversationTitleFromResponse(response, apiConfig) {
     let payload = null;
     try {
@@ -566,6 +688,11 @@ export function createMessageSender(appContext) {
         .filter(part => typeof part?.text === 'string' && !part?.thought)
         .map(part => part.text);
       return textParts.join('');
+    }
+
+    if (isOpenAIResponsesApiResponse(response, apiConfig) || isOpenAIResponsesPayload(payload)) {
+      const extracted = extractOpenAIResponsesOutput(payload);
+      return extracted.answer || '';
     }
 
     const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
@@ -3863,6 +3990,7 @@ export function createMessageSender(appContext) {
     isInStreamingThoughtBlock = false;
     // 标记是否为 Gemini 流式接口
     const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
+    const isOpenAIResponsesStream = !isGeminiApi && isOpenAIResponsesApiResponse(response, usedApiConfig);
     // SSE 行缓冲
     let incomingDataBuffer = ''; 
     const decoder = new TextDecoder();
@@ -4368,87 +4496,222 @@ export function createMessageSender(appContext) {
      * 处理与OpenAI兼容的API的SSE事件
      * @param {Object} data - 从SSE事件中解析出的JSON对象
      */
-	    function mergeOpenAIToolCallsDelta(existingCalls, deltaCalls) {
-	      const existing = Array.isArray(existingCalls) ? existingCalls : [];
-	      const deltas = Array.isArray(deltaCalls) ? deltaCalls : [];
-	      if (deltas.length === 0) return existing;
+    function mergeOpenAIToolCallsDelta(existingCalls, deltaCalls) {
+      const existing = Array.isArray(existingCalls) ? existingCalls : [];
+      const deltas = Array.isArray(deltaCalls) ? deltaCalls : [];
+      if (deltas.length === 0) return existing;
 
-	      // 深拷贝一层，避免在高频流式更新中意外共享引用导致历史节点被“半成品”污染
-	      const nextCalls = existing.map((c) => {
-	        if (!c || typeof c !== 'object') return c;
-	        const cloned = { ...c };
-	        if (c.function && typeof c.function === 'object') {
-	          cloned.function = { ...c.function };
-	        }
-	        return cloned;
-	      });
+      // 深拷贝一层，避免在高频流式更新中意外共享引用导致历史节点被“半成品”污染
+      const nextCalls = existing.map((c) => {
+        if (!c || typeof c !== 'object') return c;
+        const cloned = { ...c };
+        if (c.function && typeof c.function === 'object') {
+          cloned.function = { ...c.function };
+        }
+        return cloned;
+      });
 
-	      for (const delta of deltas) {
-	        if (!delta || typeof delta !== 'object') continue;
-	        const idx = Number.isInteger(delta.index) ? delta.index : nextCalls.length;
-	        while (nextCalls.length <= idx) {
-	          nextCalls.push({ id: '', type: 'function', function: { name: '', arguments: '' } });
-	        }
+      for (const delta of deltas) {
+        if (!delta || typeof delta !== 'object') continue;
+        const idx = Number.isInteger(delta.index) ? delta.index : nextCalls.length;
+        while (nextCalls.length <= idx) {
+          nextCalls.push({ id: '', type: 'function', function: { name: '', arguments: '' } });
+        }
 
-	        const current = nextCalls[idx] && typeof nextCalls[idx] === 'object' ? nextCalls[idx] : {};
-	        const merged = { ...current };
+        const current = nextCalls[idx] && typeof nextCalls[idx] === 'object' ? nextCalls[idx] : {};
+        const merged = { ...current };
 
-	        if (typeof delta.id === 'string' && delta.id) merged.id = delta.id;
-	        if (typeof delta.type === 'string' && delta.type) merged.type = delta.type;
+        if (typeof delta.id === 'string' && delta.id) merged.id = delta.id;
+        if (typeof delta.type === 'string' && delta.type) merged.type = delta.type;
 
-	        // 工具调用片段的签名（某些代理会要求回传）
-	        const toolThoughtSignature =
-	          (typeof delta.thoughtSignature === 'string' && delta.thoughtSignature) ||
-	          (typeof delta.thought_signature === 'string' && delta.thought_signature) ||
-	          null;
-	        if (toolThoughtSignature) merged.thoughtSignature = toolThoughtSignature;
+        // 工具调用片段的签名（某些代理会要求回传）
+        const toolThoughtSignature =
+          (typeof delta.thoughtSignature === 'string' && delta.thoughtSignature) ||
+          (typeof delta.thought_signature === 'string' && delta.thought_signature) ||
+          null;
+        if (toolThoughtSignature) merged.thoughtSignature = toolThoughtSignature;
 
-	        if (delta.function && typeof delta.function === 'object') {
-	          const mergedFn = (merged.function && typeof merged.function === 'object')
-	            ? { ...merged.function }
-	            : {};
+        if (delta.function && typeof delta.function === 'object') {
+          const mergedFn = (merged.function && typeof merged.function === 'object')
+            ? { ...merged.function }
+            : {};
 
-	          if (typeof delta.function.name === 'string' && delta.function.name) {
-	            mergedFn.name = delta.function.name;
-	          }
+          if (typeof delta.function.name === 'string' && delta.function.name) {
+            mergedFn.name = delta.function.name;
+          }
 
-	          if (typeof delta.function.arguments === 'string' && delta.function.arguments) {
-	            const prevArgs = (typeof mergedFn.arguments === 'string') ? mergedFn.arguments : '';
-	            // arguments 是流式分片输出：使用 mergeStreamingThoughts 的“去重拼接”策略做通用合并
-	            mergedFn.arguments = mergeStreamingThoughts(prevArgs, delta.function.arguments);
-	          }
+          if (typeof delta.function.arguments === 'string' && delta.function.arguments) {
+            const prevArgs = (typeof mergedFn.arguments === 'string') ? mergedFn.arguments : '';
+            // arguments 是流式分片输出：使用 mergeStreamingThoughts 的“去重拼接”策略做通用合并
+            mergedFn.arguments = mergeStreamingThoughts(prevArgs, delta.function.arguments);
+          }
 
-	          merged.function = mergedFn;
-	        }
+          merged.function = mergedFn;
+        }
 
-	        nextCalls[idx] = merged;
-	      }
-
-	      return nextCalls;
-	    }
-
-	    function handleOpenAIEvent(data) {
-	      // 检查API返回的错误信息
-	      if (data.error) {
-          const msg = buildStreamApiErrorMessage(data.error, 'Unknown OpenAI error');
-          console.error('OpenAI API error:', data.error);
-          // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
-          // 抛出错误，让外层`sendMessage`的try...catch块捕获并处理
-          const streamApiError = new Error(msg);
-          streamApiError.name = 'StreamApiError';
-          throw streamApiError;
+        nextCalls[idx] = merged;
       }
-      // 检查 choices 数组中的错误信息
+
+      return nextCalls;
+    }
+
+    function mergeResponsesFunctionCallEvent(existingCalls, eventPayload) {
+      const existing = Array.isArray(existingCalls) ? existingCalls : [];
+      const payload = (eventPayload && typeof eventPayload === 'object') ? eventPayload : {};
+      const nextCalls = existing.map((call) => {
+        if (!call || typeof call !== 'object') return call;
+        const cloned = { ...call };
+        if (call.function && typeof call.function === 'object') {
+          cloned.function = { ...call.function };
+        }
+        return cloned;
+      });
+
+      const index = Number.isInteger(payload.output_index)
+        ? payload.output_index
+        : (Number.isInteger(payload.index) ? payload.index : nextCalls.length);
+      while (nextCalls.length <= index) {
+        nextCalls.push({ id: '', type: 'function', function: { name: '', arguments: '' } });
+      }
+
+      const current = nextCalls[index] && typeof nextCalls[index] === 'object' ? nextCalls[index] : {};
+      const merged = { ...current };
+      const mergedFn = (merged.function && typeof merged.function === 'object')
+        ? { ...merged.function }
+        : {};
+
+      const callId = (typeof payload.call_id === 'string' && payload.call_id)
+        || (typeof payload.item_id === 'string' && payload.item_id)
+        || (typeof payload.id === 'string' && payload.id)
+        || '';
+      if (callId) merged.id = callId;
+      if (typeof payload.type === 'string' && payload.type) merged.type = payload.type;
+
+      if (typeof payload.name === 'string' && payload.name) {
+        mergedFn.name = payload.name;
+      }
+
+      const deltaArgs = (typeof payload.delta === 'string') ? payload.delta : '';
+      if (deltaArgs) {
+        const prevArgs = (typeof mergedFn.arguments === 'string') ? mergedFn.arguments : '';
+        mergedFn.arguments = mergeStreamingThoughts(prevArgs, deltaArgs);
+      }
+
+      const finalArgs = (typeof payload.arguments === 'string') ? payload.arguments : '';
+      if (finalArgs) {
+        mergedFn.arguments = finalArgs;
+      }
+
+      merged.function = mergedFn;
+      nextCalls[index] = merged;
+      return nextCalls;
+    }
+
+    function handleOpenAIEvent(data) {
+      const eventType = (typeof data?.type === 'string') ? data.type : '';
+
+      // 检查 API 返回的错误信息
+      if (data.error) {
+        const msg = buildStreamApiErrorMessage(data.error, 'Unknown OpenAI error');
+        console.error('OpenAI API error:', data.error);
+        const streamApiError = new Error(msg);
+        streamApiError.name = 'StreamApiError';
+        throw streamApiError;
+      }
+      // 检查 choices 数组中的错误信息（Chat Completions SSE）
       if (data.choices?.[0]?.error) {
-          const msg = buildStreamApiErrorMessage(data.choices[0].error, 'Unknown OpenAI model error');
-          console.error('OpenAI Model error:', data.choices[0].error);
-          // 不要移除 loadingMessage，让上层的 catch 块来处理错误显示
+        const msg = buildStreamApiErrorMessage(data.choices[0].error, 'Unknown OpenAI model error');
+        console.error('OpenAI Model error:', data.choices[0].error);
+        const streamApiError = new Error(msg);
+        streamApiError.name = 'StreamApiError';
+        throw streamApiError;
+      }
+
+      // Responses API SSE 事件分支
+      if (isOpenAIResponsesStream) {
+        if (eventType === 'response.error' || eventType === 'error' || eventType === 'response.failed') {
+          const payloadError = data?.error || data?.response?.error || data;
+          const msg = buildStreamApiErrorMessage(payloadError, 'Unknown OpenAI Responses error');
+          console.error('OpenAI Responses API error:', data);
           const streamApiError = new Error(msg);
           streamApiError.name = 'StreamApiError';
           throw streamApiError;
+        }
+
+        const usageFromChunk = normalizeApiUsageMeta(data?.usage || data?.response?.usage);
+        if (usageFromChunk) {
+          latestOpenAIUsage = usageFromChunk;
+          if (currentAiMessageId) {
+            applyUsageMetaToMessage(currentAiMessageId, usageFromChunk);
+          }
+        }
+
+        let currentEventAnswerDelta = '';
+        let currentEventReasoningDelta = '';
+        let hasToolCallsDelta = false;
+
+        if (eventType === 'response.output_text.delta') {
+          currentEventAnswerDelta = (typeof data?.delta === 'string') ? data.delta : '';
+        } else if (eventType === 'response.reasoning_text.delta' || eventType === 'response.reasoning_summary_text.delta') {
+          currentEventReasoningDelta = (typeof data?.delta === 'string') ? data.delta : '';
+        } else if (eventType === 'response.function_call_arguments.delta' || eventType === 'response.function_call_arguments.done') {
+          latestOpenAIToolCalls = mergeResponsesFunctionCallEvent(latestOpenAIToolCalls, data);
+          hasToolCallsDelta = true;
+        } else if (eventType === 'response.completed') {
+          const completedPayload = (data?.response && typeof data.response === 'object') ? data.response : data;
+          const extracted = extractOpenAIResponsesOutput(completedPayload);
+          if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
+            currentEventAnswerDelta = extracted.answer;
+          }
+          if (!latestOpenAIReasoningContent && typeof extracted.thoughts === 'string' && extracted.thoughts) {
+            currentEventReasoningDelta = extracted.thoughts;
+          }
+          if (Array.isArray(extracted.toolCalls) && extracted.toolCalls.length > 0) {
+            latestOpenAIToolCalls = extracted.toolCalls;
+            hasToolCallsDelta = true;
+          }
+        } else if (!eventType && isOpenAIResponsesPayload(data)) {
+          const extracted = extractOpenAIResponsesOutput(data);
+          if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
+            currentEventAnswerDelta = extracted.answer;
+          }
+          if (!latestOpenAIReasoningContent && typeof extracted.thoughts === 'string' && extracted.thoughts) {
+            currentEventReasoningDelta = extracted.thoughts;
+          }
+          if (Array.isArray(extracted.toolCalls) && extracted.toolCalls.length > 0) {
+            latestOpenAIToolCalls = extracted.toolCalls;
+            hasToolCallsDelta = true;
+          }
+        }
+
+        if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
+          latestOpenAIReasoningContent = mergeStreamingThoughts(latestOpenAIReasoningContent, currentEventReasoningDelta);
+        }
+
+        const hasAnyDelta = !!(currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
+        if (!hasAnyDelta) return;
+
+        const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
+        aiResponse += split.answerDelta;
+
+        if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
+          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventReasoningDelta);
+        } else if (split.thoughtDelta) {
+          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
+        }
+
+        const thinkExtraction = extractThinkingFromText(aiResponse);
+        aiResponse = thinkExtraction.cleanText;
+        if (thinkExtraction.thoughtText) {
+          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+        }
+
+        applyStreamingRenderTransition({ hasDelta: hasAnyDelta });
+        return;
       }
 
-	      const delta = data.choices?.[0]?.delta || {};
+      // Chat Completions SSE 分支
+      const delta = data.choices?.[0]?.delta || {};
       const usageFromChunk = normalizeApiUsageMeta(data?.usage);
       if (usageFromChunk) {
         latestOpenAIUsage = usageFromChunk;
@@ -4457,61 +4720,57 @@ export function createMessageSender(appContext) {
         }
       }
 
-	      // 1) OpenAI 兼容：捕获推理签名（对应 reasoning_content/reasoning）
-	      const extractedThoughtSignature =
-	        (typeof delta?.thoughtSignature === 'string' && delta.thoughtSignature) ||
-	        (typeof delta?.thought_signature === 'string' && delta.thought_signature) ||
-	        null;
-	      if (extractedThoughtSignature) {
-	        latestOpenAIThoughtSignature = extractedThoughtSignature;
-	      }
+      // 1) OpenAI 兼容：捕获推理签名（对应 reasoning_content/reasoning）
+      const extractedThoughtSignature =
+        (typeof delta?.thoughtSignature === 'string' && delta.thoughtSignature) ||
+        (typeof delta?.thought_signature === 'string' && delta.thought_signature) ||
+        null;
+      if (extractedThoughtSignature) {
+        latestOpenAIThoughtSignature = extractedThoughtSignature;
+      }
 
-	      // 2) OpenAI 兼容：捕获 tool_calls（含 thoughtSignature / function.arguments 分片）
-	      if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
-	        latestOpenAIToolCalls = mergeOpenAIToolCallsDelta(latestOpenAIToolCalls, delta.tool_calls);
-	      }
+      // 2) OpenAI 兼容：捕获 tool_calls（含 thoughtSignature / function.arguments 分片）
+      if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
+        latestOpenAIToolCalls = mergeOpenAIToolCallsDelta(latestOpenAIToolCalls, delta.tool_calls);
+      }
 
-	      // 3) 从事件数据中提取内容增量 (delta)
-	      const currentEventAnswerDelta = delta?.content;
-	      const currentEventReasoningDelta = delta?.reasoning_content || delta?.reasoning || '';
+      // 3) 从事件数据中提取内容增量 (delta)
+      const currentEventAnswerDelta = delta?.content;
+      const currentEventReasoningDelta = delta?.reasoning_content || delta?.reasoning || '';
 
-	      // reasoning_content 必须原样累积（用于与 thoughtSignature 配对回传）
-	      if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
-	        latestOpenAIReasoningContent = mergeStreamingThoughts(latestOpenAIReasoningContent, currentEventReasoningDelta);
-	      }
+      // reasoning_content 必须原样累积（用于与 thoughtSignature 配对回传）
+      if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
+        latestOpenAIReasoningContent = mergeStreamingThoughts(latestOpenAIReasoningContent, currentEventReasoningDelta);
+      }
 
-	      const hasToolCallsDelta = Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0;
-	      const hasAnyDelta = !!(currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
+      const hasToolCallsDelta = Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0;
+      const hasAnyDelta = !!(currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
 
-	      // 只有在有“可展示或结构性”的增量时才继续处理（签名本身可能独立出现：仅保存，不触发 UI 更新）
-	      if (hasAnyDelta) {
-	          const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
+      // 只有在有“可展示或结构性”的增量时才继续处理（签名本身可能独立出现：仅保存，不触发 UI 更新）
+      if (hasAnyDelta) {
+        const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
 
-	          // 累积AI的完整响应文本
-	          aiResponse += split.answerDelta;
+        // 累积 AI 的完整响应文本
+        aiResponse += split.answerDelta;
 
-	          // 思考过程同样按“流式增量”合并：
-	          // - OpenAI 兼容的 reasoning_content：必须保持原样，不做 <think> 标签拆分；
-	          // - content 内的 <think> 片段：仅用于 UI 展示（不计入 reasoning_content 回传）。
-	          if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
-	            aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventReasoningDelta);
-	          } else if (split.thoughtDelta) {
-	            aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
-	          }
+        // 思考过程同样按“流式增量”合并：
+        // - OpenAI 兼容的 reasoning_content：必须保持原样，不做 <think> 标签拆分；
+        // - content 内的 <think> 片段：仅用于 UI 展示（不计入 reasoning_content 回传）。
+        if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
+          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventReasoningDelta);
+        } else if (split.thoughtDelta) {
+          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
+        }
 
-	          // 若思考流仍未闭合，避免正文暂存残留 <think>
-	          if (split.thoughtDelta && !split.answerDelta) {
-            aiResponse = aiResponse; // no-op, 保持逻辑对齐
-          }
-          const thinkExtraction = extractThinkingFromText(aiResponse);
-          aiResponse = thinkExtraction.cleanText;
-          // 同 Gemini：避免每帧 mergeThoughts() 触发 trim() 破坏流式思考文本中的换行/空白。
-          if (thinkExtraction.thoughtText) {
-            aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
-          }
+        const thinkExtraction = extractThinkingFromText(aiResponse);
+        aiResponse = thinkExtraction.cleanText;
+        // 同 Gemini：避免每帧 mergeThoughts() 触发 trim() 破坏流式思考文本中的换行/空白。
+        if (thinkExtraction.thoughtText) {
+          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+        }
 
-          // OpenAI 兼容事件同样复用统一状态机，减少分支重复维护成本。
-          applyStreamingRenderTransition({ hasDelta: hasAnyDelta });
+        // OpenAI 兼容事件同样复用统一状态机，减少分支重复维护成本。
+        applyStreamingRenderTransition({ hasDelta: hasAnyDelta });
       }
     }
   }
@@ -4566,7 +4825,7 @@ export function createMessageSender(appContext) {
       const text = await response.text().catch(() => '');
       throw new Error(text || '解析响应失败');
     }
-    const responseUsageMeta = normalizeApiUsageMeta(json?.usage);
+    const responseUsageMeta = normalizeApiUsageMeta(json?.usage || json?.response?.usage);
 
     // 错误处理（通用）
     if (json && json.error) {
@@ -4575,6 +4834,8 @@ export function createMessageSender(appContext) {
     }
 
     const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
+    const isResponsesApi = !isGeminiApi
+      && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
     if (isGeminiApi) {
       // 优先检测 Gemini 返回的「安全拦截但 HTTP 为 200」场景，交给上层自动重试逻辑处理
       const safetyBlock = detectGeminiSafetyBlock(json, { hasExistingContent: false });
@@ -4665,8 +4926,22 @@ export function createMessageSender(appContext) {
         });
         answer += inlineHtmlChunks.join('');
       }
+    } else if (isResponsesApi) {
+      // OpenAI Responses API 非流式
+      const extracted = extractOpenAIResponsesOutput(json);
+      if (typeof extracted.answer === 'string') {
+        answer = extracted.answer;
+      }
+      if (typeof extracted.thoughts === 'string' && extracted.thoughts) {
+        reasoningContentRaw = extracted.thoughts;
+        thoughts = extracted.thoughts;
+      }
+      if (Array.isArray(extracted.toolCalls) && extracted.toolCalls.length > 0) {
+        toolCalls = extracted.toolCalls;
+        thoughtSignatureSource = 'openai';
+      }
     } else {
-      // OpenAI 兼容 非流式
+      // OpenAI Chat Completions 兼容 非流式
       const choice = Array.isArray(json?.choices) ? json.choices[0] : null;
       const message = choice?.message || {};
       if (typeof message?.content === 'string') answer = message.content;

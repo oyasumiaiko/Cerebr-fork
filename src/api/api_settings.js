@@ -1537,7 +1537,7 @@ export function createApiManager(appContext) {
         if (baseUrlLabel) baseUrlLabel.textContent = 'API 端点 URL';
         baseUrlInput.placeholder = `例如 ${OPENAI_DEFAULT_BASE_URL}`;
         if (baseUrlHint) {
-          baseUrlHint.textContent = 'OpenAI 兼容模式走 chat/completions；无 key 时会按免鉴权模式请求。';
+          baseUrlHint.textContent = 'OpenAI 兼容模式支持 chat/completions 与 responses；无 key 时会按免鉴权模式请求。';
         }
       }
     };
@@ -2561,6 +2561,72 @@ export function createApiManager(appContext) {
     return null;
   }
 
+  function getOpenAIEndpointPath(baseUrl) {
+    const raw = (typeof baseUrl === 'string') ? baseUrl.trim() : '';
+    if (!raw) return '';
+    try {
+      return (new URL(raw).pathname || '').toLowerCase();
+    } catch (_) {
+      // 兜底：当用户输入了不完整 URL（例如仅路径）时，仍尝试按路径判断接口类型。
+      return raw.split('?')[0].split('#')[0].toLowerCase();
+    }
+  }
+
+  function isOpenAIResponsesEndpoint(baseUrl) {
+    const path = getOpenAIEndpointPath(baseUrl);
+    return /(^|\/)responses\/?$/.test(path);
+  }
+
+  async function convertOpenAIMessagesToResponsesInput(messages) {
+    const source = Array.isArray(messages) ? messages : [];
+    const result = [];
+
+    for (const msg of source) {
+      if (!msg || typeof msg !== 'object') continue;
+      const role = (typeof msg.role === 'string') ? msg.role : '';
+      if (!role) continue;
+
+      const item = { role };
+      if (typeof msg.name === 'string' && msg.name.trim()) {
+        item.name = msg.name.trim();
+      }
+
+      if (Array.isArray(msg.content)) {
+        const contentParts = [];
+        for (const part of msg.content) {
+          if (!part || typeof part !== 'object') continue;
+          if (part.type === 'text') {
+            const text = (typeof part.text === 'string') ? part.text : '';
+            if (!text) continue;
+            contentParts.push({ type: 'input_text', text });
+            continue;
+          }
+          if (part.type === 'image_url' && part.image_url) {
+            const rawUrl = part.image_url.url || part.image_url.path || '';
+            const resolvedUrl = await normalizeImageUrlForOpenAI(rawUrl);
+            if (!resolvedUrl) continue;
+            contentParts.push({
+              type: 'input_image',
+              image_url: resolvedUrl
+            });
+          }
+        }
+        if (contentParts.length === 0) {
+          contentParts.push({ type: 'input_text', text: '[图片无法读取]' });
+        }
+        item.content = contentParts;
+      } else if (typeof msg.content === 'string') {
+        item.content = msg.content;
+      } else {
+        item.content = '';
+      }
+
+      result.push(item);
+    }
+
+    return result;
+  }
+
   function normalizeModelIdForSignatureMatch(value) {
     return (typeof value === 'string') ? value.trim().toLowerCase() : '';
   }
@@ -2801,61 +2867,62 @@ export function createApiManager(appContext) {
       }
 
     } else {
-	      // 其他 API (如 OpenAI) 请求格式
-	      // 仅保留 OpenAI 兼容字段，并将本地/相对图片转回可发送的 dataURL
-	      const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
-	        const base = { role: msg.role };
-	        if (msg.name) base.name = msg.name;
-	        if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
+      // OpenAI 兼容请求格式：
+      // - /chat/completions 继续沿用原结构；
+      // - /responses 自动切换为 Responses API 结构（支持 input_text/input_image）。
+      const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
+        const base = { role: msg.role };
+        if (msg.name) base.name = msg.name;
+        if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
 
-	        // OpenAI 兼容：对每条历史消息单独判断是否允许回传 signature（避免跨模型导致 Corrupted thought signature）
-	        // 仅在 thoughtSignatureSource==='openai' 时才考虑回传，避免把 Gemini 的签名/字段发给 OpenAI 接口。
-	        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
-	        const isAssistant = msg.role === 'assistant';
-	        const canSendOpenAISignature =
-	          shouldSendSignature &&
-	          thoughtSignatureSource === 'openai' &&
-	          isAssistant &&
-	          isSignatureCompatibleWithModel(msg.apiModelId, config?.modelName);
+        // OpenAI 兼容：对每条历史消息单独判断是否允许回传 signature（避免跨模型导致 Corrupted thought signature）
+        // 仅在 thoughtSignatureSource==='openai' 时才考虑回传，避免把 Gemini 的签名/字段发给 OpenAI 接口。
+        const thoughtSignatureSource = (typeof msg.thoughtSignatureSource === 'string' && msg.thoughtSignatureSource) || null;
+        const isAssistant = msg.role === 'assistant';
+        const canSendOpenAISignature =
+          shouldSendSignature &&
+          thoughtSignatureSource === 'openai' &&
+          isAssistant &&
+          isSignatureCompatibleWithModel(msg.apiModelId, config?.modelName);
 
-	        // tool_calls：如果该片段带签名但当前不允许回传，则整个 tool_calls 片段都不发送（遵循“不要回传带签名的 tool 片段”原则）
-	        const rawToolCalls = (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ? msg.tool_calls : null;
-	        if (rawToolCalls) {
-	          const toolCallsHasSignature = rawToolCalls.some((tc) => {
-	            if (!tc || typeof tc !== 'object') return false;
-	            const ts = (typeof tc.thoughtSignature === 'string' && tc.thoughtSignature) ||
-	              (typeof tc.thought_signature === 'string' && tc.thought_signature) ||
-	              null;
-	            return !!ts;
-	          });
-	          if (!toolCallsHasSignature) {
-	            base.tool_calls = rawToolCalls;
-	          } else if (canSendOpenAISignature) {
-	            base.tool_calls = rawToolCalls;
-	          }
-	        }
+        // tool_calls：如果该片段带签名但当前不允许回传，则整个 tool_calls 片段都不发送（遵循“不要回传带签名的 tool 片段”原则）
+        const rawToolCalls = (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ? msg.tool_calls : null;
+        if (rawToolCalls) {
+          const toolCallsHasSignature = rawToolCalls.some((tc) => {
+            if (!tc || typeof tc !== 'object') return false;
+            const ts = (typeof tc.thoughtSignature === 'string' && tc.thoughtSignature) ||
+              (typeof tc.thought_signature === 'string' && tc.thought_signature) ||
+              null;
+            return !!ts;
+          });
+          if (!toolCallsHasSignature) {
+            base.tool_calls = rawToolCalls;
+          } else if (canSendOpenAISignature) {
+            base.tool_calls = rawToolCalls;
+          }
+        }
 
-	        // message-level thoughtSignature（对应 reasoning_content 的签名）
-	        if (canSendOpenAISignature) {
-	          const thoughtSignature =
-	            (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
-	            (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
-	            null;
-	          if (thoughtSignature) {
-	            base.thoughtSignature = thoughtSignature;
-	            // 注意：reasoning_content 必须与 message-level thoughtSignature 成对回传，否则部分上游会报 “signature required”。
-	            // 同时要求“原样回传”，不要做 trim/合并/格式化。
-	            if (typeof msg.reasoning_content === 'string') {
-	              base.reasoning_content = msg.reasoning_content;
-	            } else if (typeof msg.reasoning === 'string') {
-	              base.reasoning = msg.reasoning;
-	            }
-	          }
-	        }
-	
-	        if (Array.isArray(msg.content)) {
-	          const parts = [];
-	          for (const item of msg.content) {
+        // message-level thoughtSignature（对应 reasoning_content 的签名）
+        if (canSendOpenAISignature) {
+          const thoughtSignature =
+            (typeof msg.thoughtSignature === 'string' && msg.thoughtSignature) ||
+            (typeof msg.thought_signature === 'string' && msg.thought_signature) ||
+            null;
+          if (thoughtSignature) {
+            base.thoughtSignature = thoughtSignature;
+            // 注意：reasoning_content 必须与 message-level thoughtSignature 成对回传，否则部分上游会报 “signature required”。
+            // 同时要求“原样回传”，不要做 trim/合并/格式化。
+            if (typeof msg.reasoning_content === 'string') {
+              base.reasoning_content = msg.reasoning_content;
+            } else if (typeof msg.reasoning === 'string') {
+              base.reasoning = msg.reasoning;
+            }
+          }
+        }
+
+        if (Array.isArray(msg.content)) {
+          const parts = [];
+          for (const item of msg.content) {
             if (item.type === 'text') {
               parts.push({ type: 'text', text: item.text });
             } else if (item.type === 'image_url' && item.image_url) {
@@ -2877,14 +2944,31 @@ export function createApiManager(appContext) {
         return base;
       }));
 
-      requestBody = {
-        model: config.modelName,
-        messages: sanitizedMessages, // OpenAI API 仅接收标准字段，过滤内部扩展字段
-        stream: (config.useStreaming !== false),
-        temperature: config.temperature ?? 1.0, // 确保有默认值
-        top_p: 0.95,
-        ...overrides // 允许覆盖默认参数
-      };
+      const useResponsesApi = isOpenAIResponsesEndpoint(config?.baseUrl);
+      if (useResponsesApi) {
+        const responsesInput = await convertOpenAIMessagesToResponsesInput(sanitizedMessages);
+        requestBody = {
+          model: config.modelName,
+          input: responsesInput,
+          stream: (config.useStreaming !== false),
+          ...overrides
+        };
+        // Responses API 对不同模型支持参数存在差异；默认仅在用户主动调节时带上 temperature，避免不兼容参数导致 400。
+        const temperature = Number(config.temperature);
+        if (Number.isFinite(temperature) && temperature !== 1) {
+          requestBody.temperature = temperature;
+        }
+      } else {
+        requestBody = {
+          model: config.modelName,
+          messages: sanitizedMessages, // OpenAI API 仅接收标准字段，过滤内部扩展字段
+          stream: (config.useStreaming !== false),
+          temperature: config.temperature ?? 1.0, // 确保有默认值
+          top_p: 0.95,
+          ...overrides // 允许覆盖默认参数
+        };
+      }
+
       // 如果存在自定义参数，解析并合并
       if (config.customParams) {
         try {
