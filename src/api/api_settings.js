@@ -1491,38 +1491,21 @@ export function createApiManager(appContext) {
     }
   }
 
-  function buildOpenAIModelListPaths(basePath) {
-    const normalizedBasePath = normalizeUrlPathname(basePath);
-    const seen = new Set();
-    const result = [];
-    const push = (path) => {
-      const normalized = normalizeUrlPathname(path) || '/';
-      if (seen.has(normalized)) return;
-      seen.add(normalized);
-      result.push(normalized);
-    };
-
-    const withoutKnownSuffix = normalizedBasePath
+  function buildOpenAIModelListPath(basePath) {
+    // OpenAI 官方模型列表端点为 /v1/models；这里按 basePath 推断前缀后固定到该路径，
+    // 避免多端点探测导致的额外请求噪声。
+    const normalizedBasePath = normalizeUrlPathname(basePath)
+      .replace(/\/models\/[^/]+$/i, '')
+      .replace(/\/models$/i, '')
       .replace(/\/chat\/completions(?:\/.*)?$/i, '')
       .replace(/\/responses(?:\/.*)?$/i, '')
       .replace(/\/completions(?:\/.*)?$/i, '');
 
-    if (/\/models$/i.test(normalizedBasePath)) {
-      push(normalizedBasePath);
-    }
-    if (withoutKnownSuffix) {
-      push(appendUrlPathname(withoutKnownSuffix, 'models'));
-    }
-
-    const versionHintPath = withoutKnownSuffix || normalizedBasePath;
-    const versionMatch = versionHintPath.match(/^(.*\/v\d+(?:alpha|beta)?)(?:\/.*)?$/i);
+    const versionMatch = normalizedBasePath.match(/^(.*\/v\d+(?:alpha|beta)?)(?:\/.*)?$/i);
     if (versionMatch?.[1]) {
-      push(appendUrlPathname(versionMatch[1], 'models'));
+      return appendUrlPathname(versionMatch[1], 'models');
     }
-
-    push('/v1/models');
-    push('/models');
-    return result;
+    return '/v1/models';
   }
 
   function buildGeminiModelListPath(basePath) {
@@ -1544,7 +1527,7 @@ export function createApiManager(appContext) {
 
     const pathCandidates = connectionType === CONNECTION_TYPE_GEMINI
       ? [buildGeminiModelListPath(parsedBase.pathname || '/')]
-      : buildOpenAIModelListPaths(parsedBase.pathname || '/');
+      : [buildOpenAIModelListPath(parsedBase.pathname || '/')];
 
     const seen = new Set();
     const candidates = [];
@@ -1684,7 +1667,7 @@ export function createApiManager(appContext) {
 
   // 模型列表接口在不同服务商上的路径风格不一致：
   // - Gemini：固定只请求 v1beta/models（单端点，不探测其它路径）；
-  // - OpenAI 兼容 / Responses：保留候选路径探测以兼容不同网关实现。
+  // - OpenAI 兼容 / Responses：固定请求 /v1/models（若 basePath 含前缀，则保留前缀后拼接 v*/models）。
   async function fetchModelOptionsForConfig(config) {
     const effectiveConfig = resolveEffectiveConfig(config) || config || {};
     const connectionType = getConfigConnectionType(effectiveConfig);
