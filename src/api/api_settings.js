@@ -71,6 +71,9 @@ export function createApiManager(appContext) {
   let isConnectionSourcesPanelExpanded = false;
   const DELETE_CONFIRM_TIMEOUT_MS = 2600;
   const MODEL_LIST_FETCH_TIMEOUT_MS = 15000;
+  // 模型列表缓存（按 connectionSourceId 聚合），用于“打开 API 设置时一次性预取”。
+  const modelListCacheBySourceId = new Map();
+  const modelListPendingBySourceId = new Map();
 
   const {
     dom,
@@ -1148,6 +1151,7 @@ export function createApiManager(appContext) {
         const migration = migrateConnectionSourcesAndConfigs(result.apiConfigs, result.connectionSources);
         connectionSources = normalizeConnectionSourcesAfterMigration(migration.connectionSources);
         apiConfigs = normalizeApiConfigsAfterMigration(migration.apiConfigs, connectionSources);
+        invalidateAllModelListCaches();
 
         // 清理历史运行时状态，避免连接源迁移后沿用旧索引/缓存键。
         Object.keys(apiKeyUsageIndex).forEach((key) => delete apiKeyUsageIndex[key]);
@@ -1276,6 +1280,7 @@ export function createApiManager(appContext) {
         connectionSources = [defaultSource];
         apiConfigs = [createDefaultApiConfig(defaultSource.id)];
         selectedConfigIndex = 0;
+        invalidateAllModelListCaches();
         // 如果云端分片损坏导致读取不到数据，这里不应写回默认值（否则会覆盖掉真实数据）
         // 仅当 sync 分片为空且旧字段也为空时，才写入默认配置作为初始化。
         if (chunked?.state === 'empty') {
@@ -1291,6 +1296,7 @@ export function createApiManager(appContext) {
       connectionSources = [defaultSource];
       apiConfigs = [createDefaultApiConfig(defaultSource.id)];
       selectedConfigIndex = 0;
+      invalidateAllModelListCaches();
     }
 
     emitApiConfigsUpdated();
@@ -1431,6 +1437,7 @@ export function createApiManager(appContext) {
             const migrated = migrateConnectionSourcesAndConfigs(loaded.items, loaded.connectionSources);
             connectionSources = normalizeConnectionSourcesAfterMigration(migrated.connectionSources);
             apiConfigs = normalizeApiConfigsAfterMigration(migrated.apiConfigs, connectionSources);
+            invalidateAllModelListCaches();
             selectedConfigIndex = Math.max(0, Math.min(selectedConfigIndex, apiConfigs.length - 1));
             // 同步到本地备份，确保“最近一次可用配置”始终存在
             try { await saveConfigsToLocalBackup(apiConfigs, connectionSources, selectedConfigIndex, Number(loaded?.meta?.updatedAt || Date.now())); } catch (_) {}
@@ -1716,6 +1723,127 @@ export function createApiManager(appContext) {
     };
   }
 
+  function normalizeConnectionSourceId(connectionSourceId) {
+    return (typeof connectionSourceId === 'string') ? connectionSourceId.trim() : '';
+  }
+
+  function invalidateModelListCacheForSource(connectionSourceId) {
+    const normalizedSourceId = normalizeConnectionSourceId(connectionSourceId);
+    if (!normalizedSourceId) return;
+    modelListCacheBySourceId.delete(normalizedSourceId);
+    modelListPendingBySourceId.delete(normalizedSourceId);
+  }
+
+  function invalidateAllModelListCaches() {
+    modelListCacheBySourceId.clear();
+    modelListPendingBySourceId.clear();
+  }
+
+  function getModelOptionsBySourceId(connectionSourceId) {
+    const normalizedSourceId = normalizeConnectionSourceId(connectionSourceId);
+    if (!normalizedSourceId) return [];
+    const cached = modelListCacheBySourceId.get(normalizedSourceId);
+    if (!cached || cached.status !== 'ready' || !Array.isArray(cached.options)) return [];
+    return cached.options;
+  }
+
+  function refreshRenderedModelNameOptions() {
+    if (!apiCardsContainer) return;
+    const cards = apiCardsContainer.querySelectorAll('.api-card:not(.template)');
+    cards.forEach((card) => {
+      const sourceSelect = card.querySelector('.connection-source-id');
+      const modelOptions = card.querySelector('.model-name-options');
+      if (!modelOptions) return;
+      const sourceId = getConnectionSourceById(sourceSelect?.value)?.id || '';
+      const options = getModelOptionsBySourceId(sourceId);
+      modelOptions.innerHTML = '';
+      options.forEach((item) => {
+        if (!item?.id) return;
+        const option = document.createElement('option');
+        option.value = item.id;
+        if (item.label && item.label !== item.id) {
+          option.label = item.label;
+        }
+        modelOptions.appendChild(option);
+      });
+    });
+  }
+
+  async function fetchModelOptionsForConnectionSource(connectionSourceId, options = {}) {
+    const normalizedSourceId = normalizeConnectionSourceId(connectionSourceId);
+    if (!normalizedSourceId) return { status: 'idle', options: [] };
+    const source = getConnectionSourceById(normalizedSourceId);
+    if (!source) return { status: 'idle', options: [] };
+
+    const force = !!options?.force;
+    const cached = modelListCacheBySourceId.get(normalizedSourceId);
+    if (!force && cached?.status === 'ready' && Array.isArray(cached.options) && cached.options.length > 0) {
+      return cached;
+    }
+    if (!force && cached?.status === 'error') {
+      return cached;
+    }
+
+    const pending = modelListPendingBySourceId.get(normalizedSourceId);
+    if (pending) return pending;
+
+    modelListCacheBySourceId.set(normalizedSourceId, {
+      status: 'loading',
+      options: Array.isArray(cached?.options) ? cached.options : [],
+      endpoint: cached?.endpoint || '',
+      error: '',
+      updatedAt: Date.now()
+    });
+
+    const task = (async () => {
+      const transientConfig = createDefaultApiConfig(normalizedSourceId, {
+        id: `source-model-list-${normalizedSourceId}`,
+        modelName: '',
+        displayName: ''
+      });
+      const result = await fetchModelOptionsForConfig(transientConfig);
+      if (result.ok) {
+        const readyState = {
+          status: 'ready',
+          options: result.options,
+          endpoint: result.endpoint,
+          error: '',
+          updatedAt: Date.now()
+        };
+        modelListCacheBySourceId.set(normalizedSourceId, readyState);
+        refreshRenderedModelNameOptions();
+        return readyState;
+      }
+      const errorState = {
+        status: 'error',
+        options: [],
+        endpoint: result.endpoint || '',
+        error: result.error || '模型列表请求失败',
+        updatedAt: Date.now()
+      };
+      modelListCacheBySourceId.set(normalizedSourceId, errorState);
+      refreshRenderedModelNameOptions();
+      return errorState;
+    })();
+
+    modelListPendingBySourceId.set(normalizedSourceId, task);
+    try {
+      return await task;
+    } finally {
+      modelListPendingBySourceId.delete(normalizedSourceId);
+    }
+  }
+
+  async function prefetchModelOptionsForAllSources(options = {}) {
+    const force = !!options?.force;
+    const sourceIds = connectionSources
+      .map(source => normalizeConnectionSourceId(source?.id))
+      .filter(Boolean);
+    if (sourceIds.length <= 0) return;
+    await Promise.allSettled(sourceIds.map(sourceId =>
+      fetchModelOptionsForConnectionSource(sourceId, { force })));
+  }
+
   // 将卡片索引安全转为数字，非法值返回 null。
   function parseCardIndex(value) {
     const index = Number.parseInt(value, 10);
@@ -1846,6 +1974,7 @@ export function createApiManager(appContext) {
     const persistSourceChanges = () => {
       const sourceIndex = connectionSources.findIndex(item => item.id === source.id);
       if (sourceIndex < 0) return;
+      const sourceId = connectionSources[sourceIndex]?.id || source.id;
       const nextType = normalizeConnectionType(connectionTypeSelect?.value) || CONNECTION_TYPE_OPENAI;
       let nextBaseUrl = normalizeConfigBaseUrlByConnection(nextType, baseUrlInput?.value || '');
       if (!nextBaseUrl && nextType === CONNECTION_TYPE_OPENAI) {
@@ -1875,6 +2004,10 @@ export function createApiManager(appContext) {
         apiKeyFilePath: normalizeApiKeyFilePath(apiKeyFilePathInput?.value)
       };
       clearApiKeyFileCacheEntry({ connectionSourceId: source.id });
+      invalidateModelListCacheForSource(sourceId);
+      void fetchModelOptionsForConnectionSource(sourceId, { force: true }).catch((error) => {
+        console.warn('连接源变更后预取模型列表失败（可忽略）:', error);
+      });
       saveAPIConfigs();
       renderConnectionSources();
       renderAPICards();
@@ -1953,6 +2086,7 @@ export function createApiManager(appContext) {
         connectionSources = connectionSources.filter(item => item.id !== source.id);
         delete apiKeyUsageIndex[source.id];
         clearApiKeyFileCacheEntry({ connectionSourceId: source.id });
+        invalidateModelListCacheForSource(source.id);
         saveAPIConfigs();
         renderConnectionSources();
         renderAPICards();
@@ -2037,9 +2171,7 @@ export function createApiManager(appContext) {
     const connectionSourceHint = template.querySelector('.connection-source-hint');
     const displayNameInput = template.querySelector('.display-name');
     const modelNameInput = template.querySelector('.model-name');
-    const modelListRefreshBtn = template.querySelector('.model-list-refresh-btn');
-    const modelListSelect = template.querySelector('.model-list-select');
-    const modelListHint = template.querySelector('.model-list-hint');
+    const modelNameOptions = template.querySelector('.model-name-options');
     const temperatureInput = template.querySelector('.temperature');
     const temperatureValue = template.querySelector('.temperature-value');
     const apiForm = template.querySelector('.api-form');
@@ -2094,102 +2226,50 @@ export function createApiManager(appContext) {
       connectionSourceHint.textContent = `${sourceLabel} · ${sourceBaseUrl || '未设置端点'} · 统一复用鉴权`;
       updateCardTitle();
     };
-    let loadedModelOptions = [];
-    const setModelListHint = (message, state = '') => {
-      if (!modelListHint) return;
-      modelListHint.textContent = message || '';
-      modelListHint.classList.remove('loading', 'success', 'error');
-      if (state === 'loading' || state === 'success' || state === 'error') {
-        modelListHint.classList.add(state);
-      }
-    };
-    const refreshModelListSelect = () => {
-      if (!modelListSelect || !modelNameInput) return;
-      const currentModelName = (modelNameInput.value || '').trim();
-      modelListSelect.innerHTML = '';
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = loadedModelOptions.length > 0
-        ? '从列表选择模型（可选）'
-        : '暂无模型列表（可手动输入）';
-      modelListSelect.appendChild(placeholder);
+    const getSelectedSourceId = () =>
+      getConnectionSourceById(connectionSourceSelect?.value)?.id || '';
 
-      loadedModelOptions.forEach((item) => {
+    if (modelNameInput && modelNameOptions) {
+      const dataListId = `api-model-options-${config.id || index}`;
+      modelNameOptions.id = dataListId;
+      modelNameInput.setAttribute('list', dataListId);
+    }
+
+    const applyModelNameOptions = () => {
+      if (!modelNameOptions) return;
+      const selectedSourceId = getSelectedSourceId();
+      const options = getModelOptionsBySourceId(selectedSourceId);
+      modelNameOptions.innerHTML = '';
+      options.forEach((item) => {
+        if (!item?.id) return;
         const option = document.createElement('option');
         option.value = item.id;
-        option.textContent = item.label || item.id;
-        modelListSelect.appendChild(option);
-      });
-
-      if (currentModelName) {
-        const matched = loadedModelOptions.find(item => item.id === currentModelName);
-        if (matched) {
-          modelListSelect.value = matched.id;
-        } else {
-          const currentOption = document.createElement('option');
-          currentOption.value = currentModelName;
-          currentOption.textContent = `当前模型：${currentModelName}（未在列表中）`;
-          modelListSelect.appendChild(currentOption);
-          modelListSelect.value = currentModelName;
+        if (item.label && item.label !== item.id) {
+          option.label = item.label;
         }
-      } else {
-        modelListSelect.value = '';
-      }
-      modelListSelect.disabled = loadedModelOptions.length <= 0;
+        modelNameOptions.appendChild(option);
+      });
     };
-    const setModelListLoading = (isLoading) => {
-      if (modelListRefreshBtn) {
-        modelListRefreshBtn.disabled = !!isLoading;
-        modelListRefreshBtn.textContent = isLoading ? '加载中…' : '刷新列表';
-      }
-      if (modelListSelect) {
-        modelListSelect.disabled = !!isLoading || loadedModelOptions.length <= 0;
-      }
-    };
-    const resetModelListUi = () => {
-      loadedModelOptions = [];
-      refreshModelListSelect();
-      setModelListHint('可手动输入，或点击“刷新列表”自动拉取。');
-    };
-    const loadModelList = async () => {
-      const currentConfig = apiConfigs[index] || config || {};
-      const effectiveConfig = resolveEffectiveConfig(currentConfig) || currentConfig;
-      const effectiveBaseUrl = (typeof effectiveConfig?.baseUrl === 'string')
-        ? effectiveConfig.baseUrl.trim()
-        : '';
-      if (!effectiveBaseUrl) {
-        loadedModelOptions = [];
-        refreshModelListSelect();
-        setModelListHint('请先为该 API 绑定连接源并设置端点 URL。', 'error');
+
+    const ensureModelOptionsLoaded = () => {
+      const selectedSourceId = getSelectedSourceId();
+      if (!selectedSourceId) {
+        applyModelNameOptions();
         return;
       }
-
-      setModelListLoading(true);
-      setModelListHint('正在拉取模型列表…', 'loading');
-      try {
-        const result = await fetchModelOptionsForConfig(effectiveConfig);
-        if (!template.isConnected) return;
-        if (!result.ok) {
-          loadedModelOptions = [];
-          refreshModelListSelect();
-          setModelListHint(result.error || '拉取模型列表失败', 'error');
-          return;
-        }
-        loadedModelOptions = result.options;
-        refreshModelListSelect();
-        let sourceHost = '';
-        try {
-          sourceHost = (new URL(result.endpoint)).host;
-        } catch (_) {
-          sourceHost = result.endpoint || '';
-        }
-        const suffix = sourceHost ? `（${sourceHost}）` : '';
-        setModelListHint(`已加载 ${loadedModelOptions.length} 个模型${suffix}`, 'success');
-      } finally {
-        if (template.isConnected) {
-          setModelListLoading(false);
-        }
+      const cachedOptions = getModelOptionsBySourceId(selectedSourceId);
+      if (cachedOptions.length > 0) {
+        applyModelNameOptions();
+        return;
       }
+      void fetchModelOptionsForConnectionSource(selectedSourceId, { force: false }).then(() => {
+        if (!template.isConnected) return;
+        const latestSourceId = getSelectedSourceId();
+        if (latestSourceId !== selectedSourceId) return;
+        applyModelNameOptions();
+      }).catch(() => {
+        // 模型列表加载失败时允许用户继续手动输入模型名，不中断表单交互。
+      });
     };
     const customParamsErrorElemId = `custom-params-error-${index}`;
     let lastFormattedCustomParams = '';
@@ -2420,7 +2500,8 @@ export function createApiManager(appContext) {
     if (userMessageTemplateHelpBtn) {
       userMessageTemplateHelpBtn.title = USER_MESSAGE_TEMPLATE_HELP_TEXT;
     }
-    resetModelListUi();
+    applyModelNameOptions();
+    ensureModelOptionsLoaded();
 
     // 监听温度变化
     temperatureInput.addEventListener('input', (e) => {
@@ -2446,25 +2527,6 @@ export function createApiManager(appContext) {
       saveAPIConfigs();
       renderFavoriteApis();
     });
-
-    if (modelListRefreshBtn) {
-      modelListRefreshBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await loadModelList();
-      });
-    }
-    if (modelListSelect) {
-      modelListSelect.addEventListener('change', () => {
-        if (!modelNameInput) return;
-        const selectedModelName = (modelListSelect.value || '').trim();
-        if (!selectedModelName) return;
-        if ((modelNameInput.value || '').trim() !== selectedModelName) {
-          modelNameInput.value = selectedModelName;
-          saveCardBasicFields();
-        }
-        setModelListHint(`已选择模型：${selectedModelName}`, 'success');
-      });
-    }
 
     // 阻止输入框和按钮点击事件冒泡
     const stopPropagation = (e) => e.stopPropagation();
@@ -2554,7 +2616,8 @@ export function createApiManager(appContext) {
     };
     if (connectionSourceSelect) {
       connectionSourceSelect.addEventListener('change', () => {
-        resetModelListUi();
+        applyModelNameOptions();
+        ensureModelOptionsLoaded();
         saveCardBasicFields();
       });
     }
@@ -2562,10 +2625,7 @@ export function createApiManager(appContext) {
       displayNameInput.addEventListener('change', saveCardBasicFields);
     }
     if (modelNameInput) {
-      modelNameInput.addEventListener('change', () => {
-        refreshModelListSelect();
-        saveCardBasicFields();
-      });
+      modelNameInput.addEventListener('change', saveCardBasicFields);
     }
 
     // 自定义参数处理：失焦/变更后统一格式化为缩进 JSON。
@@ -3807,6 +3867,11 @@ export function createApiManager(appContext) {
         await chatHistoryUI?.activateTab?.(targetTab);
       }
 
+      // 打开 API 设置时统一预取一次所有连接源的模型列表，确保各卡片的模型输入框可直接下拉选择。
+      void prefetchModelOptionsForAllSources({ force: true }).catch((error) => {
+        console.warn('预取模型列表失败（可忽略）:', error);
+      });
+
     });
 
     // 返回聊天界面
@@ -3835,6 +3900,10 @@ export function createApiManager(appContext) {
         });
         connectionSources.push(nextSource);
         assignStableConnectionSourceNames(connectionSources);
+        invalidateModelListCacheForSource(nextSource.id);
+        void fetchModelOptionsForConnectionSource(nextSource.id, { force: true }).catch((error) => {
+          console.warn('新增连接源后预取模型列表失败（可忽略）:', error);
+        });
         saveAPIConfigs();
         renderConnectionSources();
         renderAPICards();
