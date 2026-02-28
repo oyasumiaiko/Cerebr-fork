@@ -458,6 +458,18 @@ export function createMessageSender(appContext) {
     return results;
   }
 
+  function extractImagePartsFromMessageContent(content) {
+    if (!Array.isArray(content)) return [];
+    return content
+      .filter(part => part && part.type === 'image_url' && part.image_url)
+      .map((part) => {
+        const imageUrl = (part.image_url && typeof part.image_url === 'object')
+          ? { ...part.image_url }
+          : part.image_url;
+        return { type: 'image_url', image_url: imageUrl };
+      });
+  }
+
   /**
    * 将注入消息插入到“最后一条 user 消息”之后，或在需要时替换最后一条 user。
    * @param {Array} messages
@@ -481,8 +493,14 @@ export function createMessageSender(appContext) {
       return messages.concat(normalized);
     }
     if (replaceLastUser) {
+      const lastUserMessage = messages[lastUserIndex];
+      const preservedImageParts = extractImagePartsFromMessageContent(lastUserMessage?.content);
+      const preservedImageMessage = preservedImageParts.length > 0
+        ? { role: 'user', content: preservedImageParts }
+        : null;
       return [
         ...messages.slice(0, lastUserIndex),
+        ...(preservedImageMessage ? [preservedImageMessage] : []),
         ...normalized,
         ...messages.slice(lastUserIndex + 1)
       ];
