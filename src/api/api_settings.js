@@ -190,9 +190,24 @@ export function createApiManager(appContext) {
     return !!getConnectionSourceById(sourceId);
   }
 
-  function getApiConfigDisplayTitle(config) {
+  function getApiConfigBaseTitle(config) {
     const effective = resolveEffectiveConfig(config) || config || {};
     return config?.displayName || config?.modelName || effective?.baseUrl || '新配置';
+  }
+
+  function getConfigConnectionSourceDisplayName(config) {
+    const sourceId = (typeof config?.connectionSourceId === 'string') ? config.connectionSourceId.trim() : '';
+    if (!sourceId) return '';
+    const sourceIndex = connectionSources.findIndex(source => source.id === sourceId);
+    if (sourceIndex < 0) return '';
+    return buildConnectionSourceDisplayName(connectionSources[sourceIndex], sourceIndex);
+  }
+
+  function getApiConfigDisplayTitle(config) {
+    const baseTitle = getApiConfigBaseTitle(config);
+    const sourceDisplayName = getConfigConnectionSourceDisplayName(config);
+    if (!sourceDisplayName) return baseTitle;
+    return `${baseTitle} - ${sourceDisplayName}`;
   }
 
   function getConfigConnectionType(config) {
