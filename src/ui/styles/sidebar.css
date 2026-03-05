@@ -5924,6 +5924,21 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 .search-result-summary .summary-title {
     font-weight: 600;
     color: color-mix(in srgb, var(--cerebr-text-color) 95%, transparent);
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.search-result-summary .summary-keyword-inline-wrap {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.search-result-summary .summary-keyword-inline {
+    max-width: 120px;
 }
 
 .search-result-summary .summary-meta {
@@ -7308,16 +7323,6 @@ body.chat-history-panel-resizing {
 .filter-container input {
   flex: 1;
   min-width: 0;
-}
-#chat-history-panel .search-keyword-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0 4px;
-  min-height: 0;
-}
-#chat-history-panel .search-keyword-legend[hidden] {
-  display: none;
 }
 #chat-history-panel .search-keyword-chip {
   --keyword-chip-color: var(--cerebr-search-highlight);

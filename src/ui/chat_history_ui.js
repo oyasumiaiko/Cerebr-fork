@@ -2308,53 +2308,6 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
-   * 在搜索框下方渲染“关键词颜色 token”，让用户看到 AND 关键词与高亮颜色的一一对应关系。
-   * @param {HTMLElement} panel
-   * @param {{keywordEntries?:Array<{term:string, termLower:string, color:string}>}|null} [highlightPlan=null]
-   */
-  function renderSearchKeywordLegend(panel, highlightPlan = null) {
-    const legend = panel?.querySelector?.('.search-keyword-legend');
-    if (!legend) return;
-    const plan = (highlightPlan && typeof highlightPlan === 'object')
-      ? highlightPlan
-      : buildHistoryHighlightPlan(panel);
-    const keywordEntries = Array.isArray(plan?.keywordEntries) ? plan.keywordEntries : [];
-    legend.textContent = '';
-    if (!keywordEntries.length) {
-      legend.hidden = true;
-      legend.setAttribute('aria-hidden', 'true');
-      return;
-    }
-    const fragment = document.createDocumentFragment();
-    keywordEntries.forEach((entry) => {
-      const chip = document.createElement('span');
-      chip.className = 'search-keyword-chip';
-      const chipColor = entry?.color || '';
-      if (chipColor) {
-        chip.style.setProperty('--keyword-chip-color', chipColor);
-      }
-      chip.title = `关键词：${entry?.term || ''}`;
-
-      const dot = document.createElement('span');
-      dot.className = 'search-keyword-chip-dot';
-      if (chipColor) {
-        dot.style.backgroundColor = chipColor;
-      }
-
-      const text = document.createElement('span');
-      text.className = 'search-keyword-chip-text';
-      text.textContent = entry?.term || '';
-
-      chip.appendChild(dot);
-      chip.appendChild(text);
-      fragment.appendChild(chip);
-    });
-    legend.appendChild(fragment);
-    legend.hidden = false;
-    legend.setAttribute('aria-hidden', 'false');
-  }
-
-  /**
    * 更新当前列表缓存（currentDisplayItems）的摘要，避免后续渲染使用旧值。
    * @param {string} conversationId
    * @param {string} summary
@@ -3623,6 +3576,10 @@ export function createChatHistoryUI(appContext) {
     const excerptCount = Math.max(0, Number(info.excerptCount || 0));
     const durationMs = typeof info.durationMs === 'number' ? info.durationMs : null;
     const reused = !!info.reused;
+    const highlightPlan = (info.highlightPlan && typeof info.highlightPlan === 'object')
+      ? info.highlightPlan
+      : buildHistoryHighlightPlanByFilterText(queryText);
+    const keywordEntries = Array.isArray(highlightPlan?.keywordEntries) ? highlightPlan.keywordEntries : [];
 
     let summary = panel.querySelector('.search-result-summary');
     if (!summary) {
@@ -3653,6 +3610,35 @@ export function createChatHistoryUI(appContext) {
     const titleSpan = document.createElement('span');
     titleSpan.className = 'summary-title';
     titleSpan.textContent = summaryTitle;
+    if (queryText && keywordEntries.length) {
+      // 在“搜索详情”同一行直接展示关键词颜色映射，避免额外一行 token 造成遮挡与布局抖动。
+      const keywordWrap = document.createElement('span');
+      keywordWrap.className = 'summary-keyword-inline-wrap';
+      keywordEntries.forEach((entry) => {
+        const chip = document.createElement('span');
+        chip.className = 'search-keyword-chip summary-keyword-inline';
+        const chipColor = entry?.color || '';
+        if (chipColor) {
+          chip.style.setProperty('--keyword-chip-color', chipColor);
+        }
+        chip.title = `关键词：${entry?.term || ''}`;
+
+        const dot = document.createElement('span');
+        dot.className = 'search-keyword-chip-dot';
+        if (chipColor) {
+          dot.style.backgroundColor = chipColor;
+        }
+
+        const text = document.createElement('span');
+        text.className = 'search-keyword-chip-text';
+        text.textContent = entry?.term || '';
+
+        chip.appendChild(dot);
+        chip.appendChild(text);
+        keywordWrap.appendChild(chip);
+      });
+      titleSpan.appendChild(keywordWrap);
+    }
     const metaSpan = document.createElement('span');
     metaSpan.className = 'summary-meta';
     metaSpan.textContent = metaParts.join(' · ');
@@ -5419,7 +5405,6 @@ export function createChatHistoryUI(appContext) {
 
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
-    renderSearchKeywordLegend(panel, highlightPlan);
 
     const setSearchProgressVisible = (indicator, visible) => {
       if (!indicator) return;
@@ -5673,7 +5658,8 @@ export function createChatHistoryUI(appContext) {
           resultCount: meta.resultCount ?? sourceHistories.length,
           excerptCount: meta.excerptCount,
           scannedCount: meta.scannedCount,
-          reused: true
+          reused: true,
+          highlightPlan
         });
       } else {
         removeSearchSummary(panel);
@@ -5906,7 +5892,8 @@ export function createChatHistoryUI(appContext) {
           resultCount: finalResults.length,
           excerptCount,
           scannedCount,
-          reused: canReusePrefixCache
+          reused: canReusePrefixCache,
+          highlightPlan
         });
       }
     }
@@ -9876,16 +9863,9 @@ export function createChatHistoryUI(appContext) {
       // 改为输入防抖实时搜索，且输入法构词期间不触发
       let filterDebounceTimer = null;
       let isComposingFilter = false;
-      const syncKeywordLegend = () => {
-        renderSearchKeywordLegend(panel, buildHistoryHighlightPlanByFilterText(filterInput.value));
-      };
-      const triggerSearch = () => {
-        syncKeywordLegend();
-        loadConversationHistories(panel, filterInput.value);
-      };
+      const triggerSearch = () => loadConversationHistories(panel, filterInput.value);
       const onFilterInput = () => {
         if (isComposingFilter) return;
-        syncKeywordLegend();
         // 若输入值与当前已加载筛选一致，则无需重复触发（例如输入法 compositionend 后紧跟的 input 事件）
         if (panel.dataset.currentFilter === filterInput.value) return;
         if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
@@ -9914,7 +9894,6 @@ export function createChatHistoryUI(appContext) {
       clearButton.style.marginLeft = '5px';
       clearButton.addEventListener('click', () => {
         filterInput.value = '';
-        syncKeywordLegend();
         // 清除后也立即加载结果
         loadConversationHistories(panel, ''); 
         // 清除后将焦点设置回输入框
@@ -9997,12 +9976,6 @@ export function createChatHistoryUI(appContext) {
       ensureSearchSyntaxHelp(filterContainer);
       
       historyContent.appendChild(filterContainer);
-      const keywordLegend = document.createElement('div');
-      keywordLegend.className = 'search-keyword-legend';
-      keywordLegend.hidden = true;
-      keywordLegend.setAttribute('aria-hidden', 'true');
-      historyContent.appendChild(keywordLegend);
-      syncKeywordLegend();
 
       // 列表容器
       const listContainer = document.createElement('div');
@@ -10096,13 +10069,8 @@ export function createChatHistoryUI(appContext) {
       setupChatHistoryPanelResize(panel);
       const filterContainer = panel.querySelector('.filter-container');
       ensureSearchSyntaxHelp(filterContainer);
-      if (filterContainer && !panel.querySelector('.search-keyword-legend')) {
-        const keywordLegend = document.createElement('div');
-        keywordLegend.className = 'search-keyword-legend';
-        keywordLegend.hidden = true;
-        keywordLegend.setAttribute('aria-hidden', 'true');
-        filterContainer.insertAdjacentElement('afterend', keywordLegend);
-      }
+      // 迁移兼容：历史版本曾在搜索框下渲染关键词图例，这里统一移除，改为搜索摘要行内展示。
+      panel.querySelector('.search-keyword-legend')?.remove();
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
       const branchTreeButton = panel.querySelector('.filter-container .branch-tree-btn');
       if (urlFilterButton) {
@@ -10129,7 +10097,6 @@ export function createChatHistoryUI(appContext) {
     
     // 使用已有的筛选值加载历史记录
     const currentFilter = filterInput ? filterInput.value : '';
-    renderSearchKeywordLegend(panel, buildHistoryHighlightPlanByFilterText(currentFilter));
     // 说明：若面板已有列表则先复用，待新数据就绪后再替换，降低打开等待感。
     const snapshot = historyPanelScrollSnapshot;
     const canRestoreScroll = !!(snapshot
