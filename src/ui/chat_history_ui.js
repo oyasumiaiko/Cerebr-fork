@@ -1799,12 +1799,27 @@ export function createChatHistoryUI(appContext) {
     return String(rawValue || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function buildHighlightRegex(highlightTerms) {
-    const terms = (Array.isArray(highlightTerms) ? highlightTerms : [])
-      .map(term => (typeof term === 'string' ? term.trim() : ''))
-      .filter(Boolean);
-    if (!terms.length) return null;
-    const pattern = terms.map(escapeRegExp).join('|');
+  function normalizeHighlightTermEntries(highlightTerms) {
+    const normalized = normalizeSearchTerms(highlightTerms);
+    const entries = [];
+    for (let i = 0; i < normalized.raw.length; i += 1) {
+      const raw = normalized.raw[i];
+      const lower = normalized.lower[i];
+      if (!raw || !lower) continue;
+      entries.push({ raw, lower });
+    }
+    return entries;
+  }
+
+  function buildHighlightRegexFromEntries(entries) {
+    const normalizedEntries = Array.isArray(entries) ? entries : [];
+    if (!normalizedEntries.length) return null;
+    const pattern = normalizedEntries
+      .slice()
+      // 优先匹配更长关键词，避免 "api" 抢先吞掉 "api key" 造成颜色映射错位。
+      .sort((a, b) => b.lower.length - a.lower.length || a.lower.localeCompare(b.lower))
+      .map(entry => escapeRegExp(entry.raw))
+      .join('|');
     if (!pattern) return null;
     try {
       return new RegExp(pattern, 'gi');
@@ -1813,10 +1828,18 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
+  function buildHighlightRegex(highlightTerms) {
+    const entries = normalizeHighlightTermEntries(highlightTerms);
+    return buildHighlightRegexFromEntries(entries);
+  }
+
   function buildHighlightSegments(sourceText, highlightTerms) {
     if (!sourceText) return null;
-    const regex = buildHighlightRegex(highlightTerms);
+    const entries = normalizeHighlightTermEntries(highlightTerms);
+    if (!entries.length) return null;
+    const regex = buildHighlightRegexFromEntries(entries);
     if (!regex) return null;
+    const termLowerSet = new Set(entries.map(entry => entry.lower));
     const segments = [];
     let lastIndex = 0;
     let match;
@@ -1825,9 +1848,15 @@ export function createChatHistoryUI(appContext) {
       if (matchIndex > lastIndex) {
         segments.push({ type: 'text', value: sourceText.slice(lastIndex, matchIndex) });
       }
-      segments.push({ type: 'mark', value: match[0] });
-      lastIndex = matchIndex + match[0].length;
-      if (match[0].length === 0) regex.lastIndex += 1;
+      const matchedText = match[0];
+      const matchedLower = matchedText.toLowerCase();
+      segments.push({
+        type: 'mark',
+        value: matchedText,
+        termLower: termLowerSet.has(matchedLower) ? matchedLower : ''
+      });
+      lastIndex = matchIndex + matchedText.length;
+      if (matchedText.length === 0) regex.lastIndex += 1;
     }
     if (!segments.length) return null;
     if (lastIndex < sourceText.length) {
@@ -1912,12 +1941,23 @@ export function createChatHistoryUI(appContext) {
     }).filter(Boolean);
   }
 
-  function appendHighlightSegments(container, segments) {
+  function appendHighlightSegments(container, segments, keywordColorByLower = null) {
     if (!container || !Array.isArray(segments)) return;
     segments.forEach((segment) => {
       if (segment.type === 'mark') {
         const markEl = document.createElement('mark');
         markEl.textContent = segment.value;
+        const termLower = typeof segment.termLower === 'string' ? segment.termLower : '';
+        const keywordColor = (
+          keywordColorByLower
+          && termLower
+          && typeof keywordColorByLower[termLower] === 'string'
+        )
+          ? keywordColorByLower[termLower]
+          : '';
+        if (keywordColor) {
+          markEl.style.setProperty('--search-keyword-color', keywordColor);
+        }
         container.appendChild(markEl);
       } else {
         container.appendChild(document.createTextNode(segment.value));
@@ -2246,23 +2286,72 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 根据搜索文本构建关键词高亮计划。
+   * @param {string} filterText
+   * @returns {{terms:string[], termsLower:string[], hasTerms:boolean, keywordColorByLower:Record<string,string>, keywordEntries:Array<{term:string, termLower:string, color:string}>}}
+   */
+  function buildHistoryHighlightPlanByFilterText(filterText) {
+    const searchPlan = buildChatHistorySearchPlan(filterText || '');
+    const textPlan = buildChatHistoryTextPlan(searchPlan);
+    return buildKeywordHighlightPlan(textPlan.highlightRaw, textPlan.highlightLower);
+  }
+
+  /**
    * 根据当前搜索条件生成用于摘要高亮的计划。
    * @param {HTMLElement} panel
-   * @returns {{terms:string[], termsLower:string[], hasTerms:boolean}}
+   * @returns {{terms:string[], termsLower:string[], hasTerms:boolean, keywordColorByLower:Record<string,string>, keywordEntries:Array<{term:string, termLower:string, color:string}>}}
    */
   function buildHistoryHighlightPlan(panel) {
     const filterInput = panel.querySelector('.filter-container input[type="text"]');
     const filterText = filterInput ? filterInput.value : '';
-    const searchPlan = buildChatHistorySearchPlan(filterText);
-    const textPlan = buildChatHistoryTextPlan(searchPlan);
-    if (!textPlan.hasPositive) {
-      return { terms: [], termsLower: [], hasTerms: false };
+    return buildHistoryHighlightPlanByFilterText(filterText);
+  }
+
+  /**
+   * 在搜索框下方渲染“关键词颜色 token”，让用户看到 AND 关键词与高亮颜色的一一对应关系。
+   * @param {HTMLElement} panel
+   * @param {{keywordEntries?:Array<{term:string, termLower:string, color:string}>}|null} [highlightPlan=null]
+   */
+  function renderSearchKeywordLegend(panel, highlightPlan = null) {
+    const legend = panel?.querySelector?.('.search-keyword-legend');
+    if (!legend) return;
+    const plan = (highlightPlan && typeof highlightPlan === 'object')
+      ? highlightPlan
+      : buildHistoryHighlightPlan(panel);
+    const keywordEntries = Array.isArray(plan?.keywordEntries) ? plan.keywordEntries : [];
+    legend.textContent = '';
+    if (!keywordEntries.length) {
+      legend.hidden = true;
+      legend.setAttribute('aria-hidden', 'true');
+      return;
     }
-    return {
-      terms: textPlan.highlightRaw,
-      termsLower: textPlan.highlightLower,
-      hasTerms: true
-    };
+    const fragment = document.createDocumentFragment();
+    keywordEntries.forEach((entry) => {
+      const chip = document.createElement('span');
+      chip.className = 'search-keyword-chip';
+      const chipColor = entry?.color || '';
+      if (chipColor) {
+        chip.style.setProperty('--keyword-chip-color', chipColor);
+      }
+      chip.title = `关键词：${entry?.term || ''}`;
+
+      const dot = document.createElement('span');
+      dot.className = 'search-keyword-chip-dot';
+      if (chipColor) {
+        dot.style.backgroundColor = chipColor;
+      }
+
+      const text = document.createElement('span');
+      text.className = 'search-keyword-chip-text';
+      text.textContent = entry?.term || '';
+
+      chip.appendChild(dot);
+      chip.appendChild(text);
+      fragment.appendChild(chip);
+    });
+    legend.appendChild(fragment);
+    legend.hidden = false;
+    legend.setAttribute('aria-hidden', 'false');
   }
 
   /**
@@ -2303,13 +2392,16 @@ export function createChatHistoryUI(appContext) {
     const highlightTerms = Array.isArray(highlightPlan.termsLower) && highlightPlan.termsLower.length
       ? highlightPlan.termsLower
       : (Array.isArray(highlightPlan.terms) ? highlightPlan.terms : []);
+    const keywordColorByLower = (highlightPlan && typeof highlightPlan.keywordColorByLower === 'object')
+      ? highlightPlan.keywordColorByLower
+      : null;
     const hasHighlightTerms = highlightTerms.length > 0;
     if (hasHighlightTerms && displaySummary) {
       try {
         const segments = buildHighlightSegments(displaySummary, highlightTerms);
         if (segments && segments.length) {
           summaryDiv.textContent = '';
-          appendHighlightSegments(summaryDiv, segments);
+          appendHighlightSegments(summaryDiv, segments, keywordColorByLower);
         } else {
           summaryDiv.textContent = displaySummary;
         }
@@ -4620,6 +4712,124 @@ export function createChatHistoryUI(appContext) {
     return { raw, lower };
   }
 
+  /**
+   * 归一化“关键词高亮计划”中的词条，确保：
+   * - 展示文本与 lower key 一一对应；
+   * - 去重规则基于 lower（大小写不敏感）；
+   * - 顺序保持用户输入顺序，便于颜色与 token 展示稳定。
+   *
+   * @param {string[]} rawTerms
+   * @param {string[]} lowerTerms
+   * @returns {Array<{term:string, termLower:string}>}
+   */
+  function normalizeKeywordHighlightTerms(rawTerms, lowerTerms) {
+    const normalizedRaw = Array.isArray(rawTerms) ? rawTerms : [];
+    const normalizedLower = Array.isArray(lowerTerms) ? lowerTerms : [];
+    const maxLength = Math.max(normalizedRaw.length, normalizedLower.length);
+    const entries = [];
+    const seen = new Set();
+    for (let i = 0; i < maxLength; i += 1) {
+      const termRaw = typeof normalizedRaw[i] === 'string' ? normalizedRaw[i].trim() : '';
+      const termLowerFromInput = typeof normalizedLower[i] === 'string'
+        ? normalizedLower[i].trim().toLowerCase()
+        : '';
+      const termLower = termLowerFromInput || (termRaw ? termRaw.toLowerCase() : '');
+      const term = termRaw || termLower;
+      if (!termLower || !term) continue;
+      if (seen.has(termLower)) continue;
+      seen.add(termLower);
+      entries.push({ term, termLower });
+    }
+    return entries;
+  }
+
+  /**
+   * 轻量哈希：用于把“查询词 + 关键词”映射到稳定色相，保证：
+   * - 同一次查询内颜色稳定；
+   * - 查询词不变时刷新列表颜色不跳变；
+   * - 不依赖外部随机源，便于复现问题。
+   *
+   * @param {string} input
+   * @returns {number}
+   */
+  function hashStringToUint32(input) {
+    const text = typeof input === 'string' ? input : String(input || '');
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  /**
+   * 为每个 lower 关键词生成“不同且稳定”的高亮背景色。
+   * 设计要点：
+   * - 使用黄金角步进分散色相，降低相邻关键词颜色撞车概率；
+   * - 用词条哈希做轻微抖动，让不同查询下色彩分布更自然；
+   * - 输出带透明度的 HSL，兼容亮/暗主题并保留正文可读性。
+   *
+   * @param {string[]} termsLower
+   * @param {string} [seedText='']
+   * @returns {Record<string, string>}
+   */
+  function buildKeywordHighlightColorByLower(termsLower, seedText = '') {
+    const normalized = normalizeSearchTerms(termsLower);
+    const list = normalized.lower;
+    const colorMap = Object.create(null);
+    if (!list.length) return colorMap;
+    const seed = typeof seedText === 'string' ? seedText : '';
+    const seedHash = hashStringToUint32(`${seed}::${list.join('|')}`);
+    const baseHue = seedHash % 360;
+    const GOLDEN_ANGLE = 137.508;
+    list.forEach((termLower, index) => {
+      const termHash = hashStringToUint32(`${seed}::${termLower}::${index}`);
+      const hueJitter = (termHash % 19) - 9;
+      const hue = (baseHue + (index * GOLDEN_ANGLE) + hueJitter + 3600) % 360;
+      const saturation = 72 + (termHash % 10);
+      const lightness = 52 + ((termHash >>> 8) % 10);
+      const alpha = 0.36 + (((termHash >>> 16) % 16) / 100);
+      colorMap[termLower] = `hsl(${Math.round(hue)} ${saturation}% ${lightness}% / ${alpha.toFixed(2)})`;
+    });
+    return colorMap;
+  }
+
+  /**
+   * 构建统一高亮计划（关键词、lower 索引、颜色映射、可展示 token）。
+   *
+   * @param {string[]} rawTerms
+   * @param {string[]} lowerTerms
+   * @param {string} [seedText='']
+   * @returns {{terms:string[], termsLower:string[], hasTerms:boolean, keywordColorByLower:Record<string,string>, keywordEntries:Array<{term:string, termLower:string, color:string}>}}
+   */
+  function buildKeywordHighlightPlan(rawTerms, lowerTerms, seedText = '') {
+    const entries = normalizeKeywordHighlightTerms(rawTerms, lowerTerms);
+    if (!entries.length) {
+      return {
+        terms: [],
+        termsLower: [],
+        hasTerms: false,
+        keywordColorByLower: Object.create(null),
+        keywordEntries: []
+      };
+    }
+    const terms = entries.map(entry => entry.term);
+    const termsLower = entries.map(entry => entry.termLower);
+    const keywordColorByLower = buildKeywordHighlightColorByLower(termsLower, seedText);
+    const keywordEntries = entries.map(entry => ({
+      term: entry.term,
+      termLower: entry.termLower,
+      color: keywordColorByLower[entry.termLower] || ''
+    }));
+    return {
+      terms,
+      termsLower,
+      hasTerms: termsLower.length > 0,
+      keywordColorByLower,
+      keywordEntries
+    };
+  }
+
   function parseSearchOperatorValue(rawValue) {
     const input = typeof rawValue === 'string' ? rawValue.trim() : '';
     if (!input) return null;
@@ -5196,11 +5406,20 @@ export function createChatHistoryUI(appContext) {
     panel.dataset.runId = runId;
     const searchPlan = buildChatHistorySearchPlan(filterText);
     const textPlan = buildChatHistoryTextPlan(searchPlan);
+    const highlightPlan = buildKeywordHighlightPlan(textPlan.highlightRaw, textPlan.highlightLower);
+    const emptyHighlightPlan = {
+      terms: [],
+      termsLower: [],
+      hasTerms: false,
+      keywordColorByLower: Object.create(null),
+      keywordEntries: []
+    };
     const normalizedFilter = searchPlan.normalized;
     panel.dataset.normalizedFilter = normalizedFilter;
 
     const listContainer = panel.querySelector('#chat-history-list');
     if (!listContainer) return;
+    renderSearchKeywordLegend(panel, highlightPlan);
 
     const setSearchProgressVisible = (indicator, visible) => {
       if (!indicator) return;
@@ -5419,10 +5638,6 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
-    const highlightPlan = textPlan.hasPositive
-      ? { terms: textPlan.highlightRaw, termsLower: textPlan.highlightLower, hasTerms: true }
-      : { terms: [], termsLower: [], hasTerms: false };
-
     const applyMetaFilters = (list) => {
       const items = Array.isArray(list) ? list : [];
       if (!hasFilterRules) return items;
@@ -5435,18 +5650,18 @@ export function createChatHistoryUI(appContext) {
     if (panel._historyDataSource.mode === 'paged') {
       // 默认分页列表不做额外筛选（filterText 本身为空）
       sourceHistories = baseHistories;
-      effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
+      effectiveHighlightPlan = emptyHighlightPlan;
       removeSearchSummary(panel);
     } else {
       const allHistoriesMeta = baseHistories;
 
       if (!hasActiveQuery) {
         sourceHistories = allHistoriesMeta;
-        effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
+        effectiveHighlightPlan = emptyHighlightPlan;
         removeSearchSummary(panel);
       } else if (!hasTextQuery) {
         sourceHistories = applyMetaFilters(allHistoriesMeta);
-        effectiveHighlightPlan = { terms: [], termsLower: [], hasTerms: false };
+        effectiveHighlightPlan = emptyHighlightPlan;
         removeSearchSummary(panel);
       } else if (canReuseSearchCache) {
         sourceHistories = searchCache.results.slice();
@@ -6911,13 +7126,16 @@ export function createChatHistoryUI(appContext) {
     const highlightTerms = Array.isArray(highlightPlan?.termsLower) && highlightPlan.termsLower.length
       ? highlightPlan.termsLower
       : (Array.isArray(highlightPlan?.terms) ? highlightPlan.terms : []);
+    const keywordColorByLower = (highlightPlan && typeof highlightPlan.keywordColorByLower === 'object')
+      ? highlightPlan.keywordColorByLower
+      : null;
     const hasHighlightTerms = highlightTerms.length > 0;
     if (hasHighlightTerms && displaySummary) {
       try {
         const segments = buildHighlightSegments(displaySummary, highlightTerms);
         if (segments && segments.length) {
           summaryDiv.textContent = '';
-          appendHighlightSegments(summaryDiv, segments);
+          appendHighlightSegments(summaryDiv, segments, keywordColorByLower);
         } else {
           summaryDiv.textContent = displaySummary;
         }
@@ -7173,7 +7391,7 @@ export function createChatHistoryUI(appContext) {
         const line = document.createElement('div');
         line.className = 'highlight-snippet-line';
         if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
-        appendHighlightSegments(line, excerpt.segments);
+        appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
         if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
         bindSearchSnippetLineJump(line, conv.id, messageId);
         snippetDiv.appendChild(line);
@@ -7209,7 +7427,7 @@ export function createChatHistoryUI(appContext) {
             const line = document.createElement('div');
             line.className = 'highlight-snippet-line';
             if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
-            appendHighlightSegments(line, excerpt.segments);
+            appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
             if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
             bindSearchSnippetLineJump(line, conv.id, msg.id || '');
             snippets.push(line);
@@ -7326,7 +7544,7 @@ export function createChatHistoryUI(appContext) {
    * 渲染下一批聊天记录项。
    * @param {HTMLElement} listContainer - 列表容器元素
    * @param {string[]} pinnedIds - 当前置顶的ID列表
-   * @param {{terms:string[], termsLower:string[], hasTerms:boolean}} highlightPlan - 用于文本高亮的关键词计划
+   * @param {{terms:string[], termsLower:string[], hasTerms:boolean, keywordColorByLower?:Record<string,string>, keywordEntries?:Array<{term:string, termLower:string, color:string}>}} highlightPlan - 用于文本高亮的关键词计划
    * @param {string} currentPanelFilter - 调用此函数时面板当前的过滤条件，用于一致性检查
    */
   async function renderMoreItems(listContainer, pinnedIds, highlightPlan, currentPanelFilter, currentRunId) {
@@ -9658,9 +9876,16 @@ export function createChatHistoryUI(appContext) {
       // 改为输入防抖实时搜索，且输入法构词期间不触发
       let filterDebounceTimer = null;
       let isComposingFilter = false;
-      const triggerSearch = () => loadConversationHistories(panel, filterInput.value);
+      const syncKeywordLegend = () => {
+        renderSearchKeywordLegend(panel, buildHistoryHighlightPlanByFilterText(filterInput.value));
+      };
+      const triggerSearch = () => {
+        syncKeywordLegend();
+        loadConversationHistories(panel, filterInput.value);
+      };
       const onFilterInput = () => {
         if (isComposingFilter) return;
+        syncKeywordLegend();
         // 若输入值与当前已加载筛选一致，则无需重复触发（例如输入法 compositionend 后紧跟的 input 事件）
         if (panel.dataset.currentFilter === filterInput.value) return;
         if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
@@ -9689,6 +9914,7 @@ export function createChatHistoryUI(appContext) {
       clearButton.style.marginLeft = '5px';
       clearButton.addEventListener('click', () => {
         filterInput.value = '';
+        syncKeywordLegend();
         // 清除后也立即加载结果
         loadConversationHistories(panel, ''); 
         // 清除后将焦点设置回输入框
@@ -9762,9 +9988,21 @@ export function createChatHistoryUI(appContext) {
 
       updateBranchTreeButtonState();
       filterContainer.appendChild(branchTreeButton);
+      // TODO(search-qa): 在搜索窗口增加“对当前搜索结果提问”入口（例如按钮）。
+      // 实现步骤（后续实现时按此流程落地）：
+      // 1) 基于 panel.dataset.searchCacheKey 读取当前搜索缓存，获取 results 与 matchMap；
+      // 2) 从当前命中的会话中抽取 excerpts / 命中消息文本，做去重与长度裁剪后组装上下文；
+      // 3) 用户点击“提问”入口后，将上述上下文附加到一次新提问请求中，并提示“基于当前搜索结果回答”；
+      // 4) 当搜索词为空或命中数为 0 时禁用该入口，避免发送空上下文。
       ensureSearchSyntaxHelp(filterContainer);
       
       historyContent.appendChild(filterContainer);
+      const keywordLegend = document.createElement('div');
+      keywordLegend.className = 'search-keyword-legend';
+      keywordLegend.hidden = true;
+      keywordLegend.setAttribute('aria-hidden', 'true');
+      historyContent.appendChild(keywordLegend);
+      syncKeywordLegend();
 
       // 列表容器
       const listContainer = document.createElement('div');
@@ -9858,6 +10096,13 @@ export function createChatHistoryUI(appContext) {
       setupChatHistoryPanelResize(panel);
       const filterContainer = panel.querySelector('.filter-container');
       ensureSearchSyntaxHelp(filterContainer);
+      if (filterContainer && !panel.querySelector('.search-keyword-legend')) {
+        const keywordLegend = document.createElement('div');
+        keywordLegend.className = 'search-keyword-legend';
+        keywordLegend.hidden = true;
+        keywordLegend.setAttribute('aria-hidden', 'true');
+        filterContainer.insertAdjacentElement('afterend', keywordLegend);
+      }
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
       const branchTreeButton = panel.querySelector('.filter-container .branch-tree-btn');
       if (urlFilterButton) {
@@ -9884,6 +10129,7 @@ export function createChatHistoryUI(appContext) {
     
     // 使用已有的筛选值加载历史记录
     const currentFilter = filterInput ? filterInput.value : '';
+    renderSearchKeywordLegend(panel, buildHistoryHighlightPlanByFilterText(currentFilter));
     // 说明：若面板已有列表则先复用，待新数据就绪后再替换，降低打开等待感。
     const snapshot = historyPanelScrollSnapshot;
     const canRestoreScroll = !!(snapshot

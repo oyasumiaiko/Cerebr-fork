@@ -5903,7 +5903,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .highlight-snippet mark,
 .chat-history-item .summary mark {
-    background-color: var(--cerebr-search-highlight);
+    background-color: var(--search-keyword-color, var(--cerebr-search-highlight));
     padding: 0 2px;
     border-radius: 2px;
     box-decoration-break: clone;
@@ -7308,6 +7308,43 @@ body.chat-history-panel-resizing {
 .filter-container input {
   flex: 1;
   min-width: 0;
+}
+#chat-history-panel .search-keyword-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 4px;
+  min-height: 0;
+}
+#chat-history-panel .search-keyword-legend[hidden] {
+  display: none;
+}
+#chat-history-panel .search-keyword-chip {
+  --keyword-chip-color: var(--cerebr-search-highlight);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--keyword-chip-color) 62%, transparent);
+  background: color-mix(in srgb, var(--keyword-chip-color) 22%, transparent);
+  color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+#chat-history-panel .search-keyword-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--keyword-chip-color);
+  flex: 0 0 auto;
+}
+#chat-history-panel .search-keyword-chip-text {
+  max-width: 124px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #chat-history-panel .clear-filter-btn {
   background: none;
