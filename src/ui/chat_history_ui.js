@@ -1941,45 +1941,35 @@ export function createChatHistoryUI(appContext) {
    * 规则：
    * - 每个命中点保留固定上下文；
    * - 彼此靠近的片段自动合并；
-   * - 距离较远的部分改用视觉渐变断点连接，保持原始顺序，避免被误读为正文字符。
+   * - 距离较远的部分拆成多个正文片段，并在片段边缘做渐隐，避免插入额外占位字符。
    */
   function buildMessagePreviewExcerpt(sourceText, highlightTerms, contextLength = SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH) {
     const ranges = collectHighlightContextRanges(sourceText, highlightTerms, contextLength);
     if (!ranges.length) return null;
 
-    const segments = [];
-    let hasVisibleContent = false;
+    const parts = [];
 
-    for (const range of ranges) {
+    for (let index = 0; index < ranges.length; index += 1) {
+      const range = ranges[index];
       const snippetPart = sourceText.slice(range.start, range.end).trim();
       if (!snippetPart) continue;
-      const partSegments = buildHighlightSegments(snippetPart, highlightTerms)
-        || [{ type: 'text', value: snippetPart }];
-      if (hasVisibleContent) {
-        segments.push({ type: 'gap' });
-      }
-      segments.push(...partSegments);
-      hasVisibleContent = true;
+      parts.push({
+        segments: buildHighlightSegments(snippetPart, highlightTerms)
+          || [{ type: 'text', value: snippetPart }],
+        fadeStart: index > 0 || range.start > 0,
+        fadeEnd: index < (ranges.length - 1) || range.end < sourceText.length
+      });
     }
-    if (!segments.length) return null;
+    if (!parts.length) return null;
 
     return {
-      segments,
-      prefixEllipsis: ranges[0].start > 0,
-      suffixEllipsis: ranges[ranges.length - 1].end < sourceText.length
+      parts
     };
   }
 
   function appendHighlightSegments(container, segments, keywordColorByLower = null) {
     if (!container || !Array.isArray(segments)) return;
     segments.forEach((segment) => {
-      if (segment.type === 'gap') {
-        const gapEl = document.createElement('span');
-        gapEl.className = 'highlight-snippet-gap';
-        gapEl.setAttribute('aria-hidden', 'true');
-        container.appendChild(gapEl);
-        return;
-      }
       if (segment.type === 'mark') {
         const markEl = document.createElement('mark');
         markEl.textContent = segment.value;
@@ -6986,12 +6976,27 @@ export function createChatHistoryUI(appContext) {
     if (!excerpt) return null;
     const line = document.createElement('div');
     line.className = 'highlight-snippet-line';
-    if (excerpt.prefixEllipsis) line.classList.add('is-truncated-start');
-    if (excerpt.suffixEllipsis) line.classList.add('is-truncated-end');
-
     const content = document.createElement('div');
     content.className = 'highlight-snippet-line-content';
-    appendHighlightSegments(content, excerpt.segments, keywordColorByLower);
+    const parts = Array.isArray(excerpt.parts) && excerpt.parts.length
+      ? excerpt.parts
+      : (Array.isArray(excerpt.segments) && excerpt.segments.length
+        ? [{
+            segments: excerpt.segments,
+            fadeStart: !!excerpt.prefixEllipsis,
+            fadeEnd: !!excerpt.suffixEllipsis
+          }]
+        : []);
+    for (const part of parts) {
+      if (!part || !Array.isArray(part.segments) || part.segments.length === 0) continue;
+      const fragment = document.createElement('span');
+      fragment.className = 'highlight-snippet-fragment';
+      if (part.fadeStart) fragment.classList.add('is-faded-start');
+      if (part.fadeEnd) fragment.classList.add('is-faded-end');
+      appendHighlightSegments(fragment, part.segments, keywordColorByLower);
+      content.appendChild(fragment);
+    }
+    if (!content.childNodes.length) return null;
     line.appendChild(content);
 
     bindSearchSnippetLineJump(line, conversationId, excerpt.messageId || '');
