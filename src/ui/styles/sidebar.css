@@ -5920,7 +5920,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 .highlight-snippet-toggle {
     border: none;
     background: transparent;
-    color: var(--cerebr-highlight);
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
     padding: 0;
     font-size: 11px;
     line-height: 1.4;
@@ -5930,7 +5930,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 .highlight-snippet-toggle:hover {
-    color: color-mix(in srgb, var(--cerebr-highlight) 85%, var(--cerebr-text-color));
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
 }
 
 .highlight-snippet mark,
