@@ -318,7 +318,6 @@ export function createChatHistoryUI(appContext) {
   const SEARCH_CACHE_MAX_ENTRIES = 20;
   const SEARCH_RESULT_SNIPPET_PREVIEW_LIMIT = 4;
   const SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH = 24;
-  const SEARCH_RESULT_SNIPPET_ELLIPSIS = '……';
   let searchCacheStore = new Map();
 
   function pruneSearchCacheStore() {
@@ -1942,20 +1941,27 @@ export function createChatHistoryUI(appContext) {
    * 规则：
    * - 每个命中点保留固定上下文；
    * - 彼此靠近的片段自动合并；
-   * - 距离较远的部分以省略号连接，保持原始顺序，避免同一消息被拆成多行。
+   * - 距离较远的部分改用视觉渐变断点连接，保持原始顺序，避免被误读为正文字符。
    */
   function buildMessagePreviewExcerpt(sourceText, highlightTerms, contextLength = SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH) {
     const ranges = collectHighlightContextRanges(sourceText, highlightTerms, contextLength);
     if (!ranges.length) return null;
 
-    const snippetParts = ranges
-      .map(range => sourceText.slice(range.start, range.end).trim())
-      .filter(Boolean);
-    if (!snippetParts.length) return null;
+    const segments = [];
+    let hasVisibleContent = false;
 
-    const snippet = snippetParts.join(SEARCH_RESULT_SNIPPET_ELLIPSIS);
-    const segments = buildHighlightSegments(snippet, highlightTerms);
-    if (!segments) return null;
+    for (const range of ranges) {
+      const snippetPart = sourceText.slice(range.start, range.end).trim();
+      if (!snippetPart) continue;
+      const partSegments = buildHighlightSegments(snippetPart, highlightTerms)
+        || [{ type: 'text', value: snippetPart }];
+      if (hasVisibleContent) {
+        segments.push({ type: 'gap' });
+      }
+      segments.push(...partSegments);
+      hasVisibleContent = true;
+    }
+    if (!segments.length) return null;
 
     return {
       segments,
@@ -1967,6 +1973,13 @@ export function createChatHistoryUI(appContext) {
   function appendHighlightSegments(container, segments, keywordColorByLower = null) {
     if (!container || !Array.isArray(segments)) return;
     segments.forEach((segment) => {
+      if (segment.type === 'gap') {
+        const gapEl = document.createElement('span');
+        gapEl.className = 'highlight-snippet-gap';
+        gapEl.setAttribute('aria-hidden', 'true');
+        container.appendChild(gapEl);
+        return;
+      }
       if (segment.type === 'mark') {
         const markEl = document.createElement('mark');
         markEl.textContent = segment.value;
@@ -6973,9 +6986,14 @@ export function createChatHistoryUI(appContext) {
     if (!excerpt) return null;
     const line = document.createElement('div');
     line.className = 'highlight-snippet-line';
-    if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode(SEARCH_RESULT_SNIPPET_ELLIPSIS));
-    appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
-    if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode(SEARCH_RESULT_SNIPPET_ELLIPSIS));
+    if (excerpt.prefixEllipsis) line.classList.add('is-truncated-start');
+    if (excerpt.suffixEllipsis) line.classList.add('is-truncated-end');
+
+    const content = document.createElement('div');
+    content.className = 'highlight-snippet-line-content';
+    appendHighlightSegments(content, excerpt.segments, keywordColorByLower);
+    line.appendChild(content);
+
     bindSearchSnippetLineJump(line, conversationId, excerpt.messageId || '');
     return line;
   }
