@@ -5901,8 +5901,8 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 .highlight-snippet-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    justify-content: flex-start;
+    gap: 4px;
     margin-top: 6px;
     flex-wrap: wrap;
 }
@@ -5912,19 +5912,25 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     font-size: 11px;
 }
 
+.highlight-snippet-meta-separator {
+    color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+    font-size: 11px;
+}
+
 .highlight-snippet-toggle {
-    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 48%, transparent);
-    background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+    border: none;
+    background: transparent;
     color: var(--cerebr-highlight);
-    border-radius: 999px;
-    padding: 2px 8px;
+    padding: 0;
     font-size: 11px;
     line-height: 1.4;
     cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .highlight-snippet-toggle:hover {
-    background: color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
+    color: color-mix(in srgb, var(--cerebr-highlight) 85%, var(--cerebr-text-color));
 }
 
 .highlight-snippet mark,

@@ -7530,19 +7530,19 @@ export function createChatHistoryUI(appContext) {
         const metaParts = [];
         if (totalHitCount > 0) metaParts.push(`命中 ${totalHitCount} 处`);
         if (matchedMessageCount > 0) metaParts.push(`分布于 ${matchedMessageCount} 条消息`);
-        if (!expanded && totalSnippetCount > visibleSnippetCount) {
-          metaParts.push(`预览 ${visibleSnippetCount}/${totalSnippetCount} 条片段`);
-        } else if (expanded && totalSnippetCount > 0) {
-          metaParts.push(`已展开 ${totalSnippetCount} 条片段`);
-        }
         meta.textContent = metaParts.join(' · ');
         actions.appendChild(meta);
 
         if (hasMoreToToggle) {
+          const separator = document.createElement('span');
+          separator.className = 'highlight-snippet-meta-separator';
+          separator.textContent = '·';
+          actions.appendChild(separator);
+
           const toggleButton = document.createElement('button');
           toggleButton.type = 'button';
           toggleButton.className = 'highlight-snippet-toggle';
-          toggleButton.textContent = expanded ? '收起' : `展开全部 ${totalSnippetCount} 条片段`;
+          toggleButton.textContent = expanded ? '收起' : '展开全部';
           toggleButton.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
