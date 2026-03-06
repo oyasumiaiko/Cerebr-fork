@@ -5876,10 +5876,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     font-size: 12px;
     color: var(--cerebr-text-color);
     margin-top: 4px;
-    max-height: 160px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding-right: 6px;
+    overflow: visible;
 }
 
 .highlight-snippet-line {
@@ -5899,6 +5896,35 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 .highlight-snippet-line:last-child {
     margin-bottom: 0;
+}
+
+.highlight-snippet-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.highlight-snippet-meta {
+    color: color-mix(in srgb, var(--cerebr-text-color) 76%, transparent);
+    font-size: 11px;
+}
+
+.highlight-snippet-toggle {
+    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 48%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+    color: var(--cerebr-highlight);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.highlight-snippet-toggle:hover {
+    background: color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
 }
 
 .highlight-snippet mark,

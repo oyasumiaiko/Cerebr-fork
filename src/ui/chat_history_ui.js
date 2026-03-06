@@ -316,6 +316,8 @@ export function createChatHistoryUI(appContext) {
   let searchCache = createEmptySearchCache();
   const SEARCH_CACHE_TTL = 3 * 60 * 1000;
   const SEARCH_CACHE_MAX_ENTRIES = 20;
+  const SEARCH_RESULT_SNIPPET_PREVIEW_LIMIT = 4;
+  const SEARCH_RESULT_SNIPPET_PREVIEW_PER_MESSAGE_LIMIT = 2;
   let searchCacheStore = new Map();
 
   function pruneSearchCacheStore() {
@@ -1594,6 +1596,18 @@ export function createChatHistoryUI(appContext) {
     return () => panel?.dataset?.runId !== runId;
   }
 
+  function countRegexMatches(sourceText, regex) {
+    if (!sourceText || !regex) return 0;
+    let count = 0;
+    regex.lastIndex = 0;
+    let match;
+    while ((match = regex.exec(sourceText)) !== null) {
+      count += 1;
+      if (match[0].length === 0) regex.lastIndex += 1;
+    }
+    return count;
+  }
+
   /**
    * 全文搜索（阶段1）：仅扫描 conversations 记录内联 messages 的文本内容。
    *
@@ -1605,33 +1619,49 @@ export function createChatHistoryUI(appContext) {
    * @param {{positiveLower:string[], negativeLower:string[], highlightLower:string[], hasPositive:boolean, hasNegative:boolean}} textPlan
    * @param {string[]|null} remainingTerms - 元数据命中后仍需匹配的正向关键词（小写）
    * @param {() => boolean} isCancelled
-   * @returns {{ cancelled: boolean, matched: boolean, blocked: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string}, remainingTerms: string[] }}
+   * @returns {{ cancelled: boolean, matched: boolean, blocked: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string, totalHitCount:number, matchedMessageCount:number}, remainingTerms: string[] }}
    */
   function scanConversationInlineMessagesForMatch(conversation, textPlan, remainingTerms, isCancelled) {
     const empty = {
       cancelled: false,
       matched: false,
       blocked: false,
-      matchInfo: { messageId: null, excerpts: [], reason: 'message' },
+      matchInfo: { messageId: null, excerpts: [], reason: 'message', totalHitCount: 0, matchedMessageCount: 0 },
       remainingTerms: []
     };
     if (!conversation || !Array.isArray(conversation.messages)) return empty;
 
-    const matchInfo = { messageId: null, excerpts: [], reason: 'message' };
-    const MAX_EXCERPTS = 20;
+    const matchInfo = { messageId: null, excerpts: [], reason: 'message', totalHitCount: 0, matchedMessageCount: 0 };
     const highlightTerms = Array.isArray(textPlan?.highlightLower) ? textPlan.highlightLower : [];
     const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
     const hasNegative = !!textPlan?.hasNegative;
+    const highlightRegex = buildHighlightRegex(highlightTerms);
+    const matchedMessageKeySet = new Set();
+
+    const registerMatchedMessage = (messageKey) => {
+      if (!messageKey || matchedMessageKeySet.has(messageKey)) return;
+      matchedMessageKeySet.add(messageKey);
+      matchInfo.matchedMessageCount = matchedMessageKeySet.size;
+    };
 
     const appendMessageExcerpts = (plainText, messageId) => {
-      if (!highlightTerms.length || matchInfo.excerpts.length >= MAX_EXCERPTS) return;
-      const excerpts = buildExcerptSegments(plainText, highlightTerms, 24, 2);
+      if (!highlightTerms.length) return;
+      const excerpts = buildExcerptSegments(plainText, highlightTerms, 24, Number.POSITIVE_INFINITY);
       if (!Array.isArray(excerpts) || excerpts.length === 0) return;
       for (const excerpt of excerpts) {
-        if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
         excerpt.messageId = messageId || null;
         matchInfo.excerpts.push(excerpt);
       }
+    };
+
+    const collectHighlightHitsForMessage = (plainText, messageId, messageKey) => {
+      if (!plainText || !highlightRegex) return 0;
+      const hitCount = countRegexMatches(plainText, highlightRegex);
+      if (hitCount <= 0) return 0;
+      matchInfo.totalHitCount += hitCount;
+      registerMatchedMessage(messageKey);
+      appendMessageExcerpts(plainText, messageId);
+      return hitCount;
     };
 
     const scope = resolveSearchScope(textPlan);
@@ -1639,9 +1669,12 @@ export function createChatHistoryUI(appContext) {
       const positiveTerms = Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : [];
       const hasPositive = positiveTerms.length > 0;
 
-      for (const message of conversation.messages) {
+      for (let index = 0; index < conversation.messages.length; index += 1) {
+        const message = conversation.messages[index];
         if (isCancelled()) return { ...empty, cancelled: true };
         if (!message) continue;
+        const messageId = typeof message?.id === 'string' ? message.id : '';
+        const messageKey = messageId || `__message_${index}`;
 
         const plainText = extractMessagePlainText(message);
 
@@ -1667,11 +1700,10 @@ export function createChatHistoryUI(appContext) {
               }
             }
             if (matchedInMessage) {
-              if (!matchInfo.messageId && message.id) {
-                matchInfo.messageId = message.id;
+              if (!matchInfo.messageId && messageId) {
+                matchInfo.messageId = messageId;
               }
-              appendMessageExcerpts(plainText, message.id || '');
-              if (matchInfo.excerpts.length >= MAX_EXCERPTS) break;
+              collectHighlightHitsForMessage(plainText, messageId, messageKey);
             }
           }
           continue;
@@ -1691,9 +1723,12 @@ export function createChatHistoryUI(appContext) {
 
     const remainingSet = new Set(Array.isArray(remainingTerms) ? remainingTerms : (textPlan?.positiveLower || []));
 
-    for (const message of conversation.messages) {
+    for (let index = 0; index < conversation.messages.length; index += 1) {
+      const message = conversation.messages[index];
       if (isCancelled()) return { ...empty, cancelled: true };
       if (!message) continue;
+      const messageId = typeof message?.id === 'string' ? message.id : '';
+      const messageKey = messageId || `__message_${index}`;
 
       const plainText = extractMessagePlainText(message);
 
@@ -1723,20 +1758,11 @@ export function createChatHistoryUI(appContext) {
           }
         }
 
-        if (matchedInMessage && !matchInfo.messageId && message.id) {
-          matchInfo.messageId = message.id;
+        if (matchedInMessage && !matchInfo.messageId && messageId) {
+          matchInfo.messageId = messageId;
         }
 
-        if (highlightTerms.length && matchInfo.excerpts.length < MAX_EXCERPTS) {
-          const hasHighlightTerm = highlightTerms.some(term => term && lowerText.includes(term));
-          if (hasHighlightTerm) {
-            appendMessageExcerpts(plainText, message.id || '');
-          }
-        }
-
-        if (!hasNegative && remainingSet.size === 0 && matchInfo.excerpts.length >= MAX_EXCERPTS) {
-          break;
-        }
+        collectHighlightHitsForMessage(plainText, messageId, messageKey);
         continue;
       }
 
@@ -1766,7 +1792,7 @@ export function createChatHistoryUI(appContext) {
    * @param {HTMLElement} panel - 用于 runId 取消判断
    * @param {string} runId
    * @param {string[]|null} [remainingTerms=null] - 若已在元数据中匹配过，传入剩余需要匹配的正向词
-   * @returns {Promise<{messageId:string|null, excerpts:Array<Object>, reason:string}|null>}
+   * @returns {Promise<{messageId:string|null, excerpts:Array<Object>, reason:string, totalHitCount:number, matchedMessageCount:number}|null>}
    */
   async function scanConversationForTextMatch(conversationId, textPlan, panel, runId, remainingTerms = null) {
     if (!conversationId) return null;
@@ -1880,11 +1906,15 @@ export function createChatHistoryUI(appContext) {
       const termLower = rawTerm.toLowerCase();
       if (seen.has(termLower)) return;
       seen.add(termLower);
-      const index = lowerText.indexOf(termLower);
-      if (index === -1) return;
-      const start = Math.max(0, index - contextLength);
-      const end = Math.min(sourceText.length, index + termLower.length + contextLength);
-      ranges.push({ start, end });
+      let fromIndex = 0;
+      while (fromIndex < lowerText.length) {
+        const index = lowerText.indexOf(termLower, fromIndex);
+        if (index === -1) break;
+        const start = Math.max(0, index - contextLength);
+        const end = Math.min(sourceText.length, index + termLower.length + contextLength);
+        ranges.push({ start, end });
+        fromIndex = index + Math.max(1, termLower.length);
+      }
     });
 
     if (!ranges.length) return [];
@@ -5764,7 +5794,13 @@ export function createChatHistoryUI(appContext) {
 
               if (!needsMessageScan) {
                 matchedEntries.push({ index: batchStart + offset, data: historyMeta });
-                matchInfoMap.set(historyMeta.id, { messageId: null, excerpts: [], reason: 'meta' });
+                matchInfoMap.set(historyMeta.id, {
+                  messageId: null,
+                  excerpts: [],
+                  reason: 'meta',
+                  totalHitCount: 0,
+                  matchedMessageCount: 0
+                });
                 processedCount++;
                 updateProgress();
               } else {
@@ -6904,6 +6940,105 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
+  function getSearchSnippetExpandedConversationIds(panel) {
+    const panelNode = panel || document.getElementById('chat-history-panel');
+    if (!panelNode) return new Set();
+    if (!(panelNode._searchSnippetExpandedByCache instanceof Map)) {
+      panelNode._searchSnippetExpandedByCache = new Map();
+    }
+    const cacheKey = panelNode.dataset.searchCacheKey || panelNode.dataset.normalizedFilter || '__default__';
+    let idSet = panelNode._searchSnippetExpandedByCache.get(cacheKey);
+    if (!(idSet instanceof Set)) {
+      idSet = new Set();
+      panelNode._searchSnippetExpandedByCache.set(cacheKey, idSet);
+    }
+    return idSet;
+  }
+
+  function isSearchSnippetExpanded(panel, conversationId) {
+    if (!conversationId) return false;
+    return getSearchSnippetExpandedConversationIds(panel).has(conversationId);
+  }
+
+  function setSearchSnippetExpanded(panel, conversationId, expanded) {
+    if (!conversationId) return;
+    const idSet = getSearchSnippetExpandedConversationIds(panel);
+    if (expanded) {
+      idSet.add(conversationId);
+    } else {
+      idSet.delete(conversationId);
+    }
+  }
+
+  function buildSearchSnippetPreviewExcerpts(excerpts, previewLimit = SEARCH_RESULT_SNIPPET_PREVIEW_LIMIT) {
+    const list = Array.isArray(excerpts) ? excerpts : [];
+    if (!list.length || previewLimit <= 0) return [];
+    const preview = [];
+    const usedIndexes = new Set();
+    const perMessageCount = new Map();
+
+    for (let index = 0; index < list.length && preview.length < previewLimit; index += 1) {
+      const excerpt = list[index];
+      if (!excerpt) continue;
+      const messageKey = excerpt.messageId || `__excerpt_${index}`;
+      const usedCount = perMessageCount.get(messageKey) || 0;
+      if (usedCount >= SEARCH_RESULT_SNIPPET_PREVIEW_PER_MESSAGE_LIMIT) continue;
+      perMessageCount.set(messageKey, usedCount + 1);
+      preview.push(excerpt);
+      usedIndexes.add(index);
+    }
+
+    for (let index = 0; index < list.length && preview.length < previewLimit; index += 1) {
+      if (usedIndexes.has(index)) continue;
+      const excerpt = list[index];
+      if (!excerpt) continue;
+      preview.push(excerpt);
+    }
+
+    return preview;
+  }
+
+  function createSearchSnippetLineElement(excerpt, conversationId, keywordColorByLower) {
+    if (!excerpt) return null;
+    const line = document.createElement('div');
+    line.className = 'highlight-snippet-line';
+    if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
+    appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
+    if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
+    bindSearchSnippetLineJump(line, conversationId, excerpt.messageId || '');
+    return line;
+  }
+
+  function buildFallbackSearchSnippetData(messages, highlightTerms) {
+    const list = Array.isArray(messages) ? messages : [];
+    const excerpts = [];
+    const matchedMessageKeySet = new Set();
+    let totalHitCount = 0;
+    const highlightRegex = buildHighlightRegex(highlightTerms);
+
+    for (let index = 0; index < list.length; index += 1) {
+      const msg = list[index];
+      const plainText = extractMessagePlainText(msg);
+      if (!plainText || !highlightRegex) continue;
+      const hitCount = countRegexMatches(plainText, highlightRegex);
+      if (hitCount <= 0) continue;
+      totalHitCount += hitCount;
+      matchedMessageKeySet.add(msg?.id || `__message_${index}`);
+      const excerptList = buildExcerptSegments(plainText, highlightTerms, 24, Number.POSITIVE_INFINITY);
+      if (!Array.isArray(excerptList) || excerptList.length === 0) continue;
+      excerptList.forEach((excerpt) => {
+        excerpt.messageId = msg?.id || '';
+        excerpts.push(excerpt);
+      });
+    }
+
+    return {
+      excerpts,
+      totalHitCount,
+      matchedMessageCount: matchedMessageKeySet.size
+    };
+  }
+
   function resolveThreadInfoFromMessage(conversation, messageId) {
     if (!conversation || !messageId) return null;
     const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
@@ -7081,7 +7216,7 @@ export function createChatHistoryUI(appContext) {
     return rawSummary || '无摘要';
   }
 
-  function createConversationItemElement(conv, highlightPlan, isPinned) {
+  function createConversationItemElement(conv, highlightPlan, isPinned, panel = null) {
     const item = document.createElement('div');
     item.className = 'chat-history-item';
     item.setAttribute('data-id', conv.id);
@@ -7366,75 +7501,75 @@ export function createChatHistoryUI(appContext) {
     // 说明：不再使用“纯 hover + 延迟”的方式触发，避免日常浏览时预览框频繁弹出遮挡内容。
     item._previewHoverMeta = hoverMeta;
 
-    let snippetRendered = false;
-    if (hasHighlightTerms && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
+    const renderSearchSnippetBlock = (snippetData) => {
+      if (!snippetData || !Array.isArray(snippetData.excerpts) || snippetData.excerpts.length === 0) return false;
+      const allExcerpts = snippetData.excerpts;
+      const expanded = isSearchSnippetExpanded(panel, conv.id);
+      const previewExcerpts = buildSearchSnippetPreviewExcerpts(allExcerpts);
+      const visibleExcerpts = expanded ? allExcerpts : previewExcerpts;
       const snippetDiv = document.createElement('div');
       snippetDiv.className = 'highlight-snippet';
-      const perMessageLineCount = new Map();
-      searchMatchInfo.excerpts.forEach(excerpt => {
-        const messageId = excerpt.messageId || '';
-        const usedCount = perMessageLineCount.get(messageId) || 0;
-        if (usedCount >= 2) return;
-        perMessageLineCount.set(messageId, usedCount + 1);
-        const line = document.createElement('div');
-        line.className = 'highlight-snippet-line';
-        if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
-        appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
-        if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
-        bindSearchSnippetLineJump(line, conv.id, messageId);
-        snippetDiv.appendChild(line);
+
+      visibleExcerpts.forEach((excerpt) => {
+        const line = createSearchSnippetLineElement(excerpt, conv.id, keywordColorByLower);
+        if (line) snippetDiv.appendChild(line);
       });
+
+      const totalSnippetCount = allExcerpts.length;
+      const visibleSnippetCount = visibleExcerpts.length;
+      const totalHitCount = Math.max(0, Number(snippetData.totalHitCount || 0));
+      const matchedMessageCount = Math.max(0, Number(snippetData.matchedMessageCount || 0));
+      const hasMoreToToggle = totalSnippetCount > previewExcerpts.length;
+      const shouldShowMeta = totalHitCount > 0 || matchedMessageCount > 0 || hasMoreToToggle;
+      if (shouldShowMeta) {
+        const actions = document.createElement('div');
+        actions.className = 'highlight-snippet-actions';
+
+        const meta = document.createElement('span');
+        meta.className = 'highlight-snippet-meta';
+        const metaParts = [];
+        if (totalHitCount > 0) metaParts.push(`命中 ${totalHitCount} 处`);
+        if (matchedMessageCount > 0) metaParts.push(`分布于 ${matchedMessageCount} 条消息`);
+        if (!expanded && totalSnippetCount > visibleSnippetCount) {
+          metaParts.push(`预览 ${visibleSnippetCount}/${totalSnippetCount} 条片段`);
+        } else if (expanded && totalSnippetCount > 0) {
+          metaParts.push(`已展开 ${totalSnippetCount} 条片段`);
+        }
+        meta.textContent = metaParts.join(' · ');
+        actions.appendChild(meta);
+
+        if (hasMoreToToggle) {
+          const toggleButton = document.createElement('button');
+          toggleButton.type = 'button';
+          toggleButton.className = 'highlight-snippet-toggle';
+          toggleButton.textContent = expanded ? '收起' : `展开全部 ${totalSnippetCount} 条片段`;
+          toggleButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setSearchSnippetExpanded(panel, conv.id, !expanded);
+            item.replaceWith(createConversationItemElement(conv, highlightPlan, isPinned, panel));
+          });
+          actions.appendChild(toggleButton);
+        }
+
+        snippetDiv.appendChild(actions);
+      }
+
       mainDiv.appendChild(snippetDiv);
-      snippetRendered = true;
+      return true;
+    };
+
+    let snippetRendered = false;
+    if (hasHighlightTerms && searchMatchInfo && Array.isArray(searchMatchInfo.excerpts) && searchMatchInfo.excerpts.length) {
+      snippetRendered = renderSearchSnippetBlock({
+        excerpts: searchMatchInfo.excerpts,
+        totalHitCount: searchMatchInfo.totalHitCount,
+        matchedMessageCount: searchMatchInfo.matchedMessageCount
+      });
     }
 
     if (!snippetRendered && hasHighlightTerms && conv.messages && Array.isArray(conv.messages)) {
-      const snippets = [];
-      let totalMatches = 0;
-      const highlightRegex = buildHighlightRegex(highlightTerms);
-
-      for (const msg of conv.messages) {
-        const plainText = extractMessagePlainText(msg);
-        if (!plainText || !highlightRegex) continue;
-
-        highlightRegex.lastIndex = 0;
-        let matchCount = 0;
-        let match;
-        while ((match = highlightRegex.exec(plainText)) !== null) {
-          matchCount++;
-          if (match[0].length === 0) highlightRegex.lastIndex += 1;
-        }
-        if (matchCount === 0) continue;
-        totalMatches += matchCount;
-
-        if (snippets.length < 8) {
-          const excerpts = buildExcerptSegments(plainText, highlightTerms);
-          if (!Array.isArray(excerpts) || excerpts.length === 0) continue;
-          for (const excerpt of excerpts) {
-            if (snippets.length >= 8) break;
-            const line = document.createElement('div');
-            line.className = 'highlight-snippet-line';
-            if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
-            appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
-            if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
-            bindSearchSnippetLineJump(line, conv.id, msg.id || '');
-            snippets.push(line);
-          }
-        }
-      }
-
-      if (snippets.length > 0) {
-        const snippetDiv = document.createElement('div');
-        snippetDiv.className = 'highlight-snippet';
-        snippets.forEach((line) => snippetDiv.appendChild(line));
-        if (totalMatches > snippets.length) {
-          const moreMatchesLine = document.createElement('div');
-          moreMatchesLine.className = 'highlight-snippet-line';
-          moreMatchesLine.textContent = `…… 共 ${totalMatches} 匹配`;
-          snippetDiv.appendChild(moreMatchesLine);
-        }
-        mainDiv.appendChild(snippetDiv);
-      }
+      snippetRendered = renderSearchSnippetBlock(buildFallbackSearchSnippetData(conv.messages, highlightTerms));
     }
 
     item.addEventListener('click', async () => {
@@ -7614,7 +7749,7 @@ export function createChatHistoryUI(appContext) {
         }
       }
 
-      const itemElement = createConversationItemElement(conv, highlightPlan, isConvPinned);
+      const itemElement = createConversationItemElement(conv, highlightPlan, isConvPinned, panel);
       fragment.appendChild(itemElement);
       itemsRenderedInThisCall++;
     }
