@@ -317,7 +317,8 @@ export function createChatHistoryUI(appContext) {
   const SEARCH_CACHE_TTL = 3 * 60 * 1000;
   const SEARCH_CACHE_MAX_ENTRIES = 20;
   const SEARCH_RESULT_SNIPPET_PREVIEW_LIMIT = 4;
-  const SEARCH_RESULT_SNIPPET_PREVIEW_PER_MESSAGE_LIMIT = 2;
+  const SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH = 24;
+  const SEARCH_RESULT_SNIPPET_ELLIPSIS = '……';
   let searchCacheStore = new Map();
 
   function pruneSearchCacheStore() {
@@ -1644,14 +1645,12 @@ export function createChatHistoryUI(appContext) {
       matchInfo.matchedMessageCount = matchedMessageKeySet.size;
     };
 
-    const appendMessageExcerpts = (plainText, messageId) => {
+    const appendMessagePreview = (plainText, messageId) => {
       if (!highlightTerms.length) return;
-      const excerpts = buildExcerptSegments(plainText, highlightTerms, 24, Number.POSITIVE_INFINITY);
-      if (!Array.isArray(excerpts) || excerpts.length === 0) return;
-      for (const excerpt of excerpts) {
-        excerpt.messageId = messageId || null;
-        matchInfo.excerpts.push(excerpt);
-      }
+      const preview = buildMessagePreviewExcerpt(plainText, highlightTerms, SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH);
+      if (!preview) return;
+      preview.messageId = messageId || null;
+      matchInfo.excerpts.push(preview);
     };
 
     const collectHighlightHitsForMessage = (plainText, messageId, messageKey) => {
@@ -1660,7 +1659,7 @@ export function createChatHistoryUI(appContext) {
       if (hitCount <= 0) return 0;
       matchInfo.totalHitCount += hitCount;
       registerMatchedMessage(messageKey);
-      appendMessageExcerpts(plainText, messageId);
+      appendMessagePreview(plainText, messageId);
       return hitCount;
     };
 
@@ -1711,7 +1710,7 @@ export function createChatHistoryUI(appContext) {
 
       }
 
-      const matched = !!matchInfo.messageId;
+      const matched = !!matchInfo.messageId || matchInfo.matchedMessageCount > 0;
       return {
         cancelled: false,
         matched,
@@ -1891,7 +1890,7 @@ export function createChatHistoryUI(appContext) {
     return segments;
   }
 
-  function buildExcerptSegments(sourceText, highlightTerms, contextLength = 24, maxLines = 2) {
+  function collectHighlightContextRanges(sourceText, highlightTerms, contextLength = SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH) {
     if (!sourceText) return [];
     const terms = (Array.isArray(highlightTerms) ? highlightTerms : [])
       .map(term => (typeof term === 'string' ? term.trim() : ''))
@@ -1935,40 +1934,34 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
-    let groups = collapsed.map(range => ({ parts: [range] }));
-    while (groups.length > maxLines) {
-      let bestIndex = 0;
-      let bestGap = Infinity;
-      for (let i = 0; i < groups.length - 1; i += 1) {
-        const current = groups[i].parts[groups[i].parts.length - 1];
-        const next = groups[i + 1].parts[0];
-        const gap = next.start - current.end;
-        if (gap < bestGap) {
-          bestGap = gap;
-          bestIndex = i;
-        }
-      }
-      const merged = {
-        parts: groups[bestIndex].parts.concat(groups[bestIndex + 1].parts)
-      };
-      groups.splice(bestIndex, 2, merged);
-    }
+    return collapsed;
+  }
 
-    return groups.map((group) => {
-      const parts = group.parts.slice().sort((a, b) => a.start - b.start);
-      const snippetParts = parts
-        .map(part => sourceText.slice(part.start, part.end).trim())
-        .filter(Boolean);
-      if (!snippetParts.length) return null;
-      const snippet = snippetParts.join(' … ');
-      const segments = buildHighlightSegments(snippet, highlightTerms);
-      if (!segments) return null;
-      return {
-        segments,
-        prefixEllipsis: parts[0].start > 0,
-        suffixEllipsis: parts[parts.length - 1].end < sourceText.length
-      };
-    }).filter(Boolean);
+  /**
+   * 基于单条消息内全部命中位置生成一行预览。
+   * 规则：
+   * - 每个命中点保留固定上下文；
+   * - 彼此靠近的片段自动合并；
+   * - 距离较远的部分以省略号连接，保持原始顺序，避免同一消息被拆成多行。
+   */
+  function buildMessagePreviewExcerpt(sourceText, highlightTerms, contextLength = SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH) {
+    const ranges = collectHighlightContextRanges(sourceText, highlightTerms, contextLength);
+    if (!ranges.length) return null;
+
+    const snippetParts = ranges
+      .map(range => sourceText.slice(range.start, range.end).trim())
+      .filter(Boolean);
+    if (!snippetParts.length) return null;
+
+    const snippet = snippetParts.join(SEARCH_RESULT_SNIPPET_ELLIPSIS);
+    const segments = buildHighlightSegments(snippet, highlightTerms);
+    if (!segments) return null;
+
+    return {
+      segments,
+      prefixEllipsis: ranges[0].start > 0,
+      suffixEllipsis: ranges[ranges.length - 1].end < sourceText.length
+    };
   }
 
   function appendHighlightSegments(container, segments, keywordColorByLower = null) {
@@ -3631,7 +3624,7 @@ export function createChatHistoryUI(appContext) {
     const metaParts = [];
     if (scannedCount) metaParts.push(`遍历 ${scannedCount} 条会话`);
     metaParts.push(`匹配 ${resultCount} 条聊天记录`);
-    if (excerptCount) metaParts.push(`提取 ${excerptCount} 条片段`);
+    if (excerptCount) metaParts.push(`提取 ${excerptCount} 条消息预览`);
     if (durationText) metaParts.push(`耗时 ${durationText}`);
     if (reused) metaParts.push('缓存结果');
 
@@ -6973,38 +6966,16 @@ export function createChatHistoryUI(appContext) {
   function buildSearchSnippetPreviewExcerpts(excerpts, previewLimit = SEARCH_RESULT_SNIPPET_PREVIEW_LIMIT) {
     const list = Array.isArray(excerpts) ? excerpts : [];
     if (!list.length || previewLimit <= 0) return [];
-    const preview = [];
-    const usedIndexes = new Set();
-    const perMessageCount = new Map();
-
-    for (let index = 0; index < list.length && preview.length < previewLimit; index += 1) {
-      const excerpt = list[index];
-      if (!excerpt) continue;
-      const messageKey = excerpt.messageId || `__excerpt_${index}`;
-      const usedCount = perMessageCount.get(messageKey) || 0;
-      if (usedCount >= SEARCH_RESULT_SNIPPET_PREVIEW_PER_MESSAGE_LIMIT) continue;
-      perMessageCount.set(messageKey, usedCount + 1);
-      preview.push(excerpt);
-      usedIndexes.add(index);
-    }
-
-    for (let index = 0; index < list.length && preview.length < previewLimit; index += 1) {
-      if (usedIndexes.has(index)) continue;
-      const excerpt = list[index];
-      if (!excerpt) continue;
-      preview.push(excerpt);
-    }
-
-    return preview;
+    return list.slice(0, previewLimit);
   }
 
   function createSearchSnippetLineElement(excerpt, conversationId, keywordColorByLower) {
     if (!excerpt) return null;
     const line = document.createElement('div');
     line.className = 'highlight-snippet-line';
-    if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode('…'));
+    if (excerpt.prefixEllipsis) line.appendChild(document.createTextNode(SEARCH_RESULT_SNIPPET_ELLIPSIS));
     appendHighlightSegments(line, excerpt.segments, keywordColorByLower);
-    if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode('…'));
+    if (excerpt.suffixEllipsis) line.appendChild(document.createTextNode(SEARCH_RESULT_SNIPPET_ELLIPSIS));
     bindSearchSnippetLineJump(line, conversationId, excerpt.messageId || '');
     return line;
   }
@@ -7024,12 +6995,10 @@ export function createChatHistoryUI(appContext) {
       if (hitCount <= 0) continue;
       totalHitCount += hitCount;
       matchedMessageKeySet.add(msg?.id || `__message_${index}`);
-      const excerptList = buildExcerptSegments(plainText, highlightTerms, 24, Number.POSITIVE_INFINITY);
-      if (!Array.isArray(excerptList) || excerptList.length === 0) continue;
-      excerptList.forEach((excerpt) => {
-        excerpt.messageId = msg?.id || '';
-        excerpts.push(excerpt);
-      });
+      const preview = buildMessagePreviewExcerpt(plainText, highlightTerms, SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH);
+      if (!preview) continue;
+      preview.messageId = msg?.id || '';
+      excerpts.push(preview);
     }
 
     return {
