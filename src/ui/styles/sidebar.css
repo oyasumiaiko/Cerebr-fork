@@ -2734,15 +2734,14 @@ input:checked + .slider::before {
     gap: 10px;
 }
 
-/* 让右侧自定义参数区域撑满与左侧等高 */
+/* 右侧改为两段布局：保留“自定义参数”，并让“预处理模板”补位占用隐藏提示词后的空间。 */
 .api-card.expanded .api-form-right {
     min-height: 100%;
     display: grid;
-    grid-template-rows: repeat(3, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
     gap: 10px;
 }
 .api-card.expanded .api-form-right .custom-params-group,
-.api-card.expanded .api-form-right .custom-system-prompt-group,
 .api-card.expanded .api-form-right .user-message-template-group {
     display: flex;
     flex-direction: column;
@@ -2763,6 +2762,11 @@ input:checked + .slider::before {
     flex-direction: column;
     gap: 4px;
     height: 100%;
+}
+
+/* 产品要求：隐藏 API 设置中的“自定义提示词”字段，但保留数据结构兼容旧配置。 */
+.custom-system-prompt-group {
+    display: none;
 }
 
 .form-group-header {
