@@ -1240,11 +1240,225 @@ export function createMessageSender(appContext) {
   function enqueueConversationSend(queueKey, queuedTask) {
     const queue = ensureConversationSendQueue(queueKey);
     queue.push(queuedTask);
+    refreshCurrentConversationQueuedSendPreview();
     return queue.length;
   }
 
   function hasQueuedMessagesForConversation(queueKey) {
     return getConversationSendQueue(queueKey).length > 0;
+  }
+
+  /**
+   * 解析排队项里的图片快照，抽取成安全、只读的缩略图数据。
+   *
+   * 说明：
+   * - queue 中冻结的是输入区 HTML，其中包含删除按钮等交互结构；
+   * - 顶部预览只需要“看见有哪些图”，不应把旧输入控件直接搬到消息区；
+   * - 因此这里仅提取 img 的 src / alt，后续用全新 DOM 渲染静态缩略图。
+   *
+   * @param {string} imagesHtml
+   * @returns {Array<{src: string, alt: string}>}
+   */
+  function extractQueuedPreviewImages(imagesHtml) {
+    if (typeof imagesHtml !== 'string' || !imagesHtml.includes('<img')) return [];
+
+    const scratch = document.createElement('div');
+    scratch.innerHTML = imagesHtml;
+
+    return Array.from(scratch.querySelectorAll('img'))
+      .map((img) => ({
+        src: (img.getAttribute('src') || '').trim(),
+        alt: (img.getAttribute('alt') || '').trim()
+      }))
+      .filter((img) => !!img.src);
+  }
+
+  /**
+   * 将内部 queue task 规整成 UI 可直接消费的只读预览数据。
+   *
+   * 这样做的好处：
+   * - 队列 UI 与真正发送逻辑解耦；
+   * - 后续如果 queue task 结构演进，只需维护这一处映射；
+   * - 也方便统一处理“文本为空但其实是图片消息 / regenerate 请求”的占位文案。
+   *
+   * @param {{options?: Object, queuedAt?: number}|null|undefined} queuedTask
+   * @returns {{
+   *   text: string,
+   *   rawText: string,
+   *   imageCount: number,
+   *   images: Array<{src: string, alt: string}>,
+   *   hasScreenshot: boolean,
+   *   regenerateMode: boolean
+   * }}
+   */
+  function buildQueuedTaskPreview(queuedTask) {
+    const options = (queuedTask?.options && typeof queuedTask.options === 'object')
+      ? queuedTask.options
+      : {};
+    const rawText = (typeof options.originalMessageText === 'string')
+      ? options.originalMessageText
+      : '';
+    const normalizedText = rawText.trim();
+    const images = extractQueuedPreviewImages(options.inputImagesHtmlSnapshot || '');
+    const imageCount = images.length;
+    const hasScreenshot = !!(
+      options.inputHasScreenshotSnapshot
+      || images.some((img) => (img.alt || '').trim() === 'page-screenshot.png')
+    );
+    const regenerateMode = !!options.regenerateMode;
+
+    let fallbackText = '（排队中的消息）';
+    if (regenerateMode) {
+      fallbackText = '（排队中的重新生成请求）';
+    } else if (hasScreenshot) {
+      fallbackText = imageCount > 0 ? '（排队中的截图消息）' : '（排队中的截图请求）';
+    } else if (imageCount > 0) {
+      fallbackText = '（排队中的图片消息）';
+    }
+
+    return {
+      text: normalizedText || fallbackText,
+      rawText,
+      imageCount,
+      images,
+      hasScreenshot,
+      regenerateMode
+    };
+  }
+
+  function getConversationQueuedSendPreviewContainer() {
+    return chatContainer?.querySelector?.('.conversation-send-queue-preview') || null;
+  }
+
+  function ensureConversationQueuedSendPreviewContainer() {
+    if (!chatContainer) return null;
+
+    let container = getConversationQueuedSendPreviewContainer();
+    if (!container) {
+      container = document.createElement('section');
+      container.className = 'conversation-send-queue-preview';
+      container.setAttribute('aria-live', 'polite');
+      container.setAttribute('aria-label', '当前会话待发送消息队列');
+    }
+
+    if (chatContainer.firstElementChild !== container) {
+      chatContainer.prepend(container);
+    }
+
+    return container;
+  }
+
+  /**
+   * 刷新“当前会话待发送队列”的顶部预览。
+   *
+   * 交互目标：
+   * - 用户在同一会话里连续发送多条消息时，能立刻看到哪些消息已排队；
+   * - 只展示“当前激活会话”的 queue，避免不同会话串 UI；
+   * - FIFO 顺序与内部 queue 一致：越早排队的消息越靠上。
+   */
+  function refreshCurrentConversationQueuedSendPreview() {
+    const existingContainer = getConversationQueuedSendPreviewContainer();
+    const activeQueueKey = getCurrentActiveConversationQueueKey();
+    const queue = getConversationSendQueue(activeQueueKey);
+
+    if (!Array.isArray(queue) || queue.length === 0) {
+      existingContainer?.remove();
+      return;
+    }
+
+    const container = ensureConversationQueuedSendPreviewContainer();
+    if (!container) return;
+
+    container.textContent = '';
+
+    const header = document.createElement('div');
+    header.className = 'conversation-send-queue-preview__header';
+
+    const title = document.createElement('div');
+    title.className = 'conversation-send-queue-preview__title';
+    title.textContent = '待发送队列';
+
+    const count = document.createElement('div');
+    count.className = 'conversation-send-queue-preview__count';
+    count.textContent = `${queue.length} 条`;
+
+    header.appendChild(title);
+    header.appendChild(count);
+
+    const list = document.createElement('div');
+    list.className = 'conversation-send-queue-preview__list';
+
+    queue.forEach((task, index) => {
+      const preview = buildQueuedTaskPreview(task);
+      const item = document.createElement('article');
+      item.className = 'conversation-send-queue-preview__item';
+      item.setAttribute('aria-label', `待发送消息 ${index + 1}`);
+
+      const meta = document.createElement('div');
+      meta.className = 'conversation-send-queue-preview__meta';
+
+      const orderChip = document.createElement('span');
+      orderChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--order';
+      orderChip.textContent = `第 ${index + 1} 条`;
+      meta.appendChild(orderChip);
+
+      if (preview.regenerateMode) {
+        const regenerateChip = document.createElement('span');
+        regenerateChip.className = 'conversation-send-queue-preview__chip';
+        regenerateChip.textContent = '重新生成';
+        meta.appendChild(regenerateChip);
+      }
+
+      if (preview.hasScreenshot) {
+        const screenshotChip = document.createElement('span');
+        screenshotChip.className = 'conversation-send-queue-preview__chip';
+        screenshotChip.textContent = '截图';
+        meta.appendChild(screenshotChip);
+      }
+
+      if (preview.imageCount > 0) {
+        const imageChip = document.createElement('span');
+        imageChip.className = 'conversation-send-queue-preview__chip';
+        imageChip.textContent = `${preview.imageCount} 张图`;
+        meta.appendChild(imageChip);
+      }
+
+      const text = document.createElement('div');
+      text.className = 'conversation-send-queue-preview__text';
+      text.textContent = preview.text;
+      text.title = preview.rawText || preview.text;
+
+      item.appendChild(meta);
+      item.appendChild(text);
+
+      if (preview.images.length > 0) {
+        const images = document.createElement('div');
+        images.className = 'conversation-send-queue-preview__images';
+
+        preview.images.slice(0, 4).forEach((image, imageIndex) => {
+          const thumb = document.createElement('img');
+          thumb.className = 'conversation-send-queue-preview__image';
+          thumb.src = image.src;
+          thumb.alt = image.alt || `queued-image-${imageIndex + 1}`;
+          thumb.loading = 'lazy';
+          images.appendChild(thumb);
+        });
+
+        if (preview.images.length > 4) {
+          const more = document.createElement('span');
+          more.className = 'conversation-send-queue-preview__more';
+          more.textContent = `+${preview.images.length - 4}`;
+          images.appendChild(more);
+        }
+
+        item.appendChild(images);
+      }
+
+      list.appendChild(item);
+    });
+
+    container.appendChild(header);
+    container.appendChild(list);
   }
 
   function cloneDataSafely(value) {
@@ -1314,12 +1528,14 @@ export function createMessageSender(appContext) {
     const fromQueue = conversationSendQueues.get(normalizedFromKey);
     if (!Array.isArray(fromQueue) || fromQueue.length === 0) {
       conversationSendQueues.delete(normalizedFromKey);
+      refreshCurrentConversationQueuedSendPreview();
       return;
     }
 
     const targetQueue = ensureConversationSendQueue(normalizedToKey);
     targetQueue.push(...fromQueue);
     conversationSendQueues.delete(normalizedFromKey);
+    refreshCurrentConversationQueuedSendPreview();
   }
 
   function isConversationQueueKeyActive(queueKey) {
@@ -1392,6 +1608,7 @@ export function createMessageSender(appContext) {
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
+    refreshCurrentConversationQueuedSendPreview();
     if (!nextTask || !nextTask.options) {
       if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
         scheduleConversationQueueFlush(normalizedQueueKey);
@@ -1489,6 +1706,7 @@ export function createMessageSender(appContext) {
 
     currentConversationId = nextConversationId || null;
     clearBackgroundCompletedConversationMarker(nextConversationId);
+    refreshCurrentConversationQueuedSendPreview();
 
     try {
       services.conversationPresence?.setActiveConversationId?.(currentConversationId);

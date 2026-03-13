@@ -532,6 +532,137 @@ body.standalone-mode #empty-state-repomix {
     scrollbar-gutter: stable;
 }
 
+/* 当前会话的待发送队列预览：
+   - 只展示尚未真正发出的 queue 项；
+   - 放在主聊天区顶部，并通过 sticky 保持在滚动时可见；
+   - 多条消息按 FIFO 上下堆叠，最早排队的消息始终在最上面。 */
+#chat-container > .conversation-send-queue-preview {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px dashed color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-border-color) 74%);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 78%, transparent);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+#chat-container > .conversation-send-queue-preview[hidden] {
+    display: none !important;
+}
+
+.conversation-send-queue-preview__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.conversation-send-queue-preview__title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--cerebr-text-color);
+    opacity: 0.9;
+}
+
+.conversation-send-queue-preview__count {
+    font-size: 12px;
+    color: var(--cerebr-text-color);
+    opacity: 0.7;
+}
+
+.conversation-send-queue-preview__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: min(38vh, 320px);
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.conversation-send-queue-preview__item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(100%, 720px);
+    margin-left: auto;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cerebr-message-user-bg) 88%, transparent);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.conversation-send-queue-preview__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.conversation-send-queue-preview__chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--cerebr-text-color);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 50%, transparent);
+    opacity: 0.85;
+}
+
+.conversation-send-queue-preview__chip--order {
+    background: color-mix(in srgb, var(--cerebr-highlight) 18%, transparent);
+    opacity: 1;
+}
+
+.conversation-send-queue-preview__text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    font-size: var(--cerebr-font-size);
+    line-height: 1.45;
+    color: var(--cerebr-text-color);
+    max-height: 11.6em;
+    overflow-y: auto;
+}
+
+.conversation-send-queue-preview__images {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.conversation-send-queue-preview__image,
+.conversation-send-queue-preview__more {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    flex: 0 0 auto;
+}
+
+.conversation-send-queue-preview__image {
+    object-fit: cover;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.conversation-send-queue-preview__more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cerebr-text-color);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 62%, transparent);
+}
+
 /* 侧栏模式也保留阅读尾部留白，确保最后一段内容可滚到更舒适位置。 */
 html:not(.fullscreen-mode) #chat-container {
     padding-bottom: calc(15px + var(--cerebr-reading-tail-space, 90vh));
