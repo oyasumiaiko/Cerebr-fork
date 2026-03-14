@@ -1373,7 +1373,8 @@ function extractImportantDOM() {
     'iframe', 'noscript', 'video',
     '[role="complementary"]', '[role="navigation"]',
     '.sidebar', '.nav', '.footer', '.header',
-    '.immersive-translate-target-inner', 'img', 'svg'
+    '.immersive-translate-target-inner', 'img', 'svg',
+    '#pagetual-sideController'
   ];
   selectorsToRemove.forEach(selector => {
     clone.querySelectorAll(selector).forEach(el => el.remove());
