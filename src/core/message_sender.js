@@ -210,6 +210,8 @@ export function createMessageSender(appContext) {
   const conversationQueueDrainLocks = new Set();
   let draftConversationQueueSerial = 0;
   let activeDraftConversationQueueKey = `__draft_queue_${draftConversationQueueSerial}`;
+  let queuedConversationTaskSerial = 0;
+  let activeQueuePreviewDragState = null;
   // 固定 API 失效提示的去重窗口，避免连续发送刷屏
   let lastInvalidApiLockNotice = { conversationId: '', at: 0 };
   // 流式标记：若当前数据流进入 <think> 段落，则持续写入思考块直到遇到 </think>
@@ -1223,26 +1225,108 @@ export function createMessageSender(appContext) {
     return resolveConversationQueueKey(activeId);
   }
 
+  function createQueuedConversationTaskId() {
+    queuedConversationTaskSerial += 1;
+    return `queued_send_${Date.now()}_${queuedConversationTaskSerial}`;
+  }
+
+  function normalizeConversationQueuedTask(queuedTask) {
+    const normalizedTask = (queuedTask && typeof queuedTask === 'object')
+      ? queuedTask
+      : {};
+
+    if (!normalizedTask.id) {
+      normalizedTask.id = createQueuedConversationTaskId();
+    }
+    normalizedTask.paused = normalizedTask.paused === true;
+    normalizedTask.options = (normalizedTask.options && typeof normalizedTask.options === 'object')
+      ? normalizedTask.options
+      : {};
+    normalizedTask.queuedAt = Number.isFinite(normalizedTask.queuedAt)
+      ? normalizedTask.queuedAt
+      : Date.now();
+
+    return normalizedTask;
+  }
+
+  function normalizeConversationSendQueueTasks(queue) {
+    if (!Array.isArray(queue)) return [];
+    queue.forEach((task, index) => {
+      queue[index] = normalizeConversationQueuedTask(task);
+    });
+    return queue;
+  }
+
   function getConversationSendQueue(queueKey) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     const queue = conversationSendQueues.get(normalizedQueueKey);
-    return Array.isArray(queue) ? queue : [];
+    return Array.isArray(queue) ? normalizeConversationSendQueueTasks(queue) : [];
   }
 
   function ensureConversationSendQueue(queueKey) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     const existing = conversationSendQueues.get(normalizedQueueKey);
-    if (Array.isArray(existing)) return existing;
+    if (Array.isArray(existing)) return normalizeConversationSendQueueTasks(existing);
     const created = [];
     conversationSendQueues.set(normalizedQueueKey, created);
     return created;
   }
 
+  function findQueuedConversationTaskIndex(queueKey, taskId) {
+    if (!taskId) return -1;
+    const queue = getConversationSendQueue(queueKey);
+    return queue.findIndex((task) => task?.id === taskId);
+  }
+
+  function getQueuedConversationTask(queueKey, taskId) {
+    const queue = getConversationSendQueue(queueKey);
+    return queue.find((task) => task?.id === taskId) || null;
+  }
+
   function enqueueConversationSend(queueKey, queuedTask) {
     const queue = ensureConversationSendQueue(queueKey);
-    queue.push(queuedTask);
+    queue.push(normalizeConversationQueuedTask(queuedTask));
     refreshCurrentConversationQueuedSendPreview();
     return queue.length;
+  }
+
+  function removeConversationQueuedTask(queueKey, taskId) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const queue = getConversationSendQueue(normalizedQueueKey);
+    const index = findQueuedConversationTaskIndex(normalizedQueueKey, taskId);
+    if (index < 0) return null;
+
+    const [removedTask] = queue.splice(index, 1);
+    if (queue.length === 0) {
+      conversationSendQueues.delete(normalizedQueueKey);
+    }
+    refreshCurrentConversationQueuedSendPreview();
+    return removedTask || null;
+  }
+
+  function setConversationQueuedTaskPaused(queueKey, taskId, paused) {
+    const task = getQueuedConversationTask(queueKey, taskId);
+    if (!task) return null;
+    task.paused = paused === true;
+    refreshCurrentConversationQueuedSendPreview();
+    return task;
+  }
+
+  function reorderConversationQueuedTask(queueKey, sourceTaskId, targetTaskId, placement = 'before') {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const queue = getConversationSendQueue(normalizedQueueKey);
+    const sourceIndex = findQueuedConversationTaskIndex(normalizedQueueKey, sourceTaskId);
+    const targetIndex = findQueuedConversationTaskIndex(normalizedQueueKey, targetTaskId);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return false;
+
+    const [movedTask] = queue.splice(sourceIndex, 1);
+    let insertIndex = targetIndex;
+    if (sourceIndex < targetIndex) insertIndex -= 1;
+    if (placement === 'after') insertIndex += 1;
+    insertIndex = Math.max(0, Math.min(insertIndex, queue.length));
+    queue.splice(insertIndex, 0, movedTask);
+    refreshCurrentConversationQueuedSendPreview();
+    return true;
   }
 
   function hasQueuedMessagesForConversation(queueKey) {
@@ -1250,28 +1334,56 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 解析排队项里的图片快照，抽取成安全、只读的缩略图数据。
+   * 解析排队项里的图片快照，抽取出“可恢复回输入框”的图片描述。
    *
-   * 说明：
-   * - queue 中冻结的是输入区 HTML，其中包含删除按钮等交互结构；
-   * - 顶部预览只需要“看见有哪些图”，不应把旧输入控件直接搬到消息区；
-   * - 因此这里仅提取 img 的 src / alt，后续用全新 DOM 渲染静态缩略图。
+   * 为什么不直接把 queue 里冻结的 HTML 整段塞回 imageContainer：
+   * - 原始 HTML 里包含删除按钮等旧 DOM，直接回填会丢失 createImageTag 绑定的事件；
+   * - 恢复到输入框时，我们需要重新生成“活的图片标签”，确保预览/删除/截图识别都正常工作；
+   * - 同时队列预览本身也只应该消费一份只读、干净的数据描述。
    *
    * @param {string} imagesHtml
-   * @returns {Array<{src: string, alt: string}>}
+   * @returns {Array<{imageData: string, fileName: string, previewSrc: string, previewAlt: string}>}
    */
-  function extractQueuedPreviewImages(imagesHtml) {
+  function extractQueuedInputImages(imagesHtml) {
     if (typeof imagesHtml !== 'string' || !imagesHtml.includes('<img')) return [];
 
     const scratch = document.createElement('div');
     scratch.innerHTML = imagesHtml;
 
-    return Array.from(scratch.querySelectorAll('img'))
-      .map((img) => ({
-        src: (img.getAttribute('src') || '').trim(),
-        alt: (img.getAttribute('alt') || '').trim()
+    const imageTags = Array.from(scratch.querySelectorAll('.image-tag'));
+    const nodes = imageTags.length > 0
+      ? imageTags
+      : Array.from(scratch.querySelectorAll('img'));
+
+    return nodes.map((node, index) => {
+      const tag = node?.classList?.contains('image-tag') ? node : null;
+      const img = tag ? tag.querySelector('img') : node;
+      const imageData = (tag?.getAttribute('data-image') || img?.getAttribute('src') || '').trim();
+      const fileName = (tag?.getAttribute('title') || img?.getAttribute('alt') || '').trim();
+      const previewSrc = (img?.getAttribute('src') || imageData).trim();
+      const previewAlt = fileName || `queued-image-${index + 1}`;
+      return {
+        imageData,
+        fileName,
+        previewSrc,
+        previewAlt
+      };
+    }).filter((image) => !!(image.imageData || image.previewSrc));
+  }
+
+  /**
+   * 解析排队项里的图片快照，抽取成安全、只读的缩略图数据。
+   *
+   * @param {string} imagesHtml
+   * @returns {Array<{src: string, alt: string}>}
+   */
+  function extractQueuedPreviewImages(imagesHtml) {
+    return extractQueuedInputImages(imagesHtml)
+      .map((image) => ({
+        src: image.previewSrc || image.imageData,
+        alt: image.previewAlt || ''
       }))
-      .filter((img) => !!img.src);
+      .filter((image) => !!image.src);
   }
 
   /**
@@ -1282,20 +1394,21 @@ export function createMessageSender(appContext) {
    * - 后续如果 queue task 结构演进，只需维护这一处映射；
    * - 也方便统一处理“文本为空但其实是图片消息 / regenerate 请求”的占位文案。
    *
-   * @param {{options?: Object, queuedAt?: number}|null|undefined} queuedTask
+   * @param {{id?: string, paused?: boolean, options?: Object, queuedAt?: number}|null|undefined} queuedTask
    * @returns {{
+   *   id: string,
    *   text: string,
    *   rawText: string,
    *   imageCount: number,
    *   images: Array<{src: string, alt: string}>,
    *   hasScreenshot: boolean,
-   *   regenerateMode: boolean
+   *   regenerateMode: boolean,
+   *   paused: boolean
    * }}
    */
   function buildQueuedTaskPreview(queuedTask) {
-    const options = (queuedTask?.options && typeof queuedTask.options === 'object')
-      ? queuedTask.options
-      : {};
+    const normalizedTask = normalizeConversationQueuedTask(queuedTask);
+    const options = normalizedTask.options;
     const rawText = (typeof options.originalMessageText === 'string')
       ? options.originalMessageText
       : '';
@@ -1318,12 +1431,14 @@ export function createMessageSender(appContext) {
     }
 
     return {
+      id: normalizedTask.id,
       text: normalizedText || fallbackText,
       rawText,
       imageCount,
       images,
       hasScreenshot,
-      regenerateMode
+      regenerateMode,
+      paused: normalizedTask.paused === true
     };
   }
 
@@ -1386,6 +1501,188 @@ export function createMessageSender(appContext) {
     return container;
   }
 
+  function clearConversationQueuePreviewDragClasses(scope = null) {
+    const root = scope || getConversationQueuedSendPreviewContainer();
+    if (!root) return;
+    root.querySelectorAll('.conversation-send-queue-preview__item').forEach((item) => {
+      item.classList.remove(
+        'conversation-send-queue-preview__item--dragging',
+        'conversation-send-queue-preview__item--drop-before',
+        'conversation-send-queue-preview__item--drop-after'
+      );
+      item.removeAttribute('data-drop-placement');
+    });
+  }
+
+  function resolveConversationQueueDropPlacement(event, itemElement) {
+    const rect = itemElement?.getBoundingClientRect?.();
+    if (!rect) return 'before';
+    const offsetY = event.clientY - rect.top;
+    return offsetY >= (rect.height / 2) ? 'after' : 'before';
+  }
+
+  function restoreQueuedTaskToComposer(task) {
+    const normalizedTask = normalizeConversationQueuedTask(task);
+    clearInputs();
+
+    const nextText = typeof normalizedTask.options.originalMessageText === 'string'
+      ? normalizedTask.options.originalMessageText
+      : '';
+    inputController?.setInputText?.(nextText);
+    if (!inputController?.setInputText && messageInput) {
+      messageInput.textContent = nextText;
+    }
+
+    try {
+      if (imageContainer) imageContainer.innerHTML = '';
+      const queuedImages = extractQueuedInputImages(normalizedTask.options.inputImagesHtmlSnapshot || '');
+      const fragment = document.createDocumentFragment();
+      queuedImages.forEach((image) => {
+        const imageTag = imageHandler?.createImageTag?.(
+          image.imageData || image.previewSrc,
+          image.fileName || ''
+        );
+        if (imageTag) {
+          fragment.appendChild(imageTag);
+        }
+      });
+      if (imageContainer) {
+        imageContainer.appendChild(fragment);
+      }
+    } catch (error) {
+      console.warn('恢复排队消息图片到输入框失败:', error);
+    }
+
+    try { messageInput?.dispatchEvent?.(new Event('input')); } catch (_) {}
+    try { appContext.services.uiManager?.resetInputHeight?.(); } catch (_) {}
+    try { appContext.services.uiManager?.updateSendButtonState?.(); } catch (_) {}
+    inputController?.focusToEnd?.();
+  }
+
+  function handleQueuePreviewEdit(queueKey, taskId) {
+    const removedTask = removeConversationQueuedTask(queueKey, taskId);
+    if (!removedTask) return;
+    restoreQueuedTaskToComposer(removedTask);
+    scheduleConversationQueueFlush(queueKey);
+  }
+
+  function handleQueuePreviewTogglePaused(queueKey, taskId) {
+    const task = getQueuedConversationTask(queueKey, taskId);
+    if (!task) return;
+    setConversationQueuedTaskPaused(queueKey, taskId, !(task.paused === true));
+    scheduleConversationQueueFlush(queueKey);
+  }
+
+  function handleQueuePreviewRemove(queueKey, taskId) {
+    const removedTask = removeConversationQueuedTask(queueKey, taskId);
+    if (!removedTask) return;
+    scheduleConversationQueueFlush(queueKey);
+  }
+
+  function createQueuePreviewActionButton(label, className, title, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `conversation-send-queue-preview__action ${className}`.trim();
+    button.textContent = label;
+    button.title = title || label;
+    button.setAttribute('aria-label', title || label);
+    if (typeof onClick === 'function') {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      });
+    }
+    return button;
+  }
+
+  function buildQueuePreviewImages(images) {
+    if (!Array.isArray(images) || images.length === 0) return null;
+    const imageWrap = document.createElement('div');
+    imageWrap.className = 'conversation-send-queue-preview__images';
+
+    images.slice(0, 3).forEach((image, imageIndex) => {
+      const thumb = document.createElement('img');
+      thumb.className = 'conversation-send-queue-preview__image';
+      thumb.src = image.src;
+      thumb.alt = image.alt || `queued-image-${imageIndex + 1}`;
+      thumb.loading = 'lazy';
+      imageWrap.appendChild(thumb);
+    });
+
+    if (images.length > 3) {
+      const more = document.createElement('span');
+      more.className = 'conversation-send-queue-preview__more';
+      more.textContent = `+${images.length - 3}`;
+      imageWrap.appendChild(more);
+    }
+
+    return imageWrap;
+  }
+
+  function bindQueuePreviewDragEvents(item, handle, queueKey, taskId, list) {
+    if (!item || !handle) return;
+    handle.draggable = true;
+    handle.addEventListener('click', (event) => event.stopPropagation());
+    handle.addEventListener('mousedown', (event) => event.stopPropagation());
+
+    handle.addEventListener('dragstart', (event) => {
+      activeQueuePreviewDragState = {
+        queueKey: resolveConversationQueueKey(queueKey),
+        taskId
+      };
+      item.classList.add('conversation-send-queue-preview__item--dragging');
+      try {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', taskId);
+      } catch (_) {}
+    });
+
+    item.addEventListener('dragover', (event) => {
+      if (!activeQueuePreviewDragState || activeQueuePreviewDragState.taskId === taskId) return;
+      if (activeQueuePreviewDragState.queueKey !== resolveConversationQueueKey(queueKey)) return;
+      event.preventDefault();
+      const placement = resolveConversationQueueDropPlacement(event, item);
+      clearConversationQueuePreviewDragClasses(list);
+      item.classList.add(`conversation-send-queue-preview__item--drop-${placement}`);
+      item.setAttribute('data-drop-placement', placement);
+    });
+
+    item.addEventListener('dragleave', (event) => {
+      const nextTarget = event.relatedTarget;
+      if (nextTarget && item.contains(nextTarget)) return;
+      item.classList.remove(
+        'conversation-send-queue-preview__item--drop-before',
+        'conversation-send-queue-preview__item--drop-after'
+      );
+      item.removeAttribute('data-drop-placement');
+    });
+
+    item.addEventListener('drop', (event) => {
+      if (!activeQueuePreviewDragState || activeQueuePreviewDragState.taskId === taskId) return;
+      if (activeQueuePreviewDragState.queueKey !== resolveConversationQueueKey(queueKey)) return;
+      event.preventDefault();
+      const placement = item.getAttribute('data-drop-placement')
+        || resolveConversationQueueDropPlacement(event, item);
+      const changed = reorderConversationQueuedTask(
+        queueKey,
+        activeQueuePreviewDragState.taskId,
+        taskId,
+        placement
+      );
+      activeQueuePreviewDragState = null;
+      clearConversationQueuePreviewDragClasses(list);
+      if (changed) {
+        scheduleConversationQueueFlush(queueKey);
+      }
+    });
+
+    handle.addEventListener('dragend', () => {
+      activeQueuePreviewDragState = null;
+      clearConversationQueuePreviewDragClasses(list);
+    });
+  }
+
   /**
    * 刷新“当前会话待发送队列”的输入框上方预览。
    *
@@ -1409,93 +1706,107 @@ export function createMessageSender(appContext) {
 
     container.textContent = '';
 
-    const header = document.createElement('div');
-    header.className = 'conversation-send-queue-preview__header';
-
-    const title = document.createElement('div');
-    title.className = 'conversation-send-queue-preview__title';
-    title.textContent = '发送队列';
-
-    const count = document.createElement('div');
-    count.className = 'conversation-send-queue-preview__count';
-    count.textContent = `排队中 ${queue.length}`;
-
-    header.appendChild(title);
-    header.appendChild(count);
-
     const list = document.createElement('div');
     list.className = 'conversation-send-queue-preview__list';
+    container.setAttribute('aria-label', `当前会话待发送消息队列，共 ${queue.length} 条`);
 
     queue.forEach((task, index) => {
       const preview = buildQueuedTaskPreview(task);
       const item = document.createElement('article');
       item.className = 'conversation-send-queue-preview__item';
       item.setAttribute('aria-label', `待发送消息 ${index + 1}`);
+      item.setAttribute('data-queue-task-id', preview.id);
+      if (preview.paused) {
+        item.classList.add('conversation-send-queue-preview__item--paused');
+      }
 
-      const meta = document.createElement('div');
-      meta.className = 'conversation-send-queue-preview__meta';
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'conversation-send-queue-preview__drag-handle';
+      handle.title = '拖动调整顺序';
+      handle.setAttribute('aria-label', `拖动调整第 ${index + 1} 条排队消息顺序`);
+      const handleIcon = document.createElement('span');
+      handleIcon.className = 'drag-handle-icon';
+      handle.appendChild(handleIcon);
+
+      const body = document.createElement('div');
+      body.className = 'conversation-send-queue-preview__body';
+
+      const summary = document.createElement('div');
+      summary.className = 'conversation-send-queue-preview__summary';
 
       const orderChip = document.createElement('span');
       orderChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--order';
-      orderChip.textContent = `队列 ${index + 1}`;
-      meta.appendChild(orderChip);
+      orderChip.textContent = `#${index + 1}`;
+      summary.appendChild(orderChip);
+
+      if (preview.paused) {
+        const pausedChip = document.createElement('span');
+        pausedChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--paused';
+        pausedChip.textContent = '已暂停';
+        summary.appendChild(pausedChip);
+      }
 
       if (preview.regenerateMode) {
         const regenerateChip = document.createElement('span');
         regenerateChip.className = 'conversation-send-queue-preview__chip';
         regenerateChip.textContent = '重新生成';
-        meta.appendChild(regenerateChip);
+        summary.appendChild(regenerateChip);
       }
 
       if (preview.hasScreenshot) {
         const screenshotChip = document.createElement('span');
         screenshotChip.className = 'conversation-send-queue-preview__chip';
         screenshotChip.textContent = '截图';
-        meta.appendChild(screenshotChip);
+        summary.appendChild(screenshotChip);
       }
 
       if (preview.imageCount > 0) {
         const imageChip = document.createElement('span');
         imageChip.className = 'conversation-send-queue-preview__chip';
-        imageChip.textContent = `${preview.imageCount} 张图`;
-        meta.appendChild(imageChip);
+        imageChip.textContent = `${preview.imageCount} 图`;
+        summary.appendChild(imageChip);
       }
 
       const text = document.createElement('div');
       text.className = 'conversation-send-queue-preview__text';
       text.textContent = preview.text;
       text.title = preview.rawText || preview.text;
+      summary.appendChild(text);
 
-      item.appendChild(meta);
-      item.appendChild(text);
+      const images = buildQueuePreviewImages(preview.images);
+      if (images) summary.appendChild(images);
 
-      if (preview.images.length > 0) {
-        const images = document.createElement('div');
-        images.className = 'conversation-send-queue-preview__images';
+      body.appendChild(summary);
 
-        preview.images.slice(0, 4).forEach((image, imageIndex) => {
-          const thumb = document.createElement('img');
-          thumb.className = 'conversation-send-queue-preview__image';
-          thumb.src = image.src;
-          thumb.alt = image.alt || `queued-image-${imageIndex + 1}`;
-          thumb.loading = 'lazy';
-          images.appendChild(thumb);
-        });
+      const actions = document.createElement('div');
+      actions.className = 'conversation-send-queue-preview__actions';
+      actions.appendChild(createQueuePreviewActionButton(
+        '修改',
+        'conversation-send-queue-preview__action--edit',
+        '移出队列并放回输入框',
+        () => handleQueuePreviewEdit(activeQueueKey, preview.id)
+      ));
+      actions.appendChild(createQueuePreviewActionButton(
+        preview.paused ? '继续' : '暂停',
+        'conversation-send-queue-preview__action--pause',
+        preview.paused ? '取消暂停，允许轮到时自动发送' : '暂停自动发送，轮到时保留在队列中',
+        () => handleQueuePreviewTogglePaused(activeQueueKey, preview.id)
+      ));
+      actions.appendChild(createQueuePreviewActionButton(
+        '移除',
+        'conversation-send-queue-preview__action--remove',
+        '从队列中删除这条消息',
+        () => handleQueuePreviewRemove(activeQueueKey, preview.id)
+      ));
 
-        if (preview.images.length > 4) {
-          const more = document.createElement('span');
-          more.className = 'conversation-send-queue-preview__more';
-          more.textContent = `+${preview.images.length - 4}`;
-          images.appendChild(more);
-        }
-
-        item.appendChild(images);
-      }
-
+      item.appendChild(handle);
+      item.appendChild(body);
+      item.appendChild(actions);
+      bindQueuePreviewDragEvents(item, handle, activeQueueKey, preview.id, list);
       list.appendChild(item);
     });
 
-    container.appendChild(header);
     container.appendChild(list);
   }
 
@@ -1636,13 +1947,19 @@ export function createMessageSender(appContext) {
     if (conversationQueueDrainLocks.has(normalizedQueueKey)) return false;
     if (hasPendingWorkForConversationQueue(normalizedQueueKey)) return false;
 
-    const queue = conversationSendQueues.get(normalizedQueueKey);
+    const queue = normalizeConversationSendQueueTasks(conversationSendQueues.get(normalizedQueueKey));
     if (!Array.isArray(queue) || queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
       return false;
     }
 
-    const nextTask = queue.shift();
+    const frontTask = normalizeConversationQueuedTask(queue[0]);
+    if (frontTask.paused) {
+      refreshCurrentConversationQueuedSendPreview();
+      return false;
+    }
+
+    const nextTask = normalizeConversationQueuedTask(queue.shift());
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
