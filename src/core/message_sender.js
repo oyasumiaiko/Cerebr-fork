@@ -7,6 +7,7 @@
 import { composeMessages } from './message_composer.js';
 import { renderUserMessageTemplateWithInjection, applyRenderedTextToMessageContent } from './message_preprocessor.js';
 import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '../utils/thoughts_parser.js';
+import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { resolveResponseHandlingMode, planStreamingRenderTransition } from './response_flow_state.js';
@@ -727,7 +728,7 @@ export function createMessageSender(appContext) {
     if (!entry || typeof entry !== 'object') return null;
     const kind = (typeof entry.kind === 'string') ? entry.kind.trim().toLowerCase() : '';
     if (kind === 'reasoning_summary') {
-      const text = (typeof entry.text === 'string') ? entry.text : '';
+      const text = normalizeResponsesReasoningText((typeof entry.text === 'string') ? entry.text : '');
       if (!text) return null;
       const normalized = {
         kind: 'reasoning_summary',
@@ -890,7 +891,7 @@ export function createMessageSender(appContext) {
         const previous = merged[existingIndex] || {};
         if (normalized.kind === 'reasoning_summary') {
           const mergedText = (typeof previous.text === 'string' && previous.text && typeof normalized.text === 'string' && normalized.text)
-            ? mergeStreamingThoughts(previous.text, normalized.text)
+            ? mergeResponsesReasoningText(previous.text, normalized.text)
             : ((typeof normalized.text === 'string' && normalized.text) ? normalized.text : (previous.text || ''));
           merged[existingIndex] = normalizeResponsesActivityTimelineEntry({
             ...previous,

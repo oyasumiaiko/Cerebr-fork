@@ -14,6 +14,7 @@
 import { renderMarkdownSafe } from '../utils/markdown_renderer.js';
 import { enhanceMermaidDiagrams } from '../utils/mermaid_renderer.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
+import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 
 /**
  * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
@@ -1133,6 +1134,11 @@ export function createMessageProcessor(appContext) {
       const title = (typeof record.title === 'string' && record.title.trim()) ? record.title.trim() : '';
       const url = (typeof record.url === 'string' && record.url.trim()) ? record.url.trim() : '';
       const pattern = (typeof record.pattern === 'string' && record.pattern.trim()) ? record.pattern.trim() : '';
+      if (String(record.action_type || '').toLowerCase() === 'find_in_page') {
+        const subject = pattern || query || '查找内容';
+        const pageLabel = title || url;
+        return pageLabel ? `${actionLabel}：${subject}（在 ${pageLabel}）` : `${actionLabel}：${subject}`;
+      }
       const subject = query || title || pattern || url;
       return subject ? `${actionLabel}：${subject}` : actionLabel;
     }
@@ -1281,7 +1287,8 @@ export function createMessageProcessor(appContext) {
 
   function getResponseActivityToolSecondaryLines(entry) {
     const lines = [];
-    if (Array.isArray(entry?.queries) && entry.queries.length > 1) {
+    const actionType = String(entry?.action_type || '').toLowerCase();
+    if (Array.isArray(entry?.queries) && entry.queries.length > 1 && actionType !== 'find_in_page') {
       lines.push(`查询：${entry.queries.join(' · ')}`);
     }
     const type = String(entry?.type || '').toLowerCase();
@@ -1291,7 +1298,7 @@ export function createMessageProcessor(appContext) {
     }
     const pattern = (typeof entry?.pattern === 'string' && entry.pattern.trim()) ? entry.pattern.trim() : '';
     const query = (typeof entry?.query === 'string' && entry.query.trim()) ? entry.query.trim() : '';
-    if (pattern && pattern !== query) {
+    if (pattern && pattern !== query && actionType !== 'find_in_page') {
       lines.push(`查找：${pattern}`);
     }
     return lines;
@@ -1299,6 +1306,9 @@ export function createMessageProcessor(appContext) {
 
   function hasResponseActivityToolDetails(entry) {
     if (!entry || typeof entry !== 'object') return false;
+    if (String(entry?.action_type || '').toLowerCase() === 'find_in_page') {
+      return false;
+    }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
@@ -1423,7 +1433,7 @@ export function createMessageProcessor(appContext) {
 
         const content = document.createElement('div');
         content.className = 'response-activity-content response-activity-content--reasoning';
-        content.innerHTML = processMathAndMarkdownFn(typeof entry.text === 'string' ? entry.text : '');
+        content.innerHTML = processMathAndMarkdownFn(normalizeResponsesReasoningText(typeof entry.text === 'string' ? entry.text : ''));
         item.appendChild(content);
         panelBodyInner.appendChild(item);
         return;
@@ -1505,12 +1515,12 @@ export function createMessageProcessor(appContext) {
         }
 
         if (Array.isArray(entry.sources) && entry.sources.length > 0) {
-          const sources = document.createElement('div');
+          const sources = document.createElement('details');
           sources.className = 'response-activity-tool-sources';
-          const sourceTitle = document.createElement('div');
-          sourceTitle.className = 'response-activity-tool-source-title';
-          sourceTitle.textContent = `来源 ${entry.sources.length}`;
-          sources.appendChild(sourceTitle);
+          const sourceSummary = document.createElement('summary');
+          sourceSummary.className = 'response-activity-tool-source-title';
+          sourceSummary.textContent = `来源 ${entry.sources.length}`;
+          sources.appendChild(sourceSummary);
 
           const sourceList = document.createElement('div');
           sourceList.className = 'response-activity-tool-source-list';
