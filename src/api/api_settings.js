@@ -56,6 +56,7 @@ const RESPONSES_PROMPT_CACHE_RETENTION_OPTIONS = Object.freeze(['in-memory', '24
 const RESPONSES_SERVICE_TIER_OPTIONS = Object.freeze(['auto', 'default', 'flex', 'scale', 'priority']);
 const RESPONSES_TRUNCATION_OPTIONS = Object.freeze(['auto', 'disabled']);
 const RESPONSES_TEXT_VERBOSITY_OPTIONS = Object.freeze(['low', 'medium', 'high']);
+const RESPONSES_WEB_SEARCH_SOURCE_INCLUDE = 'web_search_call.action.sources';
 const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
   {
     path: ['reasoning', 'effort'],
@@ -74,6 +75,13 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     defaultValue: 'medium',
     options: RESPONSES_TEXT_VERBOSITY_OPTIONS,
     help: '约束输出文本的详细程度。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'enabled'],
+    key: 'builtin_tools.web_search.enabled',
+    label: '联网搜索',
+    kind: 'boolean',
+    help: '启用后自动在 /responses 的 tools 中附加 { type: \"web_search\" }，由 OpenAI 服务端执行搜索。'
   },
   {
     path: ['max_output_tokens'],
@@ -228,6 +236,40 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     options: RESPONSES_REASONING_SUMMARY_OPTIONS
   },
   {
+    path: ['builtin_tools', 'web_search', 'external_web_access'],
+    key: 'builtin_tools.web_search.external_web_access',
+    label: '实时外网搜索',
+    kind: 'boolean',
+    help: '显式控制 web_search 是否允许实时访问外部网页；未启用时沿用 OpenAI 默认策略。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'include_sources'],
+    key: 'builtin_tools.web_search.include_sources',
+    label: '返回搜索来源',
+    kind: 'boolean',
+    help: '启用后会自动在 include 中附加 web_search_call.action.sources，便于展示与存档来源。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'filters', 'allowed_domains'],
+    key: 'builtin_tools.web_search.filters.allowed_domains',
+    label: '搜索域名白名单',
+    kind: 'json',
+    jsonMode: 'array',
+    rows: 4,
+    placeholder: '[\n  \"openai.com\"\n]',
+    help: '仅允许搜索指定域名；填写 JSON 数组。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'user_location'],
+    key: 'builtin_tools.web_search.user_location',
+    label: '搜索用户位置',
+    kind: 'json',
+    jsonMode: 'object',
+    rows: 6,
+    placeholder: '{\n  \"type\": \"approximate\",\n  \"country\": \"US\",\n  \"city\": \"San Francisco\",\n  \"region\": \"California\",\n  \"timezone\": \"America/Los_Angeles\"\n}',
+    help: '传给 web_search 的 user_location 对象。'
+  },
+  {
     path: ['stream_options', 'include_obfuscation'],
     key: 'stream_options.include_obfuscation',
     label: '流式混淆填充',
@@ -290,7 +332,7 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     label: 'Tool Choice',
     kind: 'json_or_string',
     rows: 4,
-    placeholder: 'auto\n或\n{\n  \"type\": \"allowed_tools\",\n  \"mode\": \"required\",\n  \"tools\": [\"web_search_preview\"]\n}',
+    placeholder: 'auto\n或\n{\n  \"type\": \"allowed_tools\",\n  \"mode\": \"required\",\n  \"tools\": [\"web_search\"]\n}',
     help: '可填写 none/auto/required，也可填写 JSON 对象。'
   },
   {
@@ -300,7 +342,7 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     kind: 'json',
     jsonMode: 'array',
     rows: 6,
-    placeholder: '[\n  { \"type\": \"web_search_preview\" }\n]',
+    placeholder: '[\n  { \"type\": \"web_search\" }\n]',
     help: '填写 JSON 数组。'
   }
 ]);
@@ -681,6 +723,115 @@ export function createApiManager(appContext) {
       return undefined;
     }
     return compacted;
+  }
+
+  /**
+   * 规范化字符串数组：去空白、去重，仅保留非空字符串。
+   * 主要用于 include / allowed_domains 这类列表型字段，避免把重复项写进 sync storage 或请求体。
+   * @param {any} value
+   * @returns {string[]|undefined}
+   */
+  function normalizeResponsesStringArray(value) {
+    if (!Array.isArray(value)) return undefined;
+    const next = [];
+    const seen = new Set();
+    value.forEach((item) => {
+      const text = (typeof item === 'string') ? item.trim() : '';
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      next.push(text);
+    });
+    return next.length > 0 ? next : undefined;
+  }
+
+  /**
+   * 合并字符串数组并去重，保持“已有配置在前、追加项在后”的稳定顺序。
+   * @param {any} existing
+   * @param {any} additions
+   * @returns {string[]|undefined}
+   */
+  function mergeResponsesStringArray(existing, additions) {
+    return normalizeResponsesStringArray([
+      ...(Array.isArray(existing) ? existing : []),
+      ...(Array.isArray(additions) ? additions : [])
+    ]);
+  }
+
+  /**
+   * 合并同类型 tool 定义。
+   * 设计说明：
+   * - 用户既可以用“专门开关”启用 web_search，也可以在 Tools JSON 里手写更完整的对象；
+   * - 这里选择“同类型工具做浅合并 + filters 深一层合并”，避免出现两个重复 web_search tool。
+   * @param {any} existingTool
+   * @param {Object} nextTool
+   * @returns {Object}
+   */
+  function mergeResponsesToolDefinition(existingTool, nextTool) {
+    if (!existingTool || typeof existingTool !== 'object' || Array.isArray(existingTool)) {
+      return compactResponsesApiSettingValue(nextTool);
+    }
+    const merged = {
+      ...existingTool,
+      ...nextTool
+    };
+    if ((existingTool.filters && typeof existingTool.filters === 'object' && !Array.isArray(existingTool.filters))
+      || (nextTool.filters && typeof nextTool.filters === 'object' && !Array.isArray(nextTool.filters))) {
+      merged.filters = {
+        ...(existingTool.filters || {}),
+        ...(nextTool.filters || {})
+      };
+    }
+    return compactResponsesApiSettingValue(merged);
+  }
+
+  /**
+   * 把“专门的内置工具开关”翻译为真正的 Responses API tools/include 字段。
+   * 目前先覆盖 web_search，后续若要扩展 file_search / code_interpreter，也只需在这里追加。
+   * @param {Object} settings
+   * @returns {{tools: Array<Object>, include: Array<string>}}
+   */
+  function buildResponsesBuiltinToolOverrides(settings) {
+    const builtinTools = (settings?.builtin_tools && typeof settings.builtin_tools === 'object' && !Array.isArray(settings.builtin_tools))
+      ? settings.builtin_tools
+      : null;
+    if (!builtinTools) {
+      return { tools: [], include: [] };
+    }
+
+    const tools = [];
+    const include = [];
+    const webSearch = (builtinTools.web_search && typeof builtinTools.web_search === 'object' && !Array.isArray(builtinTools.web_search))
+      ? builtinTools.web_search
+      : null;
+
+    if (webSearch?.enabled === true) {
+      const tool = { type: 'web_search' };
+
+      if (typeof webSearch.external_web_access === 'boolean') {
+        tool.external_web_access = webSearch.external_web_access;
+      }
+
+      const allowedDomains = normalizeResponsesStringArray(webSearch?.filters?.allowed_domains);
+      if (allowedDomains) {
+        tool.filters = { allowed_domains: allowedDomains };
+      }
+
+      const userLocation = compactResponsesApiSettingValue(webSearch?.user_location);
+      if (userLocation && typeof userLocation === 'object' && !Array.isArray(userLocation)) {
+        tool.user_location = userLocation;
+      }
+
+      const compactedTool = compactResponsesApiSettingValue(tool);
+      if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
+        tools.push(compactedTool);
+      }
+
+      if (webSearch.include_sources === true) {
+        include.push(RESPONSES_WEB_SEARCH_SOURCE_INCLUDE);
+      }
+    }
+
+    return { tools, include };
   }
 
   /**
@@ -4225,6 +4376,36 @@ export function createApiManager(appContext) {
 
     if (settings.conversation && settings.previous_response_id) {
       throw new Error('OpenAI Responses 配置冲突：conversation 与 previous_response_id 不能同时启用。');
+    }
+
+    const builtinToolOverrides = buildResponsesBuiltinToolOverrides(settings);
+    delete settings.builtin_tools;
+
+    if (builtinToolOverrides.tools.length > 0) {
+      const existingTools = Array.isArray(settings.tools)
+        ? settings.tools.filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        : [];
+      const mergedTools = existingTools.map(item => cloneJsonCompatible(item));
+
+      builtinToolOverrides.tools.forEach((nextTool) => {
+        const nextType = (typeof nextTool?.type === 'string') ? nextTool.type.trim() : '';
+        if (!nextType) return;
+        const existingIndex = mergedTools.findIndex((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+          return (typeof item.type === 'string' ? item.type.trim() : '') === nextType;
+        });
+        if (existingIndex >= 0) {
+          mergedTools[existingIndex] = mergeResponsesToolDefinition(mergedTools[existingIndex], nextTool);
+        } else {
+          mergedTools.push(nextTool);
+        }
+      });
+
+      settings.tools = mergedTools;
+    }
+
+    if (builtinToolOverrides.include.length > 0) {
+      settings.include = mergeResponsesStringArray(settings.include, builtinToolOverrides.include);
     }
 
     if (config?.useStreaming === false && settings.stream_options) {
