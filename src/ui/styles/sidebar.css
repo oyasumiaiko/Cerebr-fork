@@ -8557,7 +8557,8 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-entry-title,
-.message .response-activity-tool-primary {
+.message .response-activity-tool-primary,
+.message .response-activity-tool-query-stack {
     min-width: 0;
     flex: 1 1 auto;
     font-size: inherit;
@@ -8566,30 +8567,63 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-tool-primary {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.message .response-activity-tool-summary--query-row {
+.message .response-activity-tool-primary > * {
+    min-width: 0;
+}
+
+.message .response-activity-tool-action {
+    flex: 0 0 auto;
+    color: color-mix(in srgb, var(--cerebr-text-color) 42%, transparent);
+}
+
+.message .response-activity-tool-value,
+.message .response-activity-tool-link {
+    min-width: 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.message .response-activity-tool-link {
+    text-decoration: none;
+}
+
+.message .response-activity-tool-link:hover {
+    text-decoration: underline;
+}
+
+.message .response-activity-tool-summary--query-stack {
     align-items: flex-start;
 }
 
-.message .response-activity-tool-summary--query-row .response-activity-tool-primary {
-    overflow: visible;
-    text-overflow: clip;
+.message .response-activity-tool-summary--query-stack .response-activity-tool-chevron {
+    margin-top: 0.18em;
+}
+
+.message .response-activity-tool-query-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.message .response-activity-tool-query-line {
+    display: block;
+    min-width: 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
     white-space: normal;
     word-break: break-word;
 }
 
-.message .response-activity-tool-kind--ghost {
-    visibility: hidden;
-}
-
 .message .response-activity-entry-status,
 .message .response-activity-tool-status,
-.message .response-activity-tool-secondary,
-.message .response-activity-tool-source-title {
+.message .response-activity-tool-secondary {
     flex: 0 0 auto;
     font-size: inherit;
     line-height: 1.35;
@@ -8668,6 +8702,10 @@ body.chat-empty .empty-state-content {
     padding: 6px 0 0 14px;
 }
 
+.message .response-activity-tool-secondary {
+    word-break: break-word;
+}
+
 .message .response-activity-tool-arguments {
     margin: 0;
     padding: 8px 10px;
@@ -8681,52 +8719,15 @@ body.chat-empty .empty-state-content {
     overflow-x: auto;
 }
 
-.message .response-activity-tool-sources {
-    display: block;
-    border-radius: 6px;
-    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 22%, transparent);
-    background: color-mix(in srgb, var(--cerebr-bg-color) 94%, transparent);
-    overflow: hidden;
-}
-
-.message .response-activity-tool-sources > summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 6px 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    font: inherit;
-}
-
-.message .response-activity-tool-sources > summary::-webkit-details-marker {
-    display: none;
-}
-
-.message .response-activity-tool-sources[open] > summary {
-    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 18%, transparent);
-}
-
-.message .response-activity-tool-source-chevron {
-    color: color-mix(in srgb, var(--cerebr-text-color) 44%, transparent);
-    transform: rotate(0deg);
-    transition: transform 180ms ease;
-}
-
-.message .response-activity-tool-sources[open] .response-activity-tool-source-chevron {
-    transform: rotate(90deg);
-}
-
 .message .response-activity-tool-source-list {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 8px 10px 10px;
 }
 
 .message .response-activity-tool-source-link {
-    color: var(--cerebr-link-color, #3b82f6);
+    display: block;
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
     text-decoration: none;
     word-break: break-all;
     font-size: inherit;

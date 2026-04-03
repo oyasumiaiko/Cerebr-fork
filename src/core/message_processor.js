@@ -1140,16 +1140,70 @@ export function createMessageProcessor(appContext) {
       if (String(record.action_type || '').toLowerCase() === 'find_in_page') {
         const subject = pattern || query || '查找内容';
         const pageLabel = title || url;
-        return pageLabel ? `${actionLabel}：${subject}（在 ${pageLabel}）` : `${actionLabel}：${subject}`;
+        return pageLabel ? `${actionLabel} ${subject} 在 ${pageLabel}` : `${actionLabel} ${subject}`;
       }
       const subject = query || title || pattern || url;
-      return subject ? `${actionLabel}：${subject}` : actionLabel;
+      return subject ? `${actionLabel} ${subject}` : actionLabel;
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
-      return `调用函数：${name}`;
+      return `调用函数 ${name}`;
     }
     return getResponseToolCallTypeLabel(record);
+  }
+
+  /**
+   * 将工具调用主文案拆成“淡色动作词 + 正常色变量值”的结构，
+   * 这样可以用颜色层级替代多余的冒号、括号等符号噪音。
+   */
+  function buildResponseToolCallPrimaryParts(record) {
+    if (!record || typeof record !== 'object') {
+      return { action: '', value: '工具调用', valueUrl: '', locationAction: '', locationValue: '', locationUrl: '' };
+    }
+    const type = String(record.type || '').toLowerCase();
+    if (type === 'web_search_call') {
+      const actionType = String(record.action_type || '').toLowerCase();
+      const actionLabel = getResponseToolCallActionLabel(actionType);
+      const query = (typeof record.query === 'string' && record.query.trim()) ? record.query.trim() : '';
+      const title = (typeof record.title === 'string' && record.title.trim()) ? record.title.trim() : '';
+      const url = (typeof record.url === 'string' && record.url.trim()) ? record.url.trim() : '';
+      const pattern = (typeof record.pattern === 'string' && record.pattern.trim()) ? record.pattern.trim() : '';
+      if (actionType === 'search') {
+        return {
+          action: '',
+          value: query || title || pattern || url || actionLabel,
+          valueUrl: ''
+        };
+      }
+      if (actionType === 'find_in_page') {
+        return {
+          action: actionLabel,
+          value: pattern || query || '查找内容',
+          valueUrl: '',
+          locationAction: (title || url) ? '在' : '',
+          locationValue: title || url,
+          locationUrl: url
+        };
+      }
+      return {
+        action: actionLabel,
+        value: title || url || query || pattern || '',
+        valueUrl: url
+      };
+    }
+    if (type === 'function_call') {
+      const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
+      return {
+        action: '调用函数',
+        value: name,
+        valueUrl: ''
+      };
+    }
+    return {
+      action: '',
+      value: getResponseToolCallTypeLabel(record),
+      valueUrl: ''
+    };
   }
 
   function buildResponseActivityTimelineFromLegacyMetadata(node) {
@@ -1326,7 +1380,7 @@ export function createMessageProcessor(appContext) {
     return queries;
   }
 
-  function shouldRenderResponseActivitySearchQueriesInline(entry) {
+  function isResponseActivitySearchQueryEntry(entry) {
     return String(entry?.type || '').toLowerCase() === 'web_search_call'
       && String(entry?.action_type || '').toLowerCase() === 'search'
       && getResponseActivityToolQueryLines(entry).length > 0;
@@ -1337,7 +1391,9 @@ export function createMessageProcessor(appContext) {
     if (String(entry?.action_type || '').toLowerCase() === 'find_in_page') {
       return false;
     }
-    if (shouldRenderResponseActivitySearchQueriesInline(entry)) return false;
+    if (isResponseActivitySearchQueryEntry(entry)) {
+      return Array.isArray(entry.sources) && entry.sources.length > 0;
+    }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
@@ -1448,75 +1504,18 @@ export function createMessageProcessor(appContext) {
       item.className = 'response-activity-entry response-activity-entry--tool';
 
       const toolKey = getResponseActivityToolEntryKey(entry, index);
-      const renderSearchQueriesInline = shouldRenderResponseActivitySearchQueriesInline(entry);
+      const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
       const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
       const hasDetails = hasResponseActivityToolDetails(entry);
       const isExpanded = hasDetails && expandedToolKeys.has(toolKey);
       item.classList.toggle('is-expanded', isExpanded);
 
-      if (renderSearchQueriesInline) {
-        item.classList.add('response-activity-entry--tool-inline');
-        searchQueryLines.forEach((query, queryIndex) => {
-          const queryRow = document.createElement('div');
-          queryRow.className = 'response-activity-tool-summary response-activity-tool-summary--static response-activity-tool-summary--query-row';
-
-          const kind = document.createElement('span');
-          kind.className = `response-activity-tool-kind${queryIndex === 0 ? '' : ' response-activity-tool-kind--ghost'}`;
-          kind.textContent = '搜索';
-          queryRow.appendChild(kind);
-
-          const primary = document.createElement('span');
-          primary.className = 'response-activity-tool-primary';
-          primary.textContent = query;
-          queryRow.appendChild(primary);
-
-          item.appendChild(queryRow);
-        });
-
-        if (Array.isArray(entry.sources) && entry.sources.length > 0) {
-          const sources = document.createElement('details');
-          sources.className = 'response-activity-tool-sources';
-          const sourceSummary = document.createElement('summary');
-          sourceSummary.className = 'response-activity-tool-source-title';
-          const sourceText = document.createElement('span');
-          sourceText.className = 'response-activity-tool-source-title-text';
-          sourceText.textContent = `来源 ${entry.sources.length}`;
-          sourceSummary.appendChild(sourceText);
-          const sourceChevron = document.createElement('i');
-          sourceChevron.className = 'fa-solid fa-chevron-right response-activity-tool-source-chevron';
-          sourceSummary.appendChild(sourceChevron);
-          sources.appendChild(sourceSummary);
-
-          const sourceList = document.createElement('div');
-          sourceList.className = 'response-activity-tool-source-list';
-          entry.sources.forEach((source) => {
-            const label = source.title || source.domain || source.url || '未命名来源';
-            if (source.url) {
-              const link = document.createElement('a');
-              link.className = 'response-activity-tool-source-link';
-              link.target = '_blank';
-              link.rel = 'noopener noreferrer';
-              link.href = source.url;
-              link.textContent = label;
-              sourceList.appendChild(link);
-            } else {
-              const text = document.createElement('span');
-              text.className = 'response-activity-tool-source-link';
-              text.textContent = label;
-              sourceList.appendChild(text);
-            }
-          });
-          sources.appendChild(sourceList);
-          item.appendChild(sources);
-        }
-
-        panelBodyInner.appendChild(item);
-        return;
-      }
-
       const summaryTag = hasDetails ? 'button' : 'div';
       const summary = document.createElement(summaryTag);
       summary.className = 'response-activity-tool-summary';
+      if (renderSearchQueriesInline) {
+        summary.classList.add('response-activity-tool-summary--query-stack');
+      }
       if (hasDetails) {
         summary.setAttribute('type', 'button');
         summary.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
@@ -1527,10 +1526,69 @@ export function createMessageProcessor(appContext) {
       kind.textContent = getResponseToolCallTypeLabel(entry);
       summary.appendChild(kind);
 
-      const primary = document.createElement('span');
-      primary.className = 'response-activity-tool-primary';
-      primary.textContent = buildResponseToolCallPrimaryText(entry);
-      summary.appendChild(primary);
+      if (renderSearchQueriesInline) {
+        const queryStack = document.createElement('span');
+        queryStack.className = 'response-activity-tool-query-stack';
+        searchQueryLines.forEach((query) => {
+          const queryLine = document.createElement('span');
+          queryLine.className = 'response-activity-tool-query-line';
+          queryLine.textContent = query;
+          queryStack.appendChild(queryLine);
+        });
+        summary.appendChild(queryStack);
+      } else {
+        const primaryParts = buildResponseToolCallPrimaryParts(entry);
+        const primary = document.createElement('span');
+        primary.className = 'response-activity-tool-primary';
+
+        if (primaryParts.action) {
+          const action = document.createElement('span');
+          action.className = 'response-activity-tool-action';
+          action.textContent = primaryParts.action;
+          primary.appendChild(action);
+        }
+
+        if (primaryParts.value) {
+          if (primaryParts.valueUrl) {
+            const link = document.createElement('a');
+            link.className = 'response-activity-tool-link';
+            link.href = primaryParts.valueUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = primaryParts.value;
+            primary.appendChild(link);
+          } else {
+            const value = document.createElement('span');
+            value.className = 'response-activity-tool-value';
+            value.textContent = primaryParts.value;
+            primary.appendChild(value);
+          }
+        }
+
+        if (primaryParts.locationAction && primaryParts.locationValue) {
+          const locationAction = document.createElement('span');
+          locationAction.className = 'response-activity-tool-action';
+          locationAction.textContent = primaryParts.locationAction;
+          primary.appendChild(locationAction);
+
+          if (primaryParts.locationUrl) {
+            const link = document.createElement('a');
+            link.className = 'response-activity-tool-link';
+            link.href = primaryParts.locationUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = primaryParts.locationValue;
+            primary.appendChild(link);
+          } else {
+            const locationValue = document.createElement('span');
+            locationValue.className = 'response-activity-tool-value';
+            locationValue.textContent = primaryParts.locationValue;
+            primary.appendChild(locationValue);
+          }
+        }
+
+        summary.appendChild(primary);
+      }
 
       if (hasDetails) {
         const chevron = document.createElement('i');
@@ -1558,13 +1616,6 @@ export function createMessageProcessor(appContext) {
         const toolBodyInner = document.createElement('div');
         toolBodyInner.className = 'response-activity-tool-body-inner';
 
-        getResponseActivityToolQueryLines(entry).forEach((line) => {
-          const secondary = document.createElement('div');
-          secondary.className = 'response-activity-tool-secondary';
-          secondary.textContent = line;
-          toolBodyInner.appendChild(secondary);
-        });
-
         getResponseActivityToolSecondaryLines(entry).forEach((line) => {
           const secondary = document.createElement('div');
           secondary.className = 'response-activity-tool-secondary';
@@ -1580,19 +1631,6 @@ export function createMessageProcessor(appContext) {
         }
 
         if (Array.isArray(entry.sources) && entry.sources.length > 0) {
-          const sources = document.createElement('details');
-          sources.className = 'response-activity-tool-sources';
-          const sourceSummary = document.createElement('summary');
-          sourceSummary.className = 'response-activity-tool-source-title';
-          const sourceText = document.createElement('span');
-          sourceText.className = 'response-activity-tool-source-title-text';
-          sourceText.textContent = `来源 ${entry.sources.length}`;
-          sourceSummary.appendChild(sourceText);
-          const sourceChevron = document.createElement('i');
-          sourceChevron.className = 'fa-solid fa-chevron-right response-activity-tool-source-chevron';
-          sourceSummary.appendChild(sourceChevron);
-          sources.appendChild(sourceSummary);
-
           const sourceList = document.createElement('div');
           sourceList.className = 'response-activity-tool-source-list';
           entry.sources.forEach((source) => {
@@ -1612,8 +1650,7 @@ export function createMessageProcessor(appContext) {
               sourceList.appendChild(text);
             }
           });
-          sources.appendChild(sourceList);
-          toolBodyInner.appendChild(sources);
+          toolBodyInner.appendChild(sourceList);
         }
 
         toolBody.appendChild(toolBodyInner);
