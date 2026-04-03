@@ -10926,6 +10926,7 @@ export function createChatHistoryUI(appContext) {
     'thoughtSignature',
     'thoughtSignatureSource',
     'reasoning_content',
+    'response_activity_timeline',
     'response_reasoning_summary',
     'tool_calls',
     'response_tool_calls',
@@ -11835,6 +11836,7 @@ export function createChatHistoryUI(appContext) {
     'threadSelectionText'
   ];
   const META_JSON_FIELDS = [
+    'response_activity_timeline',
     'tool_calls',
     'response_tool_calls',
     'promptMeta',

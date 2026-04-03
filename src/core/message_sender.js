@@ -705,6 +705,61 @@ export function createMessageSender(appContext) {
     return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
   }
 
+  function cloneResponsesActivityTimeline(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) return [];
+    try {
+      return JSON.parse(JSON.stringify(timeline));
+    } catch (_) {
+      return timeline.map((entry) => {
+        if (!entry || typeof entry !== 'object') return entry;
+        return {
+          ...entry,
+          queries: Array.isArray(entry.queries) ? [...entry.queries] : entry.queries,
+          sources: Array.isArray(entry.sources)
+            ? entry.sources.map((source) => (source && typeof source === 'object' ? { ...source } : source))
+            : entry.sources
+        };
+      });
+    }
+  }
+
+  function normalizeResponsesActivityTimelineEntry(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const kind = (typeof entry.kind === 'string') ? entry.kind.trim().toLowerCase() : '';
+    if (kind === 'reasoning_summary') {
+      const text = (typeof entry.text === 'string') ? entry.text : '';
+      if (!text) return null;
+      const normalized = {
+        kind: 'reasoning_summary',
+        text
+      };
+      const id = (typeof entry.id === 'string' && entry.id.trim()) ? entry.id.trim() : '';
+      const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : '';
+      if (id) normalized.id = id;
+      if (status) normalized.status = status;
+      return normalized;
+    }
+    if (kind === 'tool_call') {
+      const normalized = compactResponsesMetaValue({
+        ...entry,
+        kind: 'tool_call'
+      });
+      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
+    }
+    return null;
+  }
+
+  function createResponsesReasoningTimelineEntry(text, options = {}) {
+    const content = (typeof text === 'string') ? text : '';
+    if (!content) return null;
+    return normalizeResponsesActivityTimelineEntry({
+      kind: 'reasoning_summary',
+      id: options.id || 'reasoning_summary',
+      status: options.status || '',
+      text: content
+    });
+  }
+
   /**
    * 把 Responses output item 归一化为适合 IndexedDB/界面展示的“工具调用记录”。
    * 说明：
@@ -774,6 +829,16 @@ export function createMessageSender(appContext) {
     return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
   }
 
+  function createResponsesToolTimelineEntry(record, options = {}) {
+    if (!record || typeof record !== 'object') return null;
+    const entry = compactResponsesMetaValue({
+      kind: 'tool_call',
+      ...record,
+      status: options.status || record.status || ''
+    });
+    return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : null;
+  }
+
   function getResponsesToolCallRecordKey(record, fallbackIndex = 0) {
     if (!record || typeof record !== 'object') {
       return `unknown:${fallbackIndex}`;
@@ -788,6 +853,136 @@ export function createMessageSender(appContext) {
       return `${type}:${record.action_type || ''}:${record.query || ''}:${record.url || ''}:${record.pattern || ''}:${fallbackIndex}`;
     }
     return `${type}:${fallbackIndex}`;
+  }
+
+  function getResponsesActivityTimelineEntryKey(entry, fallbackIndex = 0) {
+    if (!entry || typeof entry !== 'object') {
+      return `unknown:${fallbackIndex}`;
+    }
+    const kind = (typeof entry.kind === 'string' && entry.kind) ? entry.kind : 'unknown';
+    if (kind === 'reasoning_summary') {
+      const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `reasoning_${fallbackIndex}`;
+      return `reasoning:${id}`;
+    }
+    if (kind === 'tool_call') {
+      return `tool:${getResponsesToolCallRecordKey(entry, fallbackIndex)}`;
+    }
+    return `${kind}:${fallbackIndex}`;
+  }
+
+  function mergeResponsesActivityTimeline(existingTimeline, incomingTimeline) {
+    const merged = Array.isArray(existingTimeline)
+      ? existingTimeline
+        .map(entry => normalizeResponsesActivityTimelineEntry(entry))
+        .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry))
+      : [];
+    const keyToIndex = new Map();
+    merged.forEach((entry, index) => {
+      keyToIndex.set(getResponsesActivityTimelineEntryKey(entry, index), index);
+    });
+
+    (Array.isArray(incomingTimeline) ? incomingTimeline : []).forEach((entry, index) => {
+      const normalized = normalizeResponsesActivityTimelineEntry(entry);
+      if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return;
+      const key = getResponsesActivityTimelineEntryKey(normalized, index);
+      if (keyToIndex.has(key)) {
+        const existingIndex = keyToIndex.get(key);
+        const previous = merged[existingIndex] || {};
+        if (normalized.kind === 'reasoning_summary') {
+          const mergedText = (typeof previous.text === 'string' && previous.text && typeof normalized.text === 'string' && normalized.text)
+            ? mergeStreamingThoughts(previous.text, normalized.text)
+            : ((typeof normalized.text === 'string' && normalized.text) ? normalized.text : (previous.text || ''));
+          merged[existingIndex] = normalizeResponsesActivityTimelineEntry({
+            ...previous,
+            ...normalized,
+            text: mergedText
+          });
+        } else {
+          merged[existingIndex] = normalizeResponsesActivityTimelineEntry({
+            ...previous,
+            ...normalized,
+            arguments: (typeof previous.arguments === 'string' && previous.arguments && typeof normalized.arguments === 'string' && normalized.arguments)
+              ? mergeStreamingThoughts(previous.arguments, normalized.arguments)
+              : (normalized.arguments || previous.arguments || ''),
+            sources: (Array.isArray(normalized.sources) && normalized.sources.length > 0)
+              ? normalized.sources
+              : previous.sources
+          });
+        }
+      } else {
+        keyToIndex.set(key, merged.length);
+        merged.push(normalized);
+      }
+    });
+
+    return merged;
+  }
+
+  function upsertResponsesReasoningTimeline(existingTimeline, payload, text, options = {}) {
+    const entry = createResponsesReasoningTimelineEntry(text, {
+      id: payload?.item_id || payload?.id || options.id || 'reasoning_summary',
+      status: options.status || payload?.status || ''
+    });
+    if (!entry) return Array.isArray(existingTimeline) ? existingTimeline : [];
+    return mergeResponsesActivityTimeline(existingTimeline, [entry]);
+  }
+
+  function upsertResponsesToolTimeline(existingTimeline, record, options = {}) {
+    const entry = createResponsesToolTimelineEntry(record, options);
+    if (!entry) return Array.isArray(existingTimeline) ? existingTimeline : [];
+    return mergeResponsesActivityTimeline(existingTimeline, [entry]);
+  }
+
+  function normalizeResponsesReasoningTimelineEntry(item, fallbackIndex = 0) {
+    if (!item || typeof item !== 'object') return null;
+    let text = '';
+    if (Array.isArray(item.summary)) {
+      text = item.summary
+        .map(section => (typeof section?.text === 'string' ? section.text : ''))
+        .filter(Boolean)
+        .join('\n\n');
+    }
+    if (!text && typeof item.summary_text === 'string') {
+      text = item.summary_text;
+    }
+    if (!text && typeof item.text === 'string') {
+      text = item.text;
+    }
+    return createResponsesReasoningTimelineEntry(text, {
+      id: item.id || item.item_id || `reasoning_${fallbackIndex}`,
+      status: item.status || 'completed'
+    });
+  }
+
+  function getResponsesReasoningSummaryFromTimeline(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) return '';
+    return timeline
+      .filter(entry => entry?.kind === 'reasoning_summary' && typeof entry?.text === 'string' && entry.text.trim())
+      .map(entry => entry.text.trim())
+      .join('\n\n')
+      .trim();
+  }
+
+  function getResponsesToolCallsFromTimeline(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) return null;
+    const toolCalls = timeline
+      .filter(entry => entry?.kind === 'tool_call')
+      .map((entry) => compactResponsesMetaValue({
+        type: entry.type,
+        id: entry.id,
+        status: entry.status,
+        action_type: entry.action_type,
+        query: entry.query,
+        queries: entry.queries,
+        url: entry.url,
+        title: entry.title,
+        pattern: entry.pattern,
+        name: entry.name,
+        arguments: entry.arguments,
+        sources: entry.sources
+      }))
+      .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry));
+    return toolCalls.length > 0 ? toolCalls : null;
   }
 
   /**
@@ -833,18 +1028,65 @@ export function createMessageSender(appContext) {
     return merged;
   }
 
+  function extractResponsesActivityTimelineFromOutput(payload) {
+    const timeline = [];
+    const outputItems = Array.isArray(payload?.output) ? payload.output : [];
+
+    for (let index = 0; index < outputItems.length; index += 1) {
+      const item = outputItems[index];
+      if (!item || typeof item !== 'object') continue;
+      const itemType = String(item.type || '').toLowerCase();
+
+      if (itemType === 'message') {
+        const contentParts = Array.isArray(item.content) ? item.content : [];
+        let messageReasoningText = '';
+        contentParts.forEach((part) => {
+          if (!part || typeof part !== 'object') return;
+          const partType = String(part.type || '').toLowerCase();
+          if (!partType.includes('reasoning')) return;
+          const text = (typeof part.text === 'string') ? part.text : '';
+          if (!text.trim()) return;
+          messageReasoningText = mergeThoughts(messageReasoningText, text);
+        });
+        const messageReasoningEntry = createResponsesReasoningTimelineEntry(messageReasoningText, {
+          id: item.id || `message_reasoning_${index}`,
+          status: item.status || 'completed'
+        });
+        if (messageReasoningEntry) {
+          timeline.push(messageReasoningEntry);
+        }
+        continue;
+      }
+
+      if (itemType.includes('reasoning')) {
+        const reasoningEntry = normalizeResponsesReasoningTimelineEntry(item, index);
+        if (reasoningEntry) {
+          timeline.push(reasoningEntry);
+        }
+        continue;
+      }
+
+      const toolCallRecord = normalizeResponsesToolCallRecord(item);
+      if (toolCallRecord) {
+        const toolEntry = createResponsesToolTimelineEntry(toolCallRecord, {
+          status: toolCallRecord.status || item.status || 'completed'
+        });
+        if (toolEntry) {
+          timeline.push(toolEntry);
+        }
+      }
+    }
+
+    return mergeResponsesActivityTimeline([], timeline);
+  }
+
   function extractOpenAIResponsesOutput(payload) {
     const answerParts = [];
-    let reasoningSummary = '';
-    const responseToolCalls = [];
+    let responseActivityTimeline = [];
     const outputItems = Array.isArray(payload?.output) ? payload.output : [];
 
     const pushAnswer = (text) => {
       if (typeof text === 'string' && text) answerParts.push(text);
-    };
-    const pushReasoningSummary = (text) => {
-      if (typeof text !== 'string' || !text.trim()) return;
-      reasoningSummary = mergeThoughts(reasoningSummary, text);
     };
 
     for (const item of outputItems) {
@@ -858,9 +1100,7 @@ export function createMessageSender(appContext) {
           const partType = String(part.type || '').toLowerCase();
           if (partType === 'refusal') continue;
           if (typeof part.text === 'string') {
-            if (partType.includes('reasoning')) {
-              pushReasoningSummary(part.text);
-            } else {
+            if (!partType.includes('reasoning')) {
               pushAnswer(part.text);
             }
             continue;
@@ -871,31 +1111,17 @@ export function createMessageSender(appContext) {
         }
         continue;
       }
-
-      if (itemType.includes('reasoning')) {
-        if (Array.isArray(item.summary)) {
-          for (const section of item.summary) {
-            if (typeof section?.text === 'string') pushReasoningSummary(section.text);
-          }
-        }
-        if (typeof item.summary_text === 'string') pushReasoningSummary(item.summary_text);
-        if (typeof item.text === 'string') pushReasoningSummary(item.text);
-        continue;
-      }
-
-      const toolCallRecord = normalizeResponsesToolCallRecord(item);
-      if (toolCallRecord) {
-        responseToolCalls.push(toolCallRecord);
-      }
     }
 
+    responseActivityTimeline = extractResponsesActivityTimelineFromOutput(payload);
     const answerFromOutput = answerParts.join('');
     const answerFromField = readResponsesOutputTextField(payload);
     const answer = answerFromOutput || answerFromField || '';
     return {
       answer,
-      reasoningSummary,
-      responseToolCalls: responseToolCalls.length > 0 ? responseToolCalls : null
+      responseActivityTimeline: responseActivityTimeline.length > 0 ? responseActivityTimeline : null,
+      reasoningSummary: getResponsesReasoningSummaryFromTimeline(responseActivityTimeline),
+      responseToolCalls: getResponsesToolCallsFromTimeline(responseActivityTimeline)
     };
   }
 
@@ -2495,6 +2721,7 @@ export function createMessageSender(appContext) {
       thoughtSignatureSource: null,
       reasoning_content: null,
       tool_calls: null,
+      response_activity_timeline: null,
       apiUuid: null,
       apiDisplayName: '',
       apiModelId: '',
@@ -2553,6 +2780,7 @@ export function createMessageSender(appContext) {
       thoughtSignatureSource: null,
       reasoning_content: null,
       tool_calls: null,
+      response_activity_timeline: null,
       apiUuid: null,
       apiDisplayName: '',
       apiModelId: '',
@@ -3598,6 +3826,20 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function applyResponsesActivityTimelineToNode(node, timeline) {
+    if (!node || typeof node !== 'object') return false;
+    const normalizedTimeline = mergeResponsesActivityTimeline([], timeline);
+    if (normalizedTimeline.length > 0) {
+      node.response_activity_timeline = cloneResponsesActivityTimeline(normalizedTimeline);
+    } else {
+      delete node.response_activity_timeline;
+    }
+    delete node.response_reasoning_summary;
+    delete node.response_tool_calls;
+    node.thoughtsRaw = null;
+    return true;
+  }
+
   /**
    * 重新生成（原地替换）时清空旧的“推理签名/推理字段”。
    *
@@ -3607,7 +3849,7 @@ export function createMessageSender(appContext) {
    * - 若本次响应未返回新签名，就必须保持为空，否则后续把历史回传给上游时会触发
    *   “signature required / invalid signature” 等校验错误；
    * - 这里同时清理 OpenAI 兼容字段（reasoning_content/tool_calls）以及 Responses 元信息
-   *   （response_reasoning_summary/response_tool_calls），避免旧内容残留导致语义错配。
+   *   （response_activity_timeline/response_reasoning_summary/response_tool_calls），避免旧内容残留导致语义错配。
    *
    * 注意：只在“原地替换的重新生成”场景触发；普通追加新消息不需要清理。
    *
@@ -3628,6 +3870,7 @@ export function createMessageSender(appContext) {
       node.thoughtSignatureSource = null;
       node.reasoning_content = null;
       node.tool_calls = null;
+      delete node.response_activity_timeline;
       delete node.response_reasoning_summary;
       delete node.response_tool_calls;
       // 原地替换时清空旧的 token 用量，避免本次请求未回传 usage 时显示陈旧数据。
@@ -5420,10 +5663,8 @@ export function createMessageSender(appContext) {
 	    let latestOpenAIReasoningContent = '';
 	    // OpenAI 兼容：累积 tool_calls（流式增量会把 function.arguments 分片输出）
 	    let latestOpenAIToolCalls = [];
-      // Responses API：推理摘要只用于展示/存档，不参与后续签名回传。
-      let latestResponsesReasoningSummary = '';
-      // Responses API：记录 output item 级别的工具调用（如 web_search_call / function_call）。
-      let latestResponsesToolCalls = [];
+      // Responses API：按事件顺序保存 reasoning summary / 工具调用的活动时间线。
+      let latestResponsesActivityTimeline = [];
       // OpenAI 兼容：记录末尾 usage 分片（通常出现在 finish_reason=stop 的最后一个 chunk）。
       let latestOpenAIUsage = null;
 		    // 当前流对应的 AI 消息 ID：
@@ -5444,6 +5685,9 @@ export function createMessageSender(appContext) {
           const boundNode = resolveAttemptAiNode(attemptState, payload.messageId);
           if (boundNode) {
             attemptState.aiMessageNode = boundNode;
+            if (Array.isArray(payload.responsesActivityTimeline)) {
+              applyResponsesActivityTimelineToNode(boundNode, payload.responsesActivityTimeline);
+            }
           }
 	        const regenContainer = getUiContainer();
 	        const anchor = regenContainer
@@ -5453,12 +5697,19 @@ export function createMessageSender(appContext) {
           messageProcessor.updateAIMessage(
             payload.messageId,
             payload.answer || '',
-            payload.thoughts || '',
+            payload.thoughts ?? null,
             {
               fallbackNode: boundNode || attemptState?.aiMessageNode || null,
               suppressMissingNodeWarning: true
             }
           );
+          if (
+            Array.isArray(payload.responsesActivityTimeline)
+            && boundNode
+            && (payload.responsesActivityTimeline.length > 0 || Array.isArray(boundNode.response_activity_timeline))
+          ) {
+            messageProcessor.syncAssistantMessageMetadata?.(payload.messageId, boundNode);
+          }
           void persistAttemptConversationSnapshot(attemptState);
 	        } finally {
 	          if (regenContainer) {
@@ -5472,7 +5723,15 @@ export function createMessageSender(appContext) {
 	      getContentSize: (payload) => {
 	        const answerSize = (typeof payload?.answer === 'string') ? payload.answer.length : 0;
 	        const thoughtsSize = (typeof payload?.thoughts === 'string') ? payload.thoughts.length : 0;
-	        return answerSize + thoughtsSize;
+            const timelineSize = Array.isArray(payload?.responsesActivityTimeline)
+              ? payload.responsesActivityTimeline.reduce((sum, entry) => {
+                if (!entry || typeof entry !== 'object') return sum;
+                const textSize = (typeof entry.text === 'string') ? entry.text.length : 0;
+                const argsSize = (typeof entry.arguments === 'string') ? entry.arguments.length : 0;
+                return sum + textSize + argsSize;
+              }, 0)
+              : 0;
+	        return answerSize + thoughtsSize + timelineSize;
 	      }
 	    });
 	    if (attemptState) {
@@ -5493,6 +5752,9 @@ export function createMessageSender(appContext) {
         const boundNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
         if (boundNode) {
           attemptState.aiMessageNode = boundNode;
+          if (isOpenAIResponsesStream) {
+            applyResponsesActivityTimelineToNode(boundNode, latestResponsesActivityTimeline);
+          }
         }
         const regenContainer = getUiContainer();
         const anchor = regenContainer
@@ -5502,7 +5764,7 @@ export function createMessageSender(appContext) {
           messageProcessor.updateAIMessage(
             currentAiMessageId,
             aiResponse,
-            aiThoughtsRaw,
+            isOpenAIResponsesStream ? null : aiThoughtsRaw,
             {
               fallbackNode: boundNode || attemptState?.aiMessageNode || null,
               suppressMissingNodeWarning: true
@@ -5510,6 +5772,10 @@ export function createMessageSender(appContext) {
           );
           if (!hasClearedBoundSignatureForRegenerate) {
             hasClearedBoundSignatureForRegenerate = clearBoundSignatureForRegenerate(currentAiMessageId, attemptState);
+          }
+          if (isOpenAIResponsesStream && boundNode) {
+            applyResponsesActivityTimelineToNode(boundNode, latestResponsesActivityTimeline);
+            messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, boundNode);
           }
           applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
         } catch (e) {
@@ -5528,12 +5794,19 @@ export function createMessageSender(appContext) {
         if (loadingMessage && loadingMessage.parentNode && getUiContainer()) {
           promotedId = promoteLoadingMessageToAi({
             answer: aiResponse,
-            thoughts: aiThoughtsRaw
+            thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw
           });
         }
         if (promotedId) {
           currentAiMessageId = promotedId;
           bindAttemptAiMessage(attemptState, currentAiMessageId);
+          if (isOpenAIResponsesStream) {
+            const promotedNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
+            if (promotedNode) {
+              applyResponsesActivityTimelineToNode(promotedNode, latestResponsesActivityTimeline);
+              messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, promotedNode);
+            }
+          }
         }
       }
 
@@ -5549,7 +5822,7 @@ export function createMessageSender(appContext) {
         if (!shouldRenderDom) {
           const createdNode = createThreadAiMessageHistoryOnly({
             content: aiResponse,
-            thoughts: aiThoughtsRaw,
+            thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
             historyParentId,
             historyPatch: threadHistoryPatch,
             historyMessagesRef: attemptState?.historyMessagesRef || null,
@@ -5558,6 +5831,9 @@ export function createMessageSender(appContext) {
           if (createdNode) {
             currentAiMessageId = createdNode.id;
             bindAttemptAiMessage(attemptState, currentAiMessageId, createdNode);
+            if (isOpenAIResponsesStream) {
+              applyResponsesActivityTimelineToNode(createdNode, latestResponsesActivityTimeline);
+            }
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
             updateThreadLastMessage(threadContext, currentAiMessageId);
           }
@@ -5576,7 +5852,7 @@ export function createMessageSender(appContext) {
             false,
             null,
             null,
-            aiThoughtsRaw,
+            isOpenAIResponsesStream ? null : aiThoughtsRaw,
             null,
             null,
             threadOptions
@@ -5585,6 +5861,13 @@ export function createMessageSender(appContext) {
           if (newAiMessageDiv) {
             currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
             bindAttemptAiMessage(attemptState, currentAiMessageId);
+            if (isOpenAIResponsesStream) {
+              const createdNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
+              if (createdNode) {
+                applyResponsesActivityTimelineToNode(createdNode, latestResponsesActivityTimeline);
+                messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, createdNode, { fallbackElement: newAiMessageDiv });
+              }
+            }
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
             updateThreadLastMessage(threadContext, currentAiMessageId);
           }
@@ -5625,7 +5908,10 @@ export function createMessageSender(appContext) {
           {
             messageId: currentAiMessageId,
             answer: aiResponse,
-            thoughts: aiThoughtsRaw
+            thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
+            responsesActivityTimeline: isOpenAIResponsesStream
+              ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
+              : null
           },
           { force: transition.forceUiUpdate }
         );
@@ -5663,15 +5949,13 @@ export function createMessageSender(appContext) {
 	    // 流式响应结束后，将“签名/推理元信息”写入当前 AI 消息节点，并刷新 footer 标记
 		    // - Gemini：Thought Signature（part-level thought_signature）
 		    // - OpenAI Chat Completions 兼容：thoughtSignature（message-level thoughtSignature + reasoning_content/tool_calls）
-        // - Responses API：reasoning summary / output item 工具调用记录
+        // - Responses API：reasoning summary / output item 工具调用时间线
       if (currentAiMessageId && latestOpenAIUsage) {
         applyUsageMetaToMessage(currentAiMessageId, latestOpenAIUsage);
       }
       const hasResponsesMetadata = isOpenAIResponsesStream
-        && (
-          (typeof latestResponsesReasoningSummary === 'string' && latestResponsesReasoningSummary)
-          || (Array.isArray(latestResponsesToolCalls) && latestResponsesToolCalls.length > 0)
-        );
+        && Array.isArray(latestResponsesActivityTimeline)
+        && latestResponsesActivityTimeline.length > 0;
 		    if (currentAiMessageId && (latestGeminiThoughtSignature || latestOpenAIThoughtSignature || (Array.isArray(latestOpenAIToolCalls) && latestOpenAIToolCalls.length > 0) || hasResponsesMetadata)) {
 		      try {
 	        const node = resolveAttemptAiNode(attemptState, currentAiMessageId);
@@ -5687,17 +5971,7 @@ export function createMessageSender(appContext) {
 
 	          if (!isGeminiApi) {
               if (isOpenAIResponsesStream) {
-                if (typeof latestResponsesReasoningSummary === 'string' && latestResponsesReasoningSummary) {
-                  node.response_reasoning_summary = latestResponsesReasoningSummary;
-                } else {
-                  delete node.response_reasoning_summary;
-                }
-
-                if (Array.isArray(latestResponsesToolCalls) && latestResponsesToolCalls.length > 0) {
-                  node.response_tool_calls = latestResponsesToolCalls;
-                } else {
-                  delete node.response_tool_calls;
-                }
+                applyResponsesActivityTimelineToNode(node, latestResponsesActivityTimeline);
               } else {
 	              // OpenAI 兼容：推理签名与推理原文、tool_calls 原样落库，供后续历史消息回传
 	              if (latestOpenAIThoughtSignature) {
@@ -5986,61 +6260,6 @@ export function createMessageSender(appContext) {
       return nextCalls;
     }
 
-    function mergeResponsesFunctionCallEvent(existingCalls, eventPayload) {
-      const existing = Array.isArray(existingCalls) ? existingCalls : [];
-      const payload = (eventPayload && typeof eventPayload === 'object') ? eventPayload : {};
-      const nextCalls = existing.map((call) => {
-        if (!call || typeof call !== 'object') return call;
-        return { ...call };
-      });
-
-      const index = Number.isInteger(payload.output_index)
-        ? payload.output_index
-        : (Number.isInteger(payload.index) ? payload.index : nextCalls.length);
-      while (nextCalls.length <= index) {
-        nextCalls.push({ id: '', type: 'function_call', name: '', arguments: '' });
-      }
-
-      const current = nextCalls[index] && typeof nextCalls[index] === 'object' ? nextCalls[index] : {};
-      const merged = { ...current };
-
-      const callId = (typeof payload.call_id === 'string' && payload.call_id)
-        || (typeof payload.item_id === 'string' && payload.item_id)
-        || (typeof payload.id === 'string' && payload.id)
-        || '';
-      if (callId) merged.id = callId;
-      merged.type = 'function_call';
-      if (typeof payload.status === 'string' && payload.status) {
-        merged.status = payload.status;
-      }
-
-      if (typeof payload.name === 'string' && payload.name) {
-        merged.name = payload.name;
-      }
-
-      const deltaArgs = (typeof payload.delta === 'string') ? payload.delta : '';
-      if (deltaArgs) {
-        const prevArgs = (typeof merged.arguments === 'string') ? merged.arguments : '';
-        merged.arguments = mergeStreamingThoughts(prevArgs, deltaArgs);
-      }
-
-      const finalArgs = (typeof payload.arguments === 'string') ? payload.arguments : '';
-      if (finalArgs) {
-        merged.arguments = finalArgs;
-      }
-
-      nextCalls[index] = compactResponsesMetaValue(merged);
-      return nextCalls.filter((record) => {
-        if (!record || typeof record !== 'object') return false;
-        return !!(
-          (typeof record.id === 'string' && record.id)
-          || (typeof record.name === 'string' && record.name)
-          || (typeof record.arguments === 'string' && record.arguments)
-          || (typeof record.status === 'string' && record.status)
-        );
-      });
-    }
-
     function handleOpenAIEvent(data) {
       const eventType = (typeof data?.type === 'string') ? data.type : '';
 
@@ -6086,8 +6305,25 @@ export function createMessageSender(appContext) {
 
         if (eventType === 'response.output_text.delta') {
           currentEventAnswerDelta = (typeof data?.delta === 'string') ? data.delta : '';
-        } else if (eventType === 'response.reasoning_text.delta' || eventType === 'response.reasoning_summary_text.delta') {
-          currentEventReasoningDelta = (typeof data?.delta === 'string') ? data.delta : '';
+        } else if (
+          eventType === 'response.reasoning_text.delta'
+          || eventType === 'response.reasoning_summary_text.delta'
+          || eventType === 'response.reasoning_text.done'
+          || eventType === 'response.reasoning_summary_text.done'
+        ) {
+          currentEventReasoningDelta = (typeof data?.delta === 'string')
+            ? data.delta
+            : ((typeof data?.text === 'string') ? data.text : '');
+          if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
+            latestResponsesActivityTimeline = upsertResponsesReasoningTimeline(
+              latestResponsesActivityTimeline,
+              data,
+              currentEventReasoningDelta,
+              {
+                status: eventType.endsWith('.done') ? 'completed' : (data?.status || 'streaming')
+              }
+            );
+          }
         } else if (eventType === 'response.output_item.added' || eventType === 'response.output_item.done') {
           const outputItem = (data?.item && typeof data.item === 'object') ? data.item : null;
           if (outputItem) {
@@ -6095,17 +6331,34 @@ export function createMessageSender(appContext) {
             if (!aiResponse && typeof extractedItem.answer === 'string' && extractedItem.answer) {
               currentEventAnswerDelta = extractedItem.answer;
             }
-            if (typeof extractedItem.reasoningSummary === 'string' && extractedItem.reasoningSummary) {
-              latestResponsesReasoningSummary = mergeThoughts(latestResponsesReasoningSummary, extractedItem.reasoningSummary);
-              currentEventReasoningDelta = extractedItem.reasoningSummary;
+            if (Array.isArray(extractedItem.responseActivityTimeline) && extractedItem.responseActivityTimeline.length > 0) {
+              latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
+                latestResponsesActivityTimeline,
+                extractedItem.responseActivityTimeline
+              );
+              if (typeof extractedItem.reasoningSummary === 'string' && extractedItem.reasoningSummary) {
+                currentEventReasoningDelta = extractedItem.reasoningSummary;
+              }
             }
             if (Array.isArray(extractedItem.responseToolCalls) && extractedItem.responseToolCalls.length > 0) {
-              latestResponsesToolCalls = mergeResponsesToolCallRecordLists(latestResponsesToolCalls, extractedItem.responseToolCalls);
               hasToolCallsDelta = true;
             }
           }
         } else if (eventType === 'response.function_call_arguments.delta' || eventType === 'response.function_call_arguments.done') {
-          latestResponsesToolCalls = mergeResponsesFunctionCallEvent(latestResponsesToolCalls, data);
+          const functionCallRecord = normalizeResponsesToolCallRecord({
+            type: 'function_call',
+            item_id: data?.item_id,
+            call_id: data?.call_id,
+            id: data?.id,
+            name: data?.name,
+            arguments: (typeof data?.arguments === 'string') ? data.arguments : ((typeof data?.delta === 'string') ? data.delta : ''),
+            status: eventType === 'response.function_call_arguments.done' ? 'completed' : (data?.status || 'streaming')
+          });
+          latestResponsesActivityTimeline = upsertResponsesToolTimeline(
+            latestResponsesActivityTimeline,
+            functionCallRecord,
+            { status: eventType === 'response.function_call_arguments.done' ? 'completed' : (data?.status || 'streaming') }
+          );
           hasToolCallsDelta = true;
         } else if (eventType === 'response.completed') {
           const completedPayload = (data?.response && typeof data.response === 'object') ? data.response : data;
@@ -6113,12 +6366,16 @@ export function createMessageSender(appContext) {
           if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
             currentEventAnswerDelta = extracted.answer;
           }
-          if (typeof extracted.reasoningSummary === 'string' && extracted.reasoningSummary) {
-            latestResponsesReasoningSummary = mergeThoughts(latestResponsesReasoningSummary, extracted.reasoningSummary);
-            currentEventReasoningDelta = extracted.reasoningSummary;
+          if (Array.isArray(extracted.responseActivityTimeline) && extracted.responseActivityTimeline.length > 0) {
+            latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
+              latestResponsesActivityTimeline,
+              extracted.responseActivityTimeline
+            );
+            if (typeof extracted.reasoningSummary === 'string' && extracted.reasoningSummary) {
+              currentEventReasoningDelta = extracted.reasoningSummary;
+            }
           }
           if (Array.isArray(extracted.responseToolCalls) && extracted.responseToolCalls.length > 0) {
-            latestResponsesToolCalls = mergeResponsesToolCallRecordLists(latestResponsesToolCalls, extracted.responseToolCalls);
             hasToolCallsDelta = true;
           }
         } else if (!eventType && isOpenAIResponsesPayload(data)) {
@@ -6126,18 +6383,18 @@ export function createMessageSender(appContext) {
           if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
             currentEventAnswerDelta = extracted.answer;
           }
-          if (typeof extracted.reasoningSummary === 'string' && extracted.reasoningSummary) {
-            latestResponsesReasoningSummary = mergeThoughts(latestResponsesReasoningSummary, extracted.reasoningSummary);
-            currentEventReasoningDelta = extracted.reasoningSummary;
+          if (Array.isArray(extracted.responseActivityTimeline) && extracted.responseActivityTimeline.length > 0) {
+            latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
+              latestResponsesActivityTimeline,
+              extracted.responseActivityTimeline
+            );
+            if (typeof extracted.reasoningSummary === 'string' && extracted.reasoningSummary) {
+              currentEventReasoningDelta = extracted.reasoningSummary;
+            }
           }
           if (Array.isArray(extracted.responseToolCalls) && extracted.responseToolCalls.length > 0) {
-            latestResponsesToolCalls = mergeResponsesToolCallRecordLists(latestResponsesToolCalls, extracted.responseToolCalls);
             hasToolCallsDelta = true;
           }
-        }
-
-        if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
-          latestResponsesReasoningSummary = mergeStreamingThoughts(latestResponsesReasoningSummary, currentEventReasoningDelta);
         }
 
         const hasAnyDelta = !!(currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
@@ -6146,9 +6403,7 @@ export function createMessageSender(appContext) {
         const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
         aiResponse += split.answerDelta;
 
-        if (typeof currentEventReasoningDelta === 'string' && currentEventReasoningDelta) {
-          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, currentEventReasoningDelta);
-        } else if (split.thoughtDelta) {
+        if (split.thoughtDelta) {
           aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
         }
 
@@ -6270,10 +6525,8 @@ export function createMessageSender(appContext) {
     let reasoningContentRaw = '';
     // OpenAI 兼容：工具调用（若存在则与 thoughtSignature 一并回传）
     let toolCalls = null;
-    // Responses API：reasoning summary 只用于界面展示与本地存档。
-    let responseReasoningSummary = '';
-    // Responses API：output item 级工具调用记录（如 web_search_call / function_call）。
-    let responseToolCalls = null;
+    // Responses API：按顺序保存 reasoning summary / 工具调用活动。
+    let responseActivityTimeline = null;
     let json = null;
     try {
       json = await response.json();
@@ -6388,12 +6641,8 @@ export function createMessageSender(appContext) {
       if (typeof extracted.answer === 'string') {
         answer = extracted.answer;
       }
-      if (typeof extracted.reasoningSummary === 'string' && extracted.reasoningSummary) {
-        responseReasoningSummary = extracted.reasoningSummary;
-        thoughts = extracted.reasoningSummary;
-      }
-      if (Array.isArray(extracted.responseToolCalls) && extracted.responseToolCalls.length > 0) {
-        responseToolCalls = extracted.responseToolCalls;
+      if (Array.isArray(extracted.responseActivityTimeline) && extracted.responseActivityTimeline.length > 0) {
+        responseActivityTimeline = extracted.responseActivityTimeline;
       }
     } else {
       // OpenAI Chat Completions 兼容 非流式
@@ -6433,6 +6682,7 @@ export function createMessageSender(appContext) {
       answer = thinkExtraction.cleanText;
       thoughts = mergeThoughts(thoughts, thinkExtraction.thoughtText);
     }
+    const displayThoughts = isResponsesApi ? null : (thoughts || '');
 
     // 优先复用 loading 占位，避免占位升级与新建消息交错导致顺序异常
     try { GetInputContainer().classList.add('auto-scroll-glow-active'); } catch (_) {}
@@ -6455,7 +6705,10 @@ export function createMessageSender(appContext) {
             ? captureReadingAnchorForRegenerate(regenContainer, existingMessageId, attemptState)
             : null;
           try {
-            messageProcessor.updateAIMessage(existingMessageId, answer || '', thoughts || '', {
+            if (isResponsesApi) {
+              applyResponsesActivityTimelineToNode(existingNode, responseActivityTimeline);
+            }
+            messageProcessor.updateAIMessage(existingMessageId, answer || '', displayThoughts, {
               fallbackNode: existingNode,
               suppressMissingNodeWarning: true
             });
@@ -6476,16 +6729,7 @@ export function createMessageSender(appContext) {
 
             if (!isGeminiApi && isResponsesApi) {
               try {
-                if (typeof responseReasoningSummary === 'string' && responseReasoningSummary) {
-                  existingNode.response_reasoning_summary = responseReasoningSummary;
-                } else {
-                  delete existingNode.response_reasoning_summary;
-                }
-                if (Array.isArray(responseToolCalls) && responseToolCalls.length > 0) {
-                  existingNode.response_tool_calls = responseToolCalls;
-                } else {
-                  delete existingNode.response_tool_calls;
-                }
+                applyResponsesActivityTimelineToNode(existingNode, responseActivityTimeline);
                 messageProcessor.syncAssistantMessageMetadata?.(existingMessageId, existingNode, { fallbackElement: existingEl });
               } catch (e) {
                 console.warn('记录 Responses 元信息失败（非流式，原地替换）:', e);
@@ -6522,7 +6766,7 @@ export function createMessageSender(appContext) {
 
     let promotedId = null;
     if (loadingMessage && loadingMessage.parentNode) {
-      promotedId = promoteLoadingMessageToAi({ answer, thoughts });
+      promotedId = promoteLoadingMessageToAi({ answer, thoughts: displayThoughts });
     }
     if (promotedId) {
       bindAttemptAiMessage(attemptState, promotedId);
@@ -6535,16 +6779,7 @@ export function createMessageSender(appContext) {
           renderApiFooter(loadingMessage, node);
         }
         if (!isGeminiApi && isResponsesApi && node) {
-          if (typeof responseReasoningSummary === 'string' && responseReasoningSummary) {
-            node.response_reasoning_summary = responseReasoningSummary;
-          } else {
-            delete node.response_reasoning_summary;
-          }
-          if (Array.isArray(responseToolCalls) && responseToolCalls.length > 0) {
-            node.response_tool_calls = responseToolCalls;
-          } else {
-            delete node.response_tool_calls;
-          }
+          applyResponsesActivityTimelineToNode(node, responseActivityTimeline);
           messageProcessor.syncAssistantMessageMetadata?.(promotedId, node, { fallbackElement: loadingMessage });
         } else if (!isGeminiApi && node) {
           if (typeof reasoningContentRaw === 'string' && reasoningContentRaw) {
@@ -6571,7 +6806,7 @@ export function createMessageSender(appContext) {
     if (!shouldRenderDom) {
       const createdNode = createThreadAiMessageHistoryOnly({
         content: answer || '',
-        thoughts: thoughts || '',
+        thoughts: displayThoughts,
         historyParentId,
         historyPatch: threadHistoryPatch,
         historyMessagesRef: attemptState?.historyMessagesRef || null,
@@ -6595,12 +6830,7 @@ export function createMessageSender(appContext) {
 
         if (!isGeminiApi && isResponsesApi) {
           try {
-            if (typeof responseReasoningSummary === 'string' && responseReasoningSummary) {
-              createdNode.response_reasoning_summary = responseReasoningSummary;
-            }
-            if (Array.isArray(responseToolCalls) && responseToolCalls.length > 0) {
-              createdNode.response_tool_calls = responseToolCalls;
-            }
+            applyResponsesActivityTimelineToNode(createdNode, responseActivityTimeline);
           } catch (e) {
             console.warn('记录 Responses 元信息失败（非流式，后台线程）:', e);
           }
@@ -6636,7 +6866,7 @@ export function createMessageSender(appContext) {
       false,
       null,
       null,          // 非流式 Gemini 使用内联图片
-      thoughts || '',
+      displayThoughts,
       null,
       null,
       threadOptions
@@ -6666,12 +6896,7 @@ export function createMessageSender(appContext) {
 	        try {
 	          const node = resolveAttemptAiNode(attemptState, messageId);
 	          if (node) {
-                if (typeof responseReasoningSummary === 'string' && responseReasoningSummary) {
-                  node.response_reasoning_summary = responseReasoningSummary;
-                }
-                if (Array.isArray(responseToolCalls) && responseToolCalls.length > 0) {
-                  node.response_tool_calls = responseToolCalls;
-                }
+                applyResponsesActivityTimelineToNode(node, responseActivityTimeline);
                 messageProcessor.syncAssistantMessageMetadata?.(messageId, node, { fallbackElement: newAiMessageDiv });
 	          }
 	        } catch (e) {

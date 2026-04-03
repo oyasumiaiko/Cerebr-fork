@@ -8434,7 +8434,108 @@ body.chat-empty .empty-state-content {
 .message .thoughts-content.expanded .thoughts-inner-content {
     display: block;
 }
-  
+
+/* Responses API 活动时间线：按事件顺序交错显示 reasoning summary 与工具调用 */
+.message .response-activity-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.message .response-activity-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 84%, transparent);
+    font-size: 0.84em;
+}
+
+.message .response-activity-item--reasoning {
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 74%, transparent);
+}
+
+.message .response-activity-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.message .response-activity-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cerebr-accent-color, var(--cerebr-border-color)) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
+    font-size: 0.88em;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
+.message .response-activity-primary {
+    flex: 1 1 180px;
+    min-width: 0;
+    word-break: break-word;
+    color: color-mix(in srgb, var(--cerebr-text-color) 88%, transparent);
+}
+
+.message .response-activity-status,
+.message .response-activity-secondary,
+.message .response-activity-source-title {
+    color: color-mix(in srgb, var(--cerebr-text-color) 60%, transparent);
+}
+
+.message .response-activity-content--reasoning {
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+}
+
+.message .response-activity-content--reasoning > :first-child {
+    margin-top: 0;
+}
+
+.message .response-activity-content--reasoning > :last-child {
+    margin-bottom: 0;
+}
+
+.message .response-activity-arguments {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 36%, transparent);
+    font-size: 0.82em;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
+
+.message .response-activity-sources {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.message .response-activity-source-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.message .response-activity-source-link {
+    color: var(--cerebr-link-color, #3b82f6);
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.message .response-activity-source-link:hover {
+    text-decoration: underline;
+}
+
 /* Responses API 工具调用记录 */
 .message .response-tool-calls {
     margin: 8px 0 0;

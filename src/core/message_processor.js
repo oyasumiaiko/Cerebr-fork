@@ -176,10 +176,10 @@ export function createMessageProcessor(appContext) {
     const linkContext = buildMarkdownLinkContext(baseUrl, state?.isStandalone);
 
     const containers = [];
-    if (typeof rootElement.matches === 'function' && rootElement.matches('.text-content, .thoughts-content')) {
+    if (typeof rootElement.matches === 'function' && rootElement.matches('.text-content, .thoughts-content, .response-activity-content--reasoning')) {
       containers.push(rootElement);
     }
-    rootElement.querySelectorAll('.text-content, .thoughts-content').forEach((node) => containers.push(node));
+    rootElement.querySelectorAll('.text-content, .thoughts-content, .response-activity-content--reasoning').forEach((node) => containers.push(node));
 
     const uniqueContainers = Array.from(new Set(containers));
     if (!uniqueContainers.length) {
@@ -1116,6 +1116,14 @@ export function createMessageProcessor(appContext) {
     return normalized || '调用';
   }
 
+  function getResponseActivityStatusLabel(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'streaming' || normalized === 'in_progress') return '进行中';
+    if (normalized === 'completed' || normalized === 'done') return '完成';
+    return normalized;
+  }
+
   function buildResponseToolCallPrimaryText(record) {
     if (!record || typeof record !== 'object') return '工具调用';
     const type = String(record.type || '').toLowerCase();
@@ -1135,9 +1143,178 @@ export function createMessageProcessor(appContext) {
     return getResponseToolCallTypeLabel(record);
   }
 
+  function buildResponseActivityTimelineFromLegacyMetadata(node) {
+    if (!node || typeof node !== 'object') return [];
+    const timeline = [];
+    const reasoningSummary = (typeof node.response_reasoning_summary === 'string')
+      ? node.response_reasoning_summary.trim()
+      : '';
+    if (reasoningSummary) {
+      timeline.push({
+        kind: 'reasoning_summary',
+        id: 'legacy_reasoning_summary',
+        status: 'completed',
+        text: reasoningSummary
+      });
+    }
+    if (Array.isArray(node.response_tool_calls)) {
+      node.response_tool_calls.forEach((record, index) => {
+        if (!record || typeof record !== 'object') return;
+        timeline.push({
+          kind: 'tool_call',
+          id: record.id || `legacy_tool_${index}`,
+          ...record
+        });
+      });
+    }
+    return timeline;
+  }
+
+  function getResponseActivityTimeline(node) {
+    if (!node || typeof node !== 'object') return [];
+    const source = Array.isArray(node.response_activity_timeline) && node.response_activity_timeline.length > 0
+      ? node.response_activity_timeline
+      : buildResponseActivityTimelineFromLegacyMetadata(node);
+    return Array.isArray(source)
+      ? source.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
+      : [];
+  }
+
+  function removeResponseActivityTimelineDisplay(messageWrapperDiv) {
+    const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline');
+    if (timelineRoot) timelineRoot.remove();
+  }
+
+  function setupResponseActivityTimelineDisplay(messageWrapperDiv, rawTimeline, processMathAndMarkdownFn) {
+    if (!messageWrapperDiv) return false;
+    const timeline = Array.isArray(rawTimeline)
+      ? rawTimeline.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
+      : [];
+    let timelineRoot = messageWrapperDiv.querySelector('.response-activity-timeline');
+
+    if (timeline.length === 0) {
+      if (timelineRoot) timelineRoot.remove();
+      return false;
+    }
+
+    if (!timelineRoot) {
+      timelineRoot = document.createElement('div');
+      timelineRoot.className = 'response-activity-timeline';
+      const textContent = messageWrapperDiv.querySelector('.text-content');
+      if (textContent) {
+        messageWrapperDiv.insertBefore(timelineRoot, textContent);
+      } else {
+        const footer = messageWrapperDiv.querySelector('.api-footer');
+        if (footer) {
+          messageWrapperDiv.insertBefore(timelineRoot, footer);
+        } else {
+          messageWrapperDiv.appendChild(timelineRoot);
+        }
+      }
+    }
+
+    timelineRoot.innerHTML = '';
+
+    timeline.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = `response-activity-item response-activity-item--${entry.kind}`;
+
+      const header = document.createElement('div');
+      header.className = 'response-activity-header';
+
+      const badge = document.createElement('span');
+      badge.className = 'response-activity-badge';
+      badge.textContent = entry.kind === 'reasoning_summary'
+        ? 'summary'
+        : getResponseToolCallTypeLabel(entry);
+      header.appendChild(badge);
+
+      const primary = document.createElement('span');
+      primary.className = 'response-activity-primary';
+      primary.textContent = entry.kind === 'reasoning_summary'
+        ? '思考摘要'
+        : buildResponseToolCallPrimaryText(entry);
+      header.appendChild(primary);
+
+      const statusLabel = getResponseActivityStatusLabel(entry.status);
+      if (statusLabel) {
+        const status = document.createElement('span');
+        status.className = 'response-activity-status';
+        status.textContent = statusLabel;
+        header.appendChild(status);
+      }
+
+      item.appendChild(header);
+
+      if (entry.kind === 'reasoning_summary') {
+        const content = document.createElement('div');
+        content.className = 'response-activity-content response-activity-content--reasoning';
+        content.innerHTML = processMathAndMarkdownFn(typeof entry.text === 'string' ? entry.text : '');
+        item.appendChild(content);
+      } else {
+        if (Array.isArray(entry.queries) && entry.queries.length > 1) {
+          const queries = document.createElement('div');
+          queries.className = 'response-activity-secondary';
+          queries.textContent = `查询：${entry.queries.join(' | ')}`;
+          item.appendChild(queries);
+        } else if (typeof entry.url === 'string' && entry.url.trim() && String(entry.type || '').toLowerCase() !== 'web_search_call') {
+          const urlLine = document.createElement('div');
+          urlLine.className = 'response-activity-secondary';
+          urlLine.textContent = entry.url.trim();
+          item.appendChild(urlLine);
+        }
+
+        if (typeof entry.arguments === 'string' && entry.arguments.trim()) {
+          const pre = document.createElement('pre');
+          pre.className = 'response-activity-arguments';
+          pre.textContent = formatResponseToolCallArguments(entry.arguments);
+          item.appendChild(pre);
+        }
+
+        if (Array.isArray(entry.sources) && entry.sources.length > 0) {
+          const sources = document.createElement('div');
+          sources.className = 'response-activity-sources';
+          const sourceTitle = document.createElement('div');
+          sourceTitle.className = 'response-activity-source-title';
+          sourceTitle.textContent = `来源 ${entry.sources.length}`;
+          sources.appendChild(sourceTitle);
+
+          const sourceList = document.createElement('div');
+          sourceList.className = 'response-activity-source-list';
+          entry.sources.forEach((source) => {
+            const label = source.title || source.domain || source.url || '未命名来源';
+            if (source.url) {
+              const link = document.createElement('a');
+              link.className = 'response-activity-source-link';
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              link.href = source.url;
+              link.textContent = label;
+              sourceList.appendChild(link);
+            } else {
+              const text = document.createElement('span');
+              text.className = 'response-activity-source-link';
+              text.textContent = label;
+              sourceList.appendChild(text);
+            }
+          });
+          sources.appendChild(sourceList);
+          item.appendChild(sources);
+        }
+      }
+
+      timelineRoot.appendChild(item);
+    });
+
+    return true;
+  }
+
   /**
    * 同步 assistant 消息的附加元信息展示。
-   * 当前先覆盖 Responses API 的工具调用记录；推理摘要继续复用现有 thoughts 区块显示。
+   * 规则：
+   * - 若存在 Responses 活动时间线，则按时间线交错渲染 reasoning summary 与工具调用；
+   * - 若只有旧版 summary / tool_calls 字段，则回退到旧展示；
+   * - 其它 assistant 消息继续沿用原有 thoughts 展示。
    * @param {HTMLElement} messageWrapperDiv
    * @param {Array<any>|null|undefined} rawToolCalls
    */
@@ -1278,9 +1455,17 @@ export function createMessageProcessor(appContext) {
     const role = String(node.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
 
-    const responseThoughts = node.thoughtsRaw || node.response_reasoning_summary || null;
-    setupThoughtsDisplay(messageWrapperDiv, responseThoughts, processMathAndMarkdown);
-    setupResponseToolCallsDisplay(messageWrapperDiv, node.response_tool_calls || null);
+    const responseTimeline = getResponseActivityTimeline(node);
+    if (responseTimeline.length > 0) {
+      setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
+      setupResponseToolCallsDisplay(messageWrapperDiv, null);
+      setupResponseActivityTimelineDisplay(messageWrapperDiv, responseTimeline, processMathAndMarkdown);
+    } else {
+      removeResponseActivityTimelineDisplay(messageWrapperDiv);
+      const responseThoughts = node.thoughtsRaw || node.response_reasoning_summary || null;
+      setupThoughtsDisplay(messageWrapperDiv, responseThoughts, processMathAndMarkdown);
+      setupResponseToolCallsDisplay(messageWrapperDiv, node.response_tool_calls || null);
+    }
     enhanceMarkdownContent(messageWrapperDiv);
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
     return true;
