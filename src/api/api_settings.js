@@ -3741,19 +3741,29 @@ export function createApiManager(appContext) {
 
     const responsesSettingsSection = createResponsesSettingsSection();
     const geminiSettingsSection = createGeminiSettingsSection();
+    const providerSettingsHost = document.createElement('div');
+    providerSettingsHost.className = 'provider-settings-host';
     if (apiFormGrid?.parentElement === apiForm) {
-      apiForm.appendChild(responsesSettingsSection);
-      apiForm.appendChild(geminiSettingsSection);
+      apiForm.appendChild(providerSettingsHost);
     } else if (apiForm) {
-      apiForm.appendChild(responsesSettingsSection);
-      apiForm.appendChild(geminiSettingsSection);
+      apiForm.appendChild(providerSettingsHost);
     }
     const refreshProviderSettingsVisibility = () => {
-      if (!responsesSettingsSection) return;
-      responsesSettingsSection.hidden = !isResponsesConnectionSelected();
-      if (geminiSettingsSection) {
-        geminiSettingsSection.hidden = !isGeminiConnectionSelected();
+      if (!providerSettingsHost) return;
+      const nextSections = [];
+      if (isResponsesConnectionSelected() && responsesSettingsSection) {
+        responsesSettingsSection.hidden = false;
+        nextSections.push(responsesSettingsSection);
+      } else if (responsesSettingsSection) {
+        responsesSettingsSection.hidden = true;
       }
+      if (isGeminiConnectionSelected() && geminiSettingsSection) {
+        geminiSettingsSection.hidden = false;
+        nextSections.push(geminiSettingsSection);
+      } else if (geminiSettingsSection) {
+        geminiSettingsSection.hidden = true;
+      }
+      providerSettingsHost.replaceChildren(...nextSections);
     };
 
     // 选择按钮点击事件
