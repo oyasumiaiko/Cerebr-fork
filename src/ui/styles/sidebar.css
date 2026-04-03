@@ -8462,6 +8462,7 @@ body.chat-empty .empty-state-content {
     cursor: pointer;
     text-align: left;
     color: inherit;
+    font: inherit;
 }
 
 .message .response-activity-panel-toggle:hover {
@@ -8606,6 +8607,7 @@ body.chat-empty .empty-state-content {
     cursor: pointer;
     text-align: left;
     color: inherit;
+    font: inherit;
 }
 
 .message div.response-activity-tool-summary {
@@ -8680,6 +8682,7 @@ body.chat-empty .empty-state-content {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    font: inherit;
 }
 
 .message .response-activity-tool-sources > summary::-webkit-details-marker {
