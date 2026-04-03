@@ -57,6 +57,12 @@ const RESPONSES_SERVICE_TIER_OPTIONS = Object.freeze(['auto', 'default', 'flex',
 const RESPONSES_TRUNCATION_OPTIONS = Object.freeze(['auto', 'disabled']);
 const RESPONSES_TEXT_VERBOSITY_OPTIONS = Object.freeze(['low', 'medium', 'high']);
 const RESPONSES_WEB_SEARCH_SOURCE_INCLUDE = 'web_search_call.action.sources';
+const RESPONSES_SEARCH_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
+  path: ['builtin_tools', 'web_search', 'enabled'],
+  key: 'builtin_tools.web_search.enabled',
+  label: '启用搜索工具',
+  help: '启用后自动在 /responses 的 tools 中附加 { type: "web_search" }，由 OpenAI 服务端执行搜索。'
+});
 const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
   {
     path: ['reasoning', 'effort'],
@@ -75,13 +81,6 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     defaultValue: 'medium',
     options: RESPONSES_TEXT_VERBOSITY_OPTIONS,
     help: '约束输出文本的详细程度。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'enabled'],
-    key: 'builtin_tools.web_search.enabled',
-    label: '联网搜索',
-    kind: 'boolean',
-    help: '启用后自动在 /responses 的 tools 中附加 { type: \"web_search\" }，由 OpenAI 服务端执行搜索。'
   },
   {
     path: ['max_output_tokens'],
@@ -236,40 +235,6 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     options: RESPONSES_REASONING_SUMMARY_OPTIONS
   },
   {
-    path: ['builtin_tools', 'web_search', 'external_web_access'],
-    key: 'builtin_tools.web_search.external_web_access',
-    label: '实时外网搜索',
-    kind: 'boolean',
-    help: '显式控制 web_search 是否允许实时访问外部网页；未启用时沿用 OpenAI 默认策略。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'include_sources'],
-    key: 'builtin_tools.web_search.include_sources',
-    label: '返回搜索来源',
-    kind: 'boolean',
-    help: '启用后会自动在 include 中附加 web_search_call.action.sources，便于展示与存档来源。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'filters', 'allowed_domains'],
-    key: 'builtin_tools.web_search.filters.allowed_domains',
-    label: '搜索域名白名单',
-    kind: 'json',
-    jsonMode: 'array',
-    rows: 4,
-    placeholder: '[\n  \"openai.com\"\n]',
-    help: '仅允许搜索指定域名；填写 JSON 数组。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'user_location'],
-    key: 'builtin_tools.web_search.user_location',
-    label: '搜索用户位置',
-    kind: 'json',
-    jsonMode: 'object',
-    rows: 6,
-    placeholder: '{\n  \"type\": \"approximate\",\n  \"country\": \"US\",\n  \"city\": \"San Francisco\",\n  \"region\": \"California\",\n  \"timezone\": \"America/Los_Angeles\"\n}',
-    help: '传给 web_search 的 user_location 对象。'
-  },
-  {
     path: ['stream_options', 'include_obfuscation'],
     key: 'stream_options.include_obfuscation',
     label: '流式混淆填充',
@@ -344,6 +309,42 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
     help: '填写 JSON 数组。'
+  }
+]);
+const RESPONSES_SEARCH_TOOL_FIELD_SPECS = Object.freeze([
+  {
+    path: ['builtin_tools', 'web_search', 'external_web_access'],
+    key: 'builtin_tools.web_search.external_web_access',
+    label: '实时外网搜索',
+    kind: 'boolean',
+    help: '显式控制 web_search 是否允许实时访问外部网页；未启用时沿用 OpenAI 默认策略。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'include_sources'],
+    key: 'builtin_tools.web_search.include_sources',
+    label: '返回搜索来源',
+    kind: 'boolean',
+    help: '启用后会自动在 include 中附加 web_search_call.action.sources，便于展示与存档来源。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'filters', 'allowed_domains'],
+    key: 'builtin_tools.web_search.filters.allowed_domains',
+    label: '搜索域名白名单',
+    kind: 'json',
+    jsonMode: 'array',
+    rows: 4,
+    placeholder: '[\n  \"openai.com\"\n]',
+    help: '仅允许搜索指定域名；填写 JSON 数组。'
+  },
+  {
+    path: ['builtin_tools', 'web_search', 'user_location'],
+    key: 'builtin_tools.web_search.user_location',
+    label: '搜索用户位置',
+    kind: 'json',
+    jsonMode: 'object',
+    rows: 6,
+    placeholder: '{\n  \"type\": \"approximate\",\n  \"country\": \"US\",\n  \"city\": \"San Francisco\",\n  \"region\": \"California\",\n  \"timezone\": \"America/Los_Angeles\"\n}',
+    help: '传给 web_search 的 user_location 对象。'
   }
 ]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
@@ -3266,25 +3267,59 @@ export function createApiManager(appContext) {
       description,
       mainSpecs,
       advancedSpecs,
+      sectionToggleSpec = null,
       getSettingsSnapshot,
       updateSettingAtPath
     }) => {
       const section = document.createElement('section');
       section.className = 'responses-settings-panel';
 
+      const headerBar = document.createElement('div');
+      headerBar.className = 'responses-settings-header';
+
       const title = document.createElement('div');
       title.className = 'responses-settings-title';
       title.textContent = sectionTitle;
-      section.appendChild(title);
+      headerBar.appendChild(title);
+      section.appendChild(headerBar);
+
+      let sectionToggleInput = null;
+      if (sectionToggleSpec && Array.isArray(sectionToggleSpec.path) && sectionToggleSpec.path.length > 0) {
+        const sectionToggleWrap = document.createElement('div');
+        sectionToggleWrap.className = 'responses-settings-section-toggle';
+        if (sectionToggleSpec.help) {
+          sectionToggleWrap.title = sectionToggleSpec.help;
+        }
+
+        const sectionToggleText = document.createElement('span');
+        sectionToggleText.className = 'responses-settings-section-toggle-text';
+        sectionToggleText.textContent = sectionToggleSpec.label || '启用';
+        sectionToggleWrap.appendChild(sectionToggleText);
+
+        const sectionToggleSwitch = document.createElement('label');
+        sectionToggleSwitch.className = 'switch responses-settings-section-toggle-switch';
+        sectionToggleInput = document.createElement('input');
+        sectionToggleInput.type = 'checkbox';
+        const sectionToggleSlider = document.createElement('span');
+        sectionToggleSlider.className = 'slider';
+        sectionToggleSwitch.appendChild(sectionToggleInput);
+        sectionToggleSwitch.appendChild(sectionToggleSlider);
+        sectionToggleWrap.appendChild(sectionToggleSwitch);
+        headerBar.appendChild(sectionToggleWrap);
+      }
+
+      const body = document.createElement('div');
+      body.className = 'responses-settings-body';
+      section.appendChild(body);
 
       const desc = document.createElement('div');
       desc.className = 'responses-settings-description';
       desc.textContent = description;
-      section.appendChild(desc);
+      body.appendChild(desc);
 
       const mainGrid = document.createElement('div');
       mainGrid.className = 'responses-settings-grid responses-settings-grid--main';
-      section.appendChild(mainGrid);
+      body.appendChild(mainGrid);
 
       const advancedDetails = document.createElement('details');
       advancedDetails.className = 'responses-advanced-settings';
@@ -3294,8 +3329,12 @@ export function createApiManager(appContext) {
       const advancedGrid = document.createElement('div');
       advancedGrid.className = 'responses-settings-grid responses-settings-grid--advanced';
       advancedDetails.appendChild(advancedGrid);
-      section.appendChild(advancedDetails);
+      body.appendChild(advancedDetails);
       const transientFieldKeys = new Set();
+      const getSectionEnabled = () => {
+        if (!sectionToggleSpec) return true;
+        return getNestedValue(getSettingsSnapshot(), sectionToggleSpec.path) === true;
+      };
 
       const createField = (spec) => {
         const field = document.createElement('div');
@@ -3588,11 +3627,34 @@ export function createApiManager(appContext) {
       (advancedSpecs || []).forEach((spec) => {
         advancedGrid.appendChild(createField(spec));
       });
+      mainGrid.hidden = !(mainSpecs || []).length;
+      advancedDetails.hidden = !(advancedSpecs || []).length;
 
-      const currentSettings = getSettingsSnapshot();
-      const hasAdvancedValue = (advancedSpecs || []).some(spec =>
-        typeof getNestedValue(currentSettings, spec.path) !== 'undefined');
-      advancedDetails.open = hasAdvancedValue;
+      const computeHasAdvancedValue = () => (advancedSpecs || []).some(spec =>
+        typeof getNestedValue(getSettingsSnapshot(), spec.path) !== 'undefined');
+      advancedDetails.open = !advancedDetails.hidden && computeHasAdvancedValue();
+
+      const syncSectionVisibility = () => {
+        const enabled = getSectionEnabled();
+        if (sectionToggleInput) {
+          sectionToggleInput.checked = enabled;
+        }
+        body.hidden = !enabled;
+        section.classList.toggle('is-section-disabled', !enabled);
+        if (!enabled) {
+          advancedDetails.open = false;
+        } else if (!advancedDetails.hidden && computeHasAdvancedValue()) {
+          advancedDetails.open = true;
+        }
+      };
+
+      if (sectionToggleInput) {
+        sectionToggleInput.addEventListener('change', () => {
+          updateSettingAtPath(sectionToggleSpec.path, sectionToggleInput.checked ? true : undefined);
+          syncSectionVisibility();
+        });
+      }
+      syncSectionVisibility();
 
       return section;
     };
@@ -3601,6 +3663,15 @@ export function createApiManager(appContext) {
       description: '已启用的字段才会写入 /responses 请求体；未启用字段不会占用同步存储。',
       mainSpecs: RESPONSES_MAIN_FIELD_SPECS,
       advancedSpecs: RESPONSES_ADVANCED_FIELD_SPECS,
+      getSettingsSnapshot: getResponsesSettingsSnapshot,
+      updateSettingAtPath: updateResponsesSettingAtPath
+    });
+    const createResponsesSearchToolSection = () => createApiFieldSettingsSection({
+      title: '搜索工具',
+      description: '这里单独管理 Responses API 的 web_search 工具；关闭后不会往请求体附加该工具。',
+      mainSpecs: [],
+      advancedSpecs: RESPONSES_SEARCH_TOOL_FIELD_SPECS,
+      sectionToggleSpec: RESPONSES_SEARCH_TOOL_SECTION_TOGGLE_SPEC,
       getSettingsSnapshot: getResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
@@ -3740,6 +3811,7 @@ export function createApiManager(appContext) {
     }
 
     const responsesSettingsSection = createResponsesSettingsSection();
+    const responsesSearchToolSection = createResponsesSearchToolSection();
     const geminiSettingsSection = createGeminiSettingsSection();
     const providerSettingsHost = document.createElement('div');
     providerSettingsHost.className = 'provider-settings-host';
@@ -3754,8 +3826,15 @@ export function createApiManager(appContext) {
       if (isResponsesConnectionSelected() && responsesSettingsSection) {
         responsesSettingsSection.hidden = false;
         nextSections.push(responsesSettingsSection);
+        if (responsesSearchToolSection) {
+          responsesSearchToolSection.hidden = false;
+          nextSections.push(responsesSearchToolSection);
+        }
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
+        if (responsesSearchToolSection) {
+          responsesSearchToolSection.hidden = true;
+        }
       }
       if (isGeminiConnectionSelected() && geminiSettingsSection) {
         geminiSettingsSection.hidden = false;
