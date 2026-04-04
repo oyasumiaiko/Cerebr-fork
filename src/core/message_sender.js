@@ -855,16 +855,23 @@ export function createMessageSender(appContext) {
     const type = String(item.type || '').trim().toLowerCase();
     if (!type || (!type.endsWith('_call') && type !== 'function_call')) return null;
 
-    const id = (typeof item.call_id === 'string' && item.call_id)
-      || (typeof item.id === 'string' && item.id)
-      || (typeof item.item_id === 'string' && item.item_id)
-      || '';
+    const callId = (typeof item.call_id === 'string' && item.call_id)
+      ? item.call_id
+      : '';
+    const itemId = (typeof item.item_id === 'string' && item.item_id)
+      ? item.item_id
+      : ((typeof item.id === 'string' && item.id) ? item.id : '');
+    const id = (type === 'function_call')
+      ? (itemId || callId || '')
+      : (callId || itemId || '');
     const status = (typeof item.status === 'string') ? item.status : '';
 
     if (type === 'function_call') {
       const normalized = compactResponsesMetaValue({
         type,
         id,
+        item_id: itemId || '',
+        call_id: callId || '',
         status,
         name: item.name || '',
         arguments: item.arguments || ''
@@ -1288,6 +1295,8 @@ export function createMessageSender(appContext) {
       .map((entry) => compactResponsesMetaValue({
         type: entry.type,
         id: entry.id,
+        item_id: entry.item_id,
+        call_id: entry.call_id,
         status: entry.status,
         action_type: entry.action_type,
         query: entry.query,
@@ -4896,7 +4905,9 @@ export function createMessageSender(appContext) {
    * @returns {Promise<{type:'function_call_output', call_id:string, output:string}>}
    */
   async function executeResponsesCustomFunctionToolCall(toolCallRecord) {
-    const callId = (typeof toolCallRecord?.id === 'string') ? toolCallRecord.id.trim() : '';
+    const callId = (typeof toolCallRecord?.call_id === 'string' && toolCallRecord.call_id.trim())
+      ? toolCallRecord.call_id.trim()
+      : ((typeof toolCallRecord?.id === 'string') ? toolCallRecord.id.trim() : '');
     const functionName = (typeof toolCallRecord?.name === 'string') ? toolCallRecord.name.trim() : '';
     if (!callId) {
       throw new Error(`Responses function_call 缺少 call_id，无法回传工具结果（${functionName || 'unknown'}）。`);
