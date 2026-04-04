@@ -802,14 +802,18 @@ export function createMessageSender(appContext) {
       return normalized;
     }
     if (kind === 'reasoning_summary') {
-      const text = normalizeResponsesReasoningText((typeof entry.text === 'string') ? entry.text : '');
+      const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : '';
+      const isStreaming = status.toLowerCase() === 'streaming' || status.toLowerCase() === 'in_progress';
+      const rawText = (typeof entry.text === 'string') ? entry.text : '';
+      const text = isStreaming
+        ? rawText.replace(/\r\n?/g, '\n')
+        : normalizeResponsesReasoningText(rawText);
       if (!text) return null;
       const normalized = {
         kind: 'reasoning_summary',
         text
       };
       const id = (typeof entry.id === 'string' && entry.id.trim()) ? entry.id.trim() : '';
-      const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : '';
       if (id) normalized.id = id;
       if (status) normalized.status = status;
       return normalized;
@@ -971,7 +975,11 @@ export function createMessageSender(appContext) {
           const mergedText = (typeof previous.text === 'string' && previous.text && typeof normalized.text === 'string' && normalized.text)
             ? (
               normalized.kind === 'reasoning_summary'
-                ? mergeResponsesReasoningText(previous.text, normalized.text)
+                ? (
+                  isResponsesActivityEntryInProgress(normalized)
+                    ? mergeStreamingThoughts(previous.text, normalized.text)
+                    : mergeResponsesReasoningText(previous.text, normalized.text)
+                )
                 : normalizeResponsesCommentaryText(mergeStreamingThoughts(previous.text, normalized.text))
             )
             : ((typeof normalized.text === 'string' && normalized.text) ? normalized.text : (previous.text || ''));
