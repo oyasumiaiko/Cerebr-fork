@@ -1422,6 +1422,128 @@ export function createMessageSender(appContext) {
     return preferResponsesCommentaryTimeline(mergeResponsesActivityTimeline([], timeline));
   }
 
+  /**
+   * 为 Responses output item 构造“回放历史”去重键。
+   *
+   * 为什么需要这个键：
+   * - 同一 hop 中，`response.output_item.done` 往往会先到；
+   * - 随后 `response.completed` 又会把完整 `output[]` 整体再发一遍；
+   * - 若我们要按 Codex 的方式把这些 output item 回放进下一轮 HTTP input，
+   *   就必须先在客户端去重，否则会把同一个 assistant item 重放两次。
+   *
+   * 这里优先使用：
+   * - `type + call_id`：适合 function_call / custom_tool_call / tool_search_call；
+   * - `type + id/item_id`：适合 message / reasoning / 其他带稳定 id 的 output item；
+   * - 最后才回退到索引键。
+   *
+   * @param {any} item
+   * @param {number} fallbackIndex
+   * @returns {string}
+   */
+  function getResponsesReplayOutputItemKey(item, fallbackIndex = 0) {
+    if (!item || typeof item !== 'object') {
+      return `unknown:${fallbackIndex}`;
+    }
+
+    const type = (typeof item.type === 'string' && item.type.trim())
+      ? item.type.trim().toLowerCase()
+      : 'unknown';
+    const callId = (typeof item.call_id === 'string' && item.call_id.trim())
+      ? item.call_id.trim()
+      : '';
+    if (callId) return `${type}:call:${callId}`;
+
+    const itemId = (typeof item.id === 'string' && item.id.trim())
+      ? item.id.trim()
+      : ((typeof item.item_id === 'string' && item.item_id.trim()) ? item.item_id.trim() : '');
+    if (itemId) return `${type}:id:${itemId}`;
+
+    return `${type}:idx:${fallbackIndex}`;
+  }
+
+  /**
+   * 合并多批 Responses output item，供“下一轮 full replay input”使用。
+   *
+   * 设计目标：
+   * - 保留原始 item 结构，尽量贴近 Codex 的“把模型返回 item 原样记进历史，再整体重放”；
+   * - 针对 `output_item.done + response.completed` 的重复回传做去重；
+   * - 后到的数据覆盖先到的数据，确保最终保留 completed 版本。
+   *
+   * @param {any} existingItems
+   * @param {any} incomingItems
+   * @returns {Array<Object>}
+   */
+  function mergeResponsesReplayOutputItems(existingItems, incomingItems) {
+    const merged = Array.isArray(existingItems)
+      ? existingItems
+        .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        .map(item => cloneDataSafely(item))
+      : [];
+    const keyToIndex = new Map();
+
+    merged.forEach((item, index) => {
+      keyToIndex.set(getResponsesReplayOutputItemKey(item, index), index);
+    });
+
+    (Array.isArray(incomingItems) ? incomingItems : []).forEach((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+      const cloned = cloneDataSafely(item);
+      const key = getResponsesReplayOutputItemKey(cloned, index);
+      if (keyToIndex.has(key)) {
+        merged[keyToIndex.get(key)] = cloned;
+      } else {
+        keyToIndex.set(key, merged.length);
+        merged.push(cloned);
+      }
+    });
+
+    return merged;
+  }
+
+  function cloneResponsesReplayOutputItems(items) {
+    return mergeResponsesReplayOutputItems([], items);
+  }
+
+  /**
+   * 用最小合法字段重建一个 Responses `function_call` item。
+   *
+   * 背景：
+   * - 某些兼容端点会稳定给出 `response.function_call_arguments.done`，
+   *   但未必总是给出完整的 `response.output_item.done(function_call item)`；
+   * - 为了满足“function_call_output 必须能在同一 input 中找到对应 function_call”
+   *   的约束，这里在必要时客户端自行补一个最小可匹配版本。
+   *
+   * @param {any} toolCallRecord
+   * @returns {Object|null}
+   */
+  function buildResponsesReplayFunctionCallItem(toolCallRecord) {
+    if (!toolCallRecord || typeof toolCallRecord !== 'object') return null;
+    const callId = (typeof toolCallRecord.call_id === 'string' && toolCallRecord.call_id.trim())
+      ? toolCallRecord.call_id.trim()
+      : '';
+    const name = (typeof toolCallRecord.name === 'string' && toolCallRecord.name.trim())
+      ? toolCallRecord.name.trim()
+      : '';
+    if (!callId || !name) return null;
+
+    const item = {
+      type: 'function_call',
+      call_id: callId,
+      name,
+      arguments: (typeof toolCallRecord.arguments === 'string') ? toolCallRecord.arguments : '',
+      status: 'completed'
+    };
+
+    const itemId = (typeof toolCallRecord.item_id === 'string' && toolCallRecord.item_id.trim())
+      ? toolCallRecord.item_id.trim()
+      : ((typeof toolCallRecord.id === 'string' && toolCallRecord.id.trim()) ? toolCallRecord.id.trim() : '');
+    if (itemId) {
+      item.id = itemId;
+    }
+
+    return item;
+  }
+
   function extractOpenAIResponsesOutput(payload) {
     const answerParts = [];
     let responseActivityTimeline = [];
@@ -1456,6 +1578,7 @@ export function createMessageSender(appContext) {
     return {
       answer,
       responseId,
+      responseOutputItems: outputItems.length > 0 ? cloneResponsesReplayOutputItems(outputItems) : null,
       responseActivityTimeline: responseActivityTimeline.length > 0 ? responseActivityTimeline : null,
       reasoningSummary: getResponsesReasoningSummaryFromTimeline(responseActivityTimeline),
       responseToolCalls: getResponsesToolCallsFromTimeline(responseActivityTimeline),
@@ -4731,12 +4854,6 @@ export function createMessageSender(appContext) {
 
     const nextBody = cloneDataSafely(requestBody) || {};
     nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
-    // 关键约束：
-    // - 后续 function_call_output follow-up 依赖 previous_response_id；
-    // - 若响应未被服务端保存，则某些兼容端点会直接报
-    //   “No tool call found for function call output with call_id ...”；
-    // - 因此只要启用了客户端自定义函数工具链路，这里就显式要求 store=true。
-    nextBody.store = true;
     return nextBody;
   }
 
@@ -4963,24 +5080,64 @@ export function createMessageSender(appContext) {
   /**
    * 基于上一轮 requestBody 构造下一轮 Responses follow-up 请求。
    *
-   * 核心规则：
-   * - input 只发送 function_call_output；
-   * - previous_response_id 指向上一轮响应；
-   * - conversation 与 previous_response_id 互斥，因此这里明确移除 conversation。
+   * 这里对齐 Codex 的 HTTP 路线，而不是走“output-only continuation”：
+   * - 不使用 `previous_response_id`；
+   * - 直接在客户端把“本轮模型输出的 output items + 本地工具输出”追加回 input；
+   * - 下一 hop 再把完整 input 重发给 `/responses`。
+   *
+   * 这样做的好处：
+   * - 不依赖服务端保存上一轮响应状态；
+   * - 能兼容“不认识 previous_response_id continuation”的 Responses 兼容端点；
+   * - 也更接近 Codex 当前 HTTP 路线：本地历史重放，而不是服务端 continuation。
    *
    * @param {Object} previousRequestBody
-   * @param {string} previousResponseId
+   * @param {Array<Object>|null|undefined} responseOutputItems
    * @param {Array<Object>} functionCallOutputs
+   * @param {Array<Object>|null|undefined} pendingFunctionCalls
    * @returns {Object}
    */
-  function buildResponsesFunctionToolFollowUpRequest(previousRequestBody, previousResponseId, functionCallOutputs) {
+  function buildResponsesFunctionToolFollowUpRequest(
+    previousRequestBody,
+    responseOutputItems,
+    functionCallOutputs,
+    pendingFunctionCalls
+  ) {
     const nextBody = cloneDataSafely(previousRequestBody) || {};
-    delete nextBody.input;
-    delete nextBody.conversation;
-    nextBody.previous_response_id = previousResponseId;
-    nextBody.input = Array.isArray(functionCallOutputs)
-      ? functionCallOutputs.map(item => cloneDataSafely(item))
+    const previousInput = Array.isArray(nextBody.input)
+      ? nextBody.input.map(item => cloneDataSafely(item))
       : [];
+    let replayOutputItems = mergeResponsesReplayOutputItems([], responseOutputItems);
+
+    // 某些兼容端点只给 function_call_arguments.done，不给完整 function_call output item。
+    // 为确保后面的 function_call_output 都能在同一 input 中找到对应 call_id，
+    // 这里为“缺失的 function_call”补最小合法项。
+    const knownFunctionCallIds = new Set(
+      mergeResponsesReplayOutputItems(previousInput, replayOutputItems)
+        .filter(item => String(item?.type || '').trim().toLowerCase() === 'function_call')
+        .map(item => (typeof item?.call_id === 'string' ? item.call_id.trim() : ''))
+        .filter(Boolean)
+    );
+    const synthesizedFunctionCallItems = [];
+    (Array.isArray(pendingFunctionCalls) ? pendingFunctionCalls : []).forEach((record) => {
+      const callId = (typeof record?.call_id === 'string' && record.call_id.trim())
+        ? record.call_id.trim()
+        : '';
+      if (!callId || knownFunctionCallIds.has(callId)) return;
+      const rebuilt = buildResponsesReplayFunctionCallItem(record);
+      if (!rebuilt) return;
+      synthesizedFunctionCallItems.push(rebuilt);
+      knownFunctionCallIds.add(callId);
+    });
+    replayOutputItems = mergeResponsesReplayOutputItems(replayOutputItems, synthesizedFunctionCallItems);
+
+    delete nextBody.previous_response_id;
+    nextBody.input = previousInput
+      .concat(replayOutputItems.map(item => cloneDataSafely(item)))
+      .concat(
+        Array.isArray(functionCallOutputs)
+          ? functionCallOutputs.map(item => cloneDataSafely(item))
+          : []
+      );
     return nextBody;
   }
 
@@ -5058,7 +5215,7 @@ export function createMessageSender(appContext) {
    * 1. 发送初始请求；
    * 2. 渲染当前 hop 的模型输出；
    * 3. 若模型返回 function_call，则本地执行；
-   * 4. 以 function_call_output + previous_response_id 继续下一 hop；
+   * 4. 以“完整 input replay + function_call_output”继续下一 hop；
    * 5. 直到没有新的 function_call 为止。
    *
    * @param {Object} options
@@ -5109,15 +5266,6 @@ export function createMessageSender(appContext) {
         return lastHandleResult;
       }
 
-      const previousResponseId = (typeof lastHandleResult?.responseId === 'string' && lastHandleResult.responseId)
-        ? lastHandleResult.responseId
-        : ((typeof attemptState?.responsesToolLoopLastResponseId === 'string' && attemptState.responsesToolLoopLastResponseId)
-          ? attemptState.responsesToolLoopLastResponseId
-          : '');
-      if (!previousResponseId) {
-        throw new Error('Responses 返回了 function_call，但缺少 response id，无法继续发送 function_call_output。');
-      }
-
       if (hopCount >= MAX_RESPONSES_CUSTOM_TOOL_ROUNDS) {
         throw new Error(`Responses 自定义工具 follow-up 已超过最大轮数（${MAX_RESPONSES_CUSTOM_TOOL_ROUNDS}），为防止死循环已中止。`);
       }
@@ -5134,8 +5282,9 @@ export function createMessageSender(appContext) {
 
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
         currentRequestBody,
-        previousResponseId,
-        functionCallOutputs
+        lastHandleResult?.responseOutputItems,
+        functionCallOutputs,
+        pendingFunctionCalls
       );
       hopCount += 1;
     }
@@ -6531,7 +6680,7 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement} loadingMessage
    * @param {Object} usedApiConfig
    * @param {Object} attemptState
-   * @returns {Promise<{answer:string, responseId:string|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
+   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
    */
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     captureAttemptConversationContext(attemptState);
@@ -6653,6 +6802,7 @@ export function createMessageSender(appContext) {
       let latestResponsesActivityTimeline = cloneResponsesActivityTimeline(previousResponsesActivityTimeline);
       let latestResponsesAssistantPhase = attemptState?.responsesToolLoopAssistantPhase || null;
       let latestResponsesResponseId = attemptState?.responsesToolLoopLastResponseId || null;
+      let latestResponsesOutputItems = [];
       const latestResponsesOutputItemPhaseById = new Map();
       // Responses API：记录“正文可见文本”的分片状态，避免 delta/done/full item 多次到来时重复拼接。
       const latestResponsesOutputTextState = new Map();
@@ -7020,6 +7170,9 @@ export function createMessageSender(appContext) {
       return {
         answer: aiResponse || '',
         responseId: latestResponsesResponseId || null,
+        responseOutputItems: latestResponsesOutputItems.length > 0
+          ? cloneResponsesReplayOutputItems(latestResponsesOutputItems)
+          : null,
         responseActivityTimeline: (Array.isArray(latestResponsesActivityTimeline) && latestResponsesActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
           : null,
@@ -7401,6 +7554,12 @@ export function createMessageSender(appContext) {
                 }
               ) || shouldRebuildResponsesVisibleAnswer;
             }
+            if (eventType === 'response.output_item.done') {
+              latestResponsesOutputItems = mergeResponsesReplayOutputItems(
+                latestResponsesOutputItems,
+                [outputItem]
+              );
+            }
             const extractedItem = extractOpenAIResponsesOutput({ output: [outputItem] });
             if (!shouldRebuildResponsesVisibleAnswer && typeof extractedItem.answer === 'string' && extractedItem.answer) {
               currentEventAnswerDelta = extractedItem.answer;
@@ -7445,6 +7604,12 @@ export function createMessageSender(appContext) {
             { status: 'completed' }
           ) || shouldRebuildResponsesVisibleAnswer;
           const extracted = extractOpenAIResponsesOutput(completedPayload);
+          if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
+            latestResponsesOutputItems = mergeResponsesReplayOutputItems(
+              latestResponsesOutputItems,
+              extracted.responseOutputItems
+            );
+          }
           if (typeof extracted.responseId === 'string' && extracted.responseId) {
             latestResponsesResponseId = extracted.responseId;
           }
@@ -7473,6 +7638,12 @@ export function createMessageSender(appContext) {
             { status: 'completed' }
           ) || shouldRebuildResponsesVisibleAnswer;
           const extracted = extractOpenAIResponsesOutput(data);
+          if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
+            latestResponsesOutputItems = mergeResponsesReplayOutputItems(
+              latestResponsesOutputItems,
+              extracted.responseOutputItems
+            );
+          }
           if (typeof extracted.responseId === 'string' && extracted.responseId) {
             latestResponsesResponseId = extracted.responseId;
           }
@@ -7596,7 +7767,7 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement} loadingMessage - 加载状态消息元素
    * @param {Object} usedApiConfig - 本次使用的 API 配置
    * @param {{id:string, aiMessageId?:string}|null} attemptState - 当前请求的 attempt 状态对象
-   * @returns {Promise<{answer:string, responseId:string|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
+   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
    */
   async function handleNonStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     const canUpdateLoadingStatus = !!(
@@ -7649,6 +7820,7 @@ export function createMessageSender(appContext) {
     let responsesResponseId = (typeof attemptState?.responsesToolLoopLastResponseId === 'string' && attemptState.responsesToolLoopLastResponseId)
       ? attemptState.responsesToolLoopLastResponseId
       : null;
+    let responsesOutputItems = null;
     let json = null;
     try {
       json = await response.json();
@@ -7678,6 +7850,9 @@ export function createMessageSender(appContext) {
       return {
         answer: answer || '',
         responseId: responsesResponseId || null,
+        responseOutputItems: (Array.isArray(responsesOutputItems) && responsesOutputItems.length > 0)
+          ? cloneResponsesReplayOutputItems(responsesOutputItems)
+          : null,
         responseActivityTimeline: (Array.isArray(responseActivityTimeline) && responseActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(responseActivityTimeline)
           : null,
@@ -7783,6 +7958,9 @@ export function createMessageSender(appContext) {
       const extracted = extractOpenAIResponsesOutput(json);
       if (typeof extracted.answer === 'string') {
         answer = extracted.answer;
+      }
+      if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
+        responsesOutputItems = cloneResponsesReplayOutputItems(extracted.responseOutputItems);
       }
       if (typeof extracted.responseId === 'string' && extracted.responseId) {
         responsesResponseId = extracted.responseId;
