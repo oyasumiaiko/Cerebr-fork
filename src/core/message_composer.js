@@ -124,8 +124,8 @@ export function composeMessages(args) {
   //
   // 说明：
   // - 网页内容不再混进 system 消息；
-  // - 这类“页面背景上下文”更适合作为独立的上下文消息，在发送链路中单独插入到当前用户消息之前；
-  // - 这样可以把“行为要求/提示词”和“事实性页面上下文”分层处理，避免两者混在同一优先级里。
+  // - 发送链路会把页面内容直接拼接到“当前发送的用户消息”末尾；
+  // - 这样可以把“行为要求/提示词”和“事实性页面上下文”分层处理，避免网页内容继续伪装成 system 指令。
   let systemMessageContent = (omitDefaultSystemPrompt === true) ? '' : (prompts.system?.prompt || '');
   if (imageContainsScreenshot) {
     systemMessageContent += "\n用户附加了当前页面的屏幕截图";
