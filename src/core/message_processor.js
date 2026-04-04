@@ -1112,7 +1112,7 @@ export function createMessageProcessor(appContext) {
   function getResponseToolCallActionLabel(actionType) {
     const normalized = String(actionType || '').toLowerCase();
     if (normalized === 'search') return '搜索';
-    if (normalized === 'open_page') return '打开网页';
+    if (normalized === 'open_page') return '查看';
     if (normalized === 'find_in_page') return '页内查找';
     return normalized || '调用';
   }
@@ -1140,7 +1140,7 @@ export function createMessageProcessor(appContext) {
       if (String(record.action_type || '').toLowerCase() === 'find_in_page') {
         const subject = pattern || query || '查找内容';
         const pageLabel = title || url;
-        return pageLabel ? `${actionLabel} ${subject} 在 ${pageLabel}` : `${actionLabel} ${subject}`;
+        return pageLabel ? `${subject} 在 ${pageLabel}` : subject;
       }
       const subject = query || title || pattern || url;
       return subject ? `${actionLabel} ${subject}` : actionLabel;
@@ -1177,7 +1177,7 @@ export function createMessageProcessor(appContext) {
       }
       if (actionType === 'find_in_page') {
         return {
-          action: actionLabel,
+          action: '',
           value: pattern || query || '查找内容',
           valueUrl: '',
           locationAction: (title || url) ? '在' : '',
@@ -1631,6 +1631,14 @@ export function createMessageProcessor(appContext) {
         }
 
         if (Array.isArray(entry.sources) && entry.sources.length > 0) {
+          const sources = document.createElement('details');
+          sources.className = 'response-activity-tool-sources';
+
+          const sourceSummary = document.createElement('summary');
+          sourceSummary.className = 'response-activity-tool-source-title';
+          sourceSummary.textContent = `来源 ${entry.sources.length}`;
+          sources.appendChild(sourceSummary);
+
           const sourceList = document.createElement('div');
           sourceList.className = 'response-activity-tool-source-list';
           entry.sources.forEach((source) => {
@@ -1650,7 +1658,8 @@ export function createMessageProcessor(appContext) {
               sourceList.appendChild(text);
             }
           });
-          toolBodyInner.appendChild(sourceList);
+          sources.appendChild(sourceList);
+          toolBodyInner.appendChild(sources);
         }
 
         toolBody.appendChild(toolBodyInner);

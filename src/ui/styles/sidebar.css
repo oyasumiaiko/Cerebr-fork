@@ -8628,7 +8628,8 @@ body.chat-empty .empty-state-content {
 
 .message .response-activity-entry-status,
 .message .response-activity-tool-status,
-.message .response-activity-tool-secondary {
+.message .response-activity-tool-secondary,
+.message .response-activity-tool-source-title {
     flex: 0 0 auto;
     font-size: inherit;
     line-height: 1.35;
@@ -8725,20 +8726,39 @@ body.chat-empty .empty-state-content {
     overflow-x: auto;
 }
 
+.message .response-activity-tool-sources {
+    display: block;
+}
+
+.message .response-activity-tool-sources > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+.message .response-activity-tool-sources > summary::-webkit-details-marker {
+    display: none;
+}
+
+.message .response-activity-tool-source-title {
+    display: inline-block;
+    user-select: none;
+}
+
+.message .response-activity-tool-sources > summary:hover .response-activity-tool-source-title {
+    text-decoration: underline;
+}
+
 .message .response-activity-tool-source-list {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-left: 8px;
-    padding: 6px 8px 6px 10px;
-    border-left: 1px solid color-mix(in srgb, var(--cerebr-border-color) 42%, transparent);
-    border-radius: 0 6px 6px 0;
-    background: color-mix(in srgb, var(--cerebr-bg-color) 82%, black 18%);
+    margin: 4px 0 0 10px;
+    padding-left: 10px;
 }
 
 .message .response-activity-tool-source-link {
     display: block;
-    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 54%, transparent);
     text-decoration: none;
     word-break: break-all;
     font-size: inherit;
