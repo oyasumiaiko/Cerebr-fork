@@ -4559,22 +4559,22 @@ export function createMessageSender(appContext) {
             description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await 和 return。'
           },
           all_frames: {
-            type: 'boolean',
+            type: ['boolean', 'null'],
             description: '是否在当前标签页的所有可注入 frame 中执行。默认 false。'
           },
           frame_ids: {
-            type: 'array',
+            type: ['array', 'null'],
             description: '指定要执行的 frame ID 列表。与 all_frames 互斥。',
             items: {
               type: 'integer'
             }
           },
           inject_immediately: {
-            type: 'boolean',
+            type: ['boolean', 'null'],
             description: '是否使用 injectImmediately。默认 false。'
           }
         },
-        required: ['code']
+        required: ['code', 'all_frames', 'frame_ids', 'inject_immediately']
       }
     };
   }
