@@ -8,6 +8,7 @@ import { composeMessages } from './message_composer.js';
 import { renderUserMessageTemplateWithInjection, applyRenderedTextToMessageContent } from './message_preprocessor.js';
 import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '../utils/thoughts_parser.js';
 import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
+import { cloneResponsesInputItems, mergeResponsesInputItems } from '../utils/responses_input_items.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { resolveResponseHandlingMode, planStreamingRenderTransition } from './response_flow_state.js';
@@ -1421,124 +1422,12 @@ export function createMessageSender(appContext) {
     return preferResponsesCommentaryTimeline(mergeResponsesActivityTimeline([], timeline));
   }
 
-  /**
-   * 为 Responses output item 构造“回放历史”去重键。
-   *
-   * 为什么需要这个键：
-   * - 同一 hop 中，`response.output_item.done` 往往会先到；
-   * - 随后 `response.completed` 又会把完整 `output[]` 整体再发一遍；
-   * - 若我们要按 Codex 的方式把这些 output item 回放进下一轮 HTTP input，
-   *   就必须先在客户端去重，否则会把同一个 assistant item 重放两次。
-   *
-   * 这里优先使用：
-   * - `type + call_id`：适合 function_call / custom_tool_call / tool_search_call；
-   * - `type + id/item_id`：适合 message / reasoning / 其他带稳定 id 的 output item；
-   * - 最后才回退到索引键。
-   *
-   * @param {any} item
-   * @param {number} fallbackIndex
-   * @returns {string}
-   */
-  function getResponsesReplayOutputItemKey(item, fallbackIndex = 0) {
-    if (!item || typeof item !== 'object') {
-      return `unknown:${fallbackIndex}`;
-    }
-
-    const type = (typeof item.type === 'string' && item.type.trim())
-      ? item.type.trim().toLowerCase()
-      : 'unknown';
-    const callId = (typeof item.call_id === 'string' && item.call_id.trim())
-      ? item.call_id.trim()
-      : '';
-    if (callId) return `${type}:call:${callId}`;
-
-    const itemId = (typeof item.id === 'string' && item.id.trim())
-      ? item.id.trim()
-      : ((typeof item.item_id === 'string' && item.item_id.trim()) ? item.item_id.trim() : '');
-    if (itemId) return `${type}:id:${itemId}`;
-
-    return `${type}:idx:${fallbackIndex}`;
-  }
-
-  /**
-   * 将服务端返回的 output item 规整成“可再次放进 input 重放”的版本。
-   *
-   * 兼容端点常见问题：
-   * - 当 `store=false` 时，服务端生成的 `id` 不能在后续请求里被当作历史引用；
-   * - 某些 output item（尤其空 reasoning）就算带回去也没有任何上下文价值；
-   * - `status` 这类服务端运行态字段也没有必要在重放时继续携带。
-   *
-   * 当前策略：
-   * - 一律删除 `id` / `status`；
-   * - 保留 `call_id` 等真正用于配对的字段；
-   * - 对没有任何实质内容的 reasoning item 直接丢弃。
-   *
-   * @param {any} item
-   * @returns {Object|null}
-   */
-  function sanitizeResponsesReplayOutputItem(item) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    const cloned = cloneDataSafely(item);
-    if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return null;
-
-    delete cloned.id;
-    delete cloned.status;
-
-    const type = String(cloned.type || '').trim().toLowerCase();
-    if (type === 'reasoning') {
-      const hasSummary = Array.isArray(cloned.summary)
-        && cloned.summary.some(part => typeof part?.text === 'string' && part.text.trim());
-      const hasEncryptedContent = typeof cloned.encrypted_content === 'string'
-        && cloned.encrypted_content.trim();
-      if (!hasSummary && !hasEncryptedContent) {
-        return null;
-      }
-    }
-
-    return cloned;
-  }
-
-  /**
-   * 合并多批 Responses output item，供“下一轮 full replay input”使用。
-   *
-   * 设计目标：
-   * - 保留原始 item 结构，尽量贴近 Codex 的“把模型返回 item 原样记进历史，再整体重放”；
-   * - 针对 `output_item.done + response.completed` 的重复回传做去重；
-   * - 后到的数据覆盖先到的数据，确保最终保留 completed 版本。
-   *
-   * @param {any} existingItems
-   * @param {any} incomingItems
-   * @returns {Array<Object>}
-   */
   function mergeResponsesReplayOutputItems(existingItems, incomingItems) {
-    const merged = Array.isArray(existingItems)
-      ? existingItems
-        .map(item => sanitizeResponsesReplayOutputItem(item))
-        .filter(item => item && typeof item === 'object' && !Array.isArray(item))
-      : [];
-    const keyToIndex = new Map();
-
-    merged.forEach((item, index) => {
-      keyToIndex.set(getResponsesReplayOutputItemKey(item, index), index);
-    });
-
-    (Array.isArray(incomingItems) ? incomingItems : []).forEach((item, index) => {
-      const cloned = sanitizeResponsesReplayOutputItem(item);
-      if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return;
-      const key = getResponsesReplayOutputItemKey(cloned, index);
-      if (keyToIndex.has(key)) {
-        merged[keyToIndex.get(key)] = cloned;
-      } else {
-        keyToIndex.set(key, merged.length);
-        merged.push(cloned);
-      }
-    });
-
-    return merged;
+    return mergeResponsesInputItems(existingItems, incomingItems);
   }
 
   function cloneResponsesReplayOutputItems(items) {
-    return mergeResponsesReplayOutputItems([], items);
+    return cloneResponsesInputItems(items);
   }
 
   function extractOpenAIResponsesOutput(payload) {
@@ -3182,6 +3071,7 @@ export function createMessageSender(appContext) {
       phase: null,
       response_activity_timeline: null,
       response_activity_duration_ms: null,
+      response_input_items: null,
       apiUuid: null,
       apiDisplayName: '',
       apiModelId: '',
@@ -3243,6 +3133,7 @@ export function createMessageSender(appContext) {
       phase: null,
       response_activity_timeline: null,
       response_activity_duration_ms: null,
+      response_input_items: null,
       apiUuid: null,
       apiDisplayName: '',
       apiModelId: '',
@@ -4332,6 +4223,29 @@ export function createMessageSender(appContext) {
     return true;
   }
 
+  /**
+   * 把“后续可直接重放进 Responses input 的历史 item”写回消息节点。
+   *
+   * 设计说明：
+   * - 这不是展示字段，而是 transport/history 字段；
+   * - 目标是让后续 turn 能像 Codex 一样直接重放本 turn 的 tool call / tool output / assistant item；
+   * - 字段里保存的内容已经过轻量清洗，避免携带仅对单次响应有效的 `id` / `status`。
+   *
+   * @param {Object|null} node
+   * @param {Array<Object>|null|undefined} items
+   * @returns {boolean}
+   */
+  function applyResponsesInputItemsToNode(node, items) {
+    if (!node || typeof node !== 'object') return false;
+    const normalizedItems = cloneResponsesReplayOutputItems(items);
+    if (normalizedItems.length > 0) {
+      node.response_input_items = normalizedItems;
+    } else {
+      delete node.response_input_items;
+    }
+    return true;
+  }
+
   function applyResponsesAssistantPhaseToNode(node, phase) {
     if (!node || typeof node !== 'object') return false;
     const normalizedPhase = normalizeResponsesMessagePhase(phase);
@@ -4344,6 +4258,26 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 将 Responses 相关的“模型可见历史元信息”统一写回消息节点。
+   *
+   * 这里把展示时间线、assistant phase、可重放 input item 分开存储：
+   * - timeline / phase 主要服务 UI；
+   * - inputItems 主要服务后续 turn 的 prompt 重放；
+   * - 三者虽然来自同一条 Responses turn，但职责不同，拆开更利于未来继续对齐 Codex 的 queue / steer。
+   *
+   * @param {Object|null} node
+   * @param {{timeline?:Array<Object>|null, phase?:string|null, inputItems?:Array<Object>|null}} meta
+   * @returns {boolean}
+   */
+  function applyResponsesMetadataToNode(node, meta = {}) {
+    if (!node || typeof node !== 'object') return false;
+    applyResponsesActivityTimelineToNode(node, meta.timeline);
+    applyResponsesAssistantPhaseToNode(node, meta.phase);
+    applyResponsesInputItemsToNode(node, meta.inputItems);
+    return true;
+  }
+
+  /**
    * 重新生成（原地替换）时清空旧的“推理签名/推理字段”。
    *
    * 设计说明：
@@ -4352,7 +4286,8 @@ export function createMessageSender(appContext) {
    * - 若本次响应未返回新签名，就必须保持为空，否则后续把历史回传给上游时会触发
    *   “signature required / invalid signature” 等校验错误；
    * - 这里同时清理 OpenAI 兼容字段（reasoning_content/tool_calls）以及 Responses 元信息
-   *   （response_activity_timeline/response_reasoning_summary/response_tool_calls），避免旧内容残留导致语义错配。
+   *   （response_activity_timeline/response_reasoning_summary/response_tool_calls/response_input_items），
+   *   避免旧内容残留导致语义错配。
    *
    * 注意：只在“原地替换的重新生成”场景触发；普通追加新消息不需要清理。
    *
@@ -4378,6 +4313,7 @@ export function createMessageSender(appContext) {
       delete node.response_activity_duration_ms;
       delete node.response_reasoning_summary;
       delete node.response_tool_calls;
+      delete node.response_input_items;
       // 原地替换时清空旧的 token 用量，避免本次请求未回传 usage 时显示陈旧数据。
       node.apiUsage = null;
       const safeMessageId = escapeMessageIdForSelector(id);
@@ -5375,6 +5311,29 @@ export function createMessageSender(appContext) {
     return true;
   }
 
+  function applyResponsesInputItemsToAttempt(attemptState, items) {
+    if (!attemptState) return false;
+    const normalizedItems = cloneResponsesReplayOutputItems(items);
+    attemptState.responsesToolLoopAccumulatedInputItems = normalizedItems.length > 0
+      ? normalizedItems
+      : null;
+
+    const node = attemptState.aiMessageNode
+      || resolveAttemptAiNode(attemptState, attemptState.aiMessageId || '');
+    if (!node) return false;
+
+    attemptState.aiMessageNode = node;
+    applyResponsesInputItemsToNode(node, normalizedItems);
+
+    const wrapper = resolveMessageElementForSender(attemptState.aiMessageId || '');
+    messageProcessor.syncAssistantMessageMetadata?.(
+      attemptState.aiMessageId || '',
+      node,
+      wrapper ? { fallbackElement: wrapper } : undefined
+    );
+    return true;
+  }
+
   /**
    * 基于上一轮 requestBody 构造下一轮 Responses follow-up 请求。
    *
@@ -5555,7 +5514,12 @@ export function createMessageSender(appContext) {
           pendingFunctionCalls,
           functionCallOutputs
         );
+        const mergedInputItems = mergeResponsesReplayOutputItems(
+          attemptState.responsesToolLoopAccumulatedInputItems,
+          functionCallOutputs
+        );
         applyResponsesActivityTimelineToAttempt(attemptState, mergedTimeline);
+        applyResponsesInputItemsToAttempt(attemptState, mergedInputItems);
         await persistAttemptConversationSnapshot(attemptState, { force: true });
       }
 
@@ -5821,6 +5785,7 @@ export function createMessageSender(appContext) {
         persistPromise: null,
         pendingPersist: false,
         pendingForcedPersist: false,
+        responsesToolLoopAccumulatedInputItems: null,
         completedSuccessfully: false
       };
       activeAttempts.set(attemptState.id, attemptState);
@@ -6958,7 +6923,7 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement} loadingMessage
    * @param {Object} usedApiConfig
    * @param {Object} attemptState
-   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
+   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseInputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
    */
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     captureAttemptConversationContext(attemptState);
@@ -7077,9 +7042,13 @@ export function createMessageSender(appContext) {
       const previousResponsesActivityTimeline = Array.isArray(attemptState?.responsesToolLoopAccumulatedTimeline)
         ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
         : [];
+      const previousResponsesInputItems = Array.isArray(attemptState?.responsesToolLoopAccumulatedInputItems)
+        ? cloneResponsesReplayOutputItems(attemptState.responsesToolLoopAccumulatedInputItems)
+        : [];
       let latestResponsesActivityTimeline = cloneResponsesActivityTimeline(previousResponsesActivityTimeline);
       let latestResponsesAssistantPhase = attemptState?.responsesToolLoopAssistantPhase || null;
       let latestResponsesResponseId = attemptState?.responsesToolLoopLastResponseId || null;
+      let latestResponsesInputItems = cloneResponsesReplayOutputItems(previousResponsesInputItems);
       let latestResponsesOutputItems = [];
       const latestResponsesOutputItemPhaseById = new Map();
       // Responses API：记录“正文可见文本”的分片状态，避免 delta/done/full item 多次到来时重复拼接。
@@ -7104,9 +7073,12 @@ export function createMessageSender(appContext) {
           const boundNode = resolveAttemptAiNode(attemptState, payload.messageId);
           if (boundNode) {
             attemptState.aiMessageNode = boundNode;
-            if (Array.isArray(payload.responsesActivityTimeline)) {
-              applyResponsesActivityTimelineToNode(boundNode, payload.responsesActivityTimeline);
-              applyResponsesAssistantPhaseToNode(boundNode, latestResponsesAssistantPhase);
+            if (Array.isArray(payload.responsesActivityTimeline) || Array.isArray(payload.responsesInputItems)) {
+              applyResponsesMetadataToNode(boundNode, {
+                timeline: payload.responsesActivityTimeline,
+                phase: latestResponsesAssistantPhase,
+                inputItems: payload.responsesInputItems
+              });
             }
           }
 	        const regenContainer = getUiContainer();
@@ -7173,8 +7145,11 @@ export function createMessageSender(appContext) {
         if (boundNode) {
           attemptState.aiMessageNode = boundNode;
           if (isOpenAIResponsesStream) {
-            applyResponsesActivityTimelineToNode(boundNode, latestResponsesActivityTimeline);
-            applyResponsesAssistantPhaseToNode(boundNode, latestResponsesAssistantPhase);
+            applyResponsesMetadataToNode(boundNode, {
+              timeline: latestResponsesActivityTimeline,
+              phase: latestResponsesAssistantPhase,
+              inputItems: latestResponsesInputItems
+            });
           }
         }
         const regenContainer = getUiContainer();
@@ -7195,8 +7170,11 @@ export function createMessageSender(appContext) {
             hasClearedBoundSignatureForRegenerate = clearBoundSignatureForRegenerate(currentAiMessageId, attemptState);
           }
           if (isOpenAIResponsesStream && boundNode) {
-            applyResponsesActivityTimelineToNode(boundNode, latestResponsesActivityTimeline);
-            applyResponsesAssistantPhaseToNode(boundNode, latestResponsesAssistantPhase);
+            applyResponsesMetadataToNode(boundNode, {
+              timeline: latestResponsesActivityTimeline,
+              phase: latestResponsesAssistantPhase,
+              inputItems: latestResponsesInputItems
+            });
             messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, boundNode);
           }
           applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
@@ -7225,8 +7203,11 @@ export function createMessageSender(appContext) {
           if (isOpenAIResponsesStream) {
             const promotedNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
             if (promotedNode) {
-              applyResponsesActivityTimelineToNode(promotedNode, latestResponsesActivityTimeline);
-              applyResponsesAssistantPhaseToNode(promotedNode, latestResponsesAssistantPhase);
+              applyResponsesMetadataToNode(promotedNode, {
+                timeline: latestResponsesActivityTimeline,
+                phase: latestResponsesAssistantPhase,
+                inputItems: latestResponsesInputItems
+              });
               messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, promotedNode);
             }
           }
@@ -7255,8 +7236,11 @@ export function createMessageSender(appContext) {
             currentAiMessageId = createdNode.id;
             bindAttemptAiMessage(attemptState, currentAiMessageId, createdNode);
             if (isOpenAIResponsesStream) {
-              applyResponsesActivityTimelineToNode(createdNode, latestResponsesActivityTimeline);
-              applyResponsesAssistantPhaseToNode(createdNode, latestResponsesAssistantPhase);
+              applyResponsesMetadataToNode(createdNode, {
+                timeline: latestResponsesActivityTimeline,
+                phase: latestResponsesAssistantPhase,
+                inputItems: latestResponsesInputItems
+              });
             }
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
             updateThreadLastMessage(threadContext, currentAiMessageId);
@@ -7288,8 +7272,11 @@ export function createMessageSender(appContext) {
             if (isOpenAIResponsesStream) {
               const createdNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
               if (createdNode) {
-                applyResponsesActivityTimelineToNode(createdNode, latestResponsesActivityTimeline);
-                applyResponsesAssistantPhaseToNode(createdNode, latestResponsesAssistantPhase);
+                applyResponsesMetadataToNode(createdNode, {
+                  timeline: latestResponsesActivityTimeline,
+                  phase: latestResponsesAssistantPhase,
+                  inputItems: latestResponsesInputItems
+                });
                 messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, createdNode, { fallbackElement: newAiMessageDiv });
               }
             }
@@ -7336,6 +7323,9 @@ export function createMessageSender(appContext) {
             thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
             responsesActivityTimeline: isOpenAIResponsesStream
               ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
+              : null,
+            responsesInputItems: isOpenAIResponsesStream
+              ? cloneResponsesReplayOutputItems(latestResponsesInputItems)
               : null
           },
           { force: transition.forceUiUpdate }
@@ -7396,8 +7386,11 @@ export function createMessageSender(appContext) {
 
 	          if (!isGeminiApi) {
               if (isOpenAIResponsesStream) {
-                applyResponsesActivityTimelineToNode(node, latestResponsesActivityTimeline);
-                applyResponsesAssistantPhaseToNode(node, latestResponsesAssistantPhase);
+                applyResponsesMetadataToNode(node, {
+                  timeline: latestResponsesActivityTimeline,
+                  phase: latestResponsesAssistantPhase,
+                  inputItems: latestResponsesInputItems
+                });
               } else {
 	              // OpenAI 兼容：推理签名与推理原文、tool_calls 原样落库，供后续历史消息回传
 	              if (latestOpenAIThoughtSignature) {
@@ -7439,6 +7432,9 @@ export function createMessageSender(appContext) {
         attemptState.responsesToolLoopAccumulatedTimeline = (Array.isArray(latestResponsesActivityTimeline) && latestResponsesActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
           : null;
+        attemptState.responsesToolLoopAccumulatedInputItems = latestResponsesInputItems.length > 0
+          ? cloneResponsesReplayOutputItems(latestResponsesInputItems)
+          : null;
         attemptState.responsesToolLoopAssistantPhase = latestResponsesAssistantPhase || null;
         attemptState.responsesToolLoopLastResponseId = latestResponsesResponseId || null;
       }
@@ -7450,6 +7446,9 @@ export function createMessageSender(appContext) {
         responseId: latestResponsesResponseId || null,
         responseOutputItems: latestResponsesOutputItems.length > 0
           ? cloneResponsesReplayOutputItems(latestResponsesOutputItems)
+          : null,
+        responseInputItems: latestResponsesInputItems.length > 0
+          ? cloneResponsesReplayOutputItems(latestResponsesInputItems)
           : null,
         responseActivityTimeline: (Array.isArray(latestResponsesActivityTimeline) && latestResponsesActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
@@ -7887,6 +7886,10 @@ export function createMessageSender(appContext) {
               latestResponsesOutputItems,
               extracted.responseOutputItems
             );
+            latestResponsesInputItems = mergeResponsesReplayOutputItems(
+              latestResponsesInputItems,
+              extracted.responseOutputItems
+            );
           }
           if (typeof extracted.responseId === 'string' && extracted.responseId) {
             latestResponsesResponseId = extracted.responseId;
@@ -7919,6 +7922,10 @@ export function createMessageSender(appContext) {
           if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
             latestResponsesOutputItems = mergeResponsesReplayOutputItems(
               latestResponsesOutputItems,
+              extracted.responseOutputItems
+            );
+            latestResponsesInputItems = mergeResponsesReplayOutputItems(
+              latestResponsesInputItems,
               extracted.responseOutputItems
             );
           }
@@ -8045,7 +8052,7 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement} loadingMessage - 加载状态消息元素
    * @param {Object} usedApiConfig - 本次使用的 API 配置
    * @param {{id:string, aiMessageId?:string}|null} attemptState - 当前请求的 attempt 状态对象
-   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
+   * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseInputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
    */
   async function handleNonStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     const canUpdateLoadingStatus = !!(
@@ -8093,11 +8100,15 @@ export function createMessageSender(appContext) {
     const previousResponsesActivityTimeline = Array.isArray(attemptState?.responsesToolLoopAccumulatedTimeline)
       ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
       : [];
+    const previousResponsesInputItems = Array.isArray(attemptState?.responsesToolLoopAccumulatedInputItems)
+      ? cloneResponsesReplayOutputItems(attemptState.responsesToolLoopAccumulatedInputItems)
+      : [];
     let responseActivityTimeline = null;
     let responsesAssistantPhase = attemptState?.responsesToolLoopAssistantPhase || null;
     let responsesResponseId = (typeof attemptState?.responsesToolLoopLastResponseId === 'string' && attemptState.responsesToolLoopLastResponseId)
       ? attemptState.responsesToolLoopLastResponseId
       : null;
+    let responsesInputItems = cloneResponsesReplayOutputItems(previousResponsesInputItems);
     let responsesOutputItems = null;
     let json = null;
     try {
@@ -8122,6 +8133,9 @@ export function createMessageSender(appContext) {
         attemptState.responsesToolLoopAccumulatedTimeline = (Array.isArray(responseActivityTimeline) && responseActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(responseActivityTimeline)
           : null;
+        attemptState.responsesToolLoopAccumulatedInputItems = responsesInputItems.length > 0
+          ? cloneResponsesReplayOutputItems(responsesInputItems)
+          : null;
         attemptState.responsesToolLoopAssistantPhase = responsesAssistantPhase || null;
         attemptState.responsesToolLoopLastResponseId = responsesResponseId || null;
       }
@@ -8130,6 +8144,9 @@ export function createMessageSender(appContext) {
         responseId: responsesResponseId || null,
         responseOutputItems: (Array.isArray(responsesOutputItems) && responsesOutputItems.length > 0)
           ? cloneResponsesReplayOutputItems(responsesOutputItems)
+          : null,
+        responseInputItems: responsesInputItems.length > 0
+          ? cloneResponsesReplayOutputItems(responsesInputItems)
           : null,
         responseActivityTimeline: (Array.isArray(responseActivityTimeline) && responseActivityTimeline.length > 0)
           ? cloneResponsesActivityTimeline(responseActivityTimeline)
@@ -8239,6 +8256,10 @@ export function createMessageSender(appContext) {
       }
       if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
         responsesOutputItems = cloneResponsesReplayOutputItems(extracted.responseOutputItems);
+        responsesInputItems = mergeResponsesReplayOutputItems(
+          responsesInputItems,
+          extracted.responseOutputItems
+        );
       }
       if (typeof extracted.responseId === 'string' && extracted.responseId) {
         responsesResponseId = extracted.responseId;
@@ -8316,8 +8337,11 @@ export function createMessageSender(appContext) {
             : null;
           try {
             if (isResponsesApi) {
-              applyResponsesActivityTimelineToNode(existingNode, responseActivityTimeline);
-              applyResponsesAssistantPhaseToNode(existingNode, responsesAssistantPhase);
+              applyResponsesMetadataToNode(existingNode, {
+                timeline: responseActivityTimeline,
+                phase: responsesAssistantPhase,
+                inputItems: responsesInputItems
+              });
             }
             messageProcessor.updateAIMessage(existingMessageId, answer || '', displayThoughts, {
               fallbackNode: existingNode,
@@ -8340,8 +8364,11 @@ export function createMessageSender(appContext) {
 
             if (!isGeminiApi && isResponsesApi) {
               try {
-                applyResponsesActivityTimelineToNode(existingNode, responseActivityTimeline);
-                applyResponsesAssistantPhaseToNode(existingNode, responsesAssistantPhase);
+                applyResponsesMetadataToNode(existingNode, {
+                  timeline: responseActivityTimeline,
+                  phase: responsesAssistantPhase,
+                  inputItems: responsesInputItems
+                });
                 messageProcessor.syncAssistantMessageMetadata?.(existingMessageId, existingNode, { fallbackElement: existingEl });
               } catch (e) {
                 console.warn('记录 Responses 元信息失败（非流式，原地替换）:', e);
@@ -8391,8 +8418,11 @@ export function createMessageSender(appContext) {
           renderApiFooter(loadingMessage, node);
         }
         if (!isGeminiApi && isResponsesApi && node) {
-          applyResponsesActivityTimelineToNode(node, responseActivityTimeline);
-          applyResponsesAssistantPhaseToNode(node, responsesAssistantPhase);
+          applyResponsesMetadataToNode(node, {
+            timeline: responseActivityTimeline,
+            phase: responsesAssistantPhase,
+            inputItems: responsesInputItems
+          });
           messageProcessor.syncAssistantMessageMetadata?.(promotedId, node, { fallbackElement: loadingMessage });
         } else if (!isGeminiApi && node) {
           if (typeof reasoningContentRaw === 'string' && reasoningContentRaw) {
@@ -8443,8 +8473,11 @@ export function createMessageSender(appContext) {
 
         if (!isGeminiApi && isResponsesApi) {
           try {
-            applyResponsesActivityTimelineToNode(createdNode, responseActivityTimeline);
-            applyResponsesAssistantPhaseToNode(createdNode, responsesAssistantPhase);
+            applyResponsesMetadataToNode(createdNode, {
+              timeline: responseActivityTimeline,
+              phase: responsesAssistantPhase,
+              inputItems: responsesInputItems
+            });
           } catch (e) {
             console.warn('记录 Responses 元信息失败（非流式，后台线程）:', e);
           }
@@ -8510,8 +8543,11 @@ export function createMessageSender(appContext) {
 	        try {
 	          const node = resolveAttemptAiNode(attemptState, messageId);
 	          if (node) {
-                applyResponsesActivityTimelineToNode(node, responseActivityTimeline);
-                applyResponsesAssistantPhaseToNode(node, responsesAssistantPhase);
+                applyResponsesMetadataToNode(node, {
+                  timeline: responseActivityTimeline,
+                  phase: responsesAssistantPhase,
+                  inputItems: responsesInputItems
+                });
                 messageProcessor.syncAssistantMessageMetadata?.(messageId, node, { fallbackElement: newAiMessageDiv });
 	          }
 	        } catch (e) {

@@ -14,6 +14,7 @@
  * @property {string|null} [thoughtSignatureSource] 签名来源（'gemini' | 'openai'，可选）
  * @property {string|null} [reasoning_content] OpenAI 兼容：需要原样回传的推理原文（与 thoughtSignature 配对，可选）
  * @property {Array<any>|null} [tool_calls] OpenAI 兼容：assistant.tool_calls（可能包含 thoughtSignature，可选）
+ * @property {Array<any>|null} [response_input_items] Responses API：后续 turn 可直接重放的 input item 历史（可选）
  */
 
 /**
@@ -115,6 +116,12 @@ export function composeMessages(args) {
       if (Array.isArray(node?.tool_calls) && node.tool_calls.length > 0) {
         msg.tool_calls = node.tool_calls;
       }
+    }
+
+    if (Array.isArray(node?.response_input_items) && node.response_input_items.length > 0) {
+      // Responses API：这里不做结构改写，只把“可再次放进 input 的 item”挂到消息对象上，
+      // 交给下游 buildRequest 在 Responses 模式下直接展开。
+      msg.response_input_items = node.response_input_items;
     }
 
     return msg;

@@ -21,6 +21,7 @@
  * @property {string|null} [phase] - Responses API assistant message phase（如 commentary，可选）
  * @property {Array<any>|null} [response_activity_timeline] - Responses API：按顺序记录 commentary / reasoning summary / 工具调用的活动时间线（可选）
  * @property {number|null} [response_activity_duration_ms] - Responses API：思考/工具活动总耗时（毫秒，可选，仅在完成后写入）
+ * @property {Array<any>|null} [response_input_items] - Responses API：后续 turn 可直接重放进 input 的历史 item（可选）
  * @property {string|null} [response_reasoning_summary] - Responses API：reasoning summary 文本（仅用于展示/存档，可选）
  * @property {Array<any>|null} [response_tool_calls] - Responses API：output item 级工具调用记录（如 web_search_call，可选）
  * @property {string|null} [apiUuid] - 使用的 API 配置 UUID（配置的 id），用于回溯显示 (可选)
@@ -74,6 +75,7 @@ function createMessageNode(role, content, parentId = null) {
     phase: null,
     response_activity_timeline: null,
     response_activity_duration_ms: null,
+    response_input_items: null,
     // --- API 元信息（用于消息 footer 显示与持久化）---
     apiUuid: null,
     apiDisplayName: '',

@@ -810,6 +810,7 @@ export async function getDatabaseStats() {
       thoughtSignatureSource: 0,
       reasoning_content: 0,
       response_activity_timeline: 0,
+      response_input_items: 0,
       response_reasoning_summary: 0,
       preprocessOriginalText: 0,
       preprocessRenderedText: 0,
@@ -853,6 +854,11 @@ export async function getDatabaseStats() {
         const bytes = calcJsonBytes(msg.response_activity_timeline);
         size += bytes;
         addMetaSize('response_activity_timeline', bytes);
+      }
+      if (msg.response_input_items) {
+        const bytes = calcJsonBytes(msg.response_input_items);
+        size += bytes;
+        addMetaSize('response_input_items', bytes);
       }
       if (typeof msg.response_reasoning_summary === 'string' && msg.response_reasoning_summary) {
         const bytes = encoder.encode(msg.response_reasoning_summary).length;

@@ -17,6 +17,7 @@ import {
   setChunksToSync,
   getChunksFromSync
 } from '../utils/sync_chunk.js';
+import { cloneResponsesInputItems } from '../utils/responses_input_items.js';
 
 // 用户消息预处理模板的说明与示例，用于“？”提示与“复制角色块”按钮。
 const USER_MESSAGE_TEMPLATE_HELP_TEXT = [
@@ -4731,6 +4732,14 @@ export function createApiManager(appContext) {
       const role = (typeof msg.role === 'string') ? msg.role.trim() : '';
       if (!role) continue;
 
+      if (Array.isArray(msg.response_input_items) && msg.response_input_items.length > 0) {
+        const replayItems = cloneResponsesInputItems(msg.response_input_items);
+        if (replayItems.length > 0) {
+          result.push(...replayItems);
+          continue;
+        }
+      }
+
       if (role === 'assistant' && Array.isArray(msg.response_activity_timeline)) {
         for (const entry of msg.response_activity_timeline) {
           if (!entry || typeof entry !== 'object') continue;
@@ -5006,10 +5015,14 @@ export function createApiManager(appContext) {
       // OpenAI 兼容请求格式：
       // - /chat/completions 继续沿用原结构；
       // - /responses 自动切换为 Responses API 结构（支持 input_text/input_image）。
+      const useResponsesApi = isOpenAIResponsesConnectionConfig(config);
       const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
         const base = { role: msg.role };
         if (msg.name) base.name = msg.name;
         if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
+        if (useResponsesApi && Array.isArray(msg.response_input_items) && msg.response_input_items.length > 0) {
+          base.response_input_items = cloneResponsesInputItems(msg.response_input_items);
+        }
 
         // OpenAI 兼容：对每条历史消息单独判断是否允许回传 signature（避免跨模型导致 Corrupted thought signature）
         // 仅在 thoughtSignatureSource==='openai' 时才考虑回传，避免把 Gemini 的签名/字段发给 OpenAI 接口。
@@ -5080,7 +5093,6 @@ export function createApiManager(appContext) {
         return base;
       }));
 
-      const useResponsesApi = isOpenAIResponsesConnectionConfig(config);
       if (useResponsesApi) {
         const {
           messages: responsesMessages,

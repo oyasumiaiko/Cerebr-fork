@@ -1,0 +1,165 @@
+/**
+ * Responses 可重放 input item 工具（纯函数）。
+ *
+ * 设计目标：
+ * - 把“可再次放回 `/responses.input` 的 item”抽成共享逻辑，避免发送链路与请求构造链路各写一份；
+ * - 允许我们像 Codex 那样，把模型输出 item 与本地 `function_call_output` 一起记进历史，再在后续 turn 重放；
+ * - 统一做轻量清洗，去掉服务端运行态字段，避免把仅对单次响应有效的噪音字段重新发回去。
+ */
+
+/**
+ * 尽量安全地克隆 JSON 风格数据。
+ *
+ * 说明：
+ * - Responses output / input item 本身就是 JSON 风格对象；
+ * - 优先使用 `structuredClone`，在旧环境下再退回 JSON 序列化；
+ * - 若克隆失败，返回 null，由调用方决定是否丢弃。
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+function cloneDataSafely(value) {
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(value);
+    }
+  } catch (_) {}
+
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * 为可重放 item 生成稳定去重键。
+ *
+ * 优先级：
+ * - `type + call_id`：function_call / function_call_output / custom_tool_call 等；
+ * - `type + id/item_id`：message / reasoning 等带稳定 id 的 item；
+ * - 最后退回到索引。
+ *
+ * @param {any} item
+ * @param {number} [fallbackIndex=0]
+ * @returns {string}
+ */
+export function getResponsesReplayItemKey(item, fallbackIndex = 0) {
+  if (!item || typeof item !== 'object') {
+    return `unknown:${fallbackIndex}`;
+  }
+
+  const type = (typeof item.type === 'string' && item.type.trim())
+    ? item.type.trim().toLowerCase()
+    : 'unknown';
+  const callId = (typeof item.call_id === 'string' && item.call_id.trim())
+    ? item.call_id.trim()
+    : '';
+  if (callId) {
+    return `${type}:call:${callId}`;
+  }
+
+  const itemId = (typeof item.id === 'string' && item.id.trim())
+    ? item.id.trim()
+    : ((typeof item.item_id === 'string' && item.item_id.trim()) ? item.item_id.trim() : '');
+  if (itemId) {
+    return `${type}:id:${itemId}`;
+  }
+
+  return `${type}:idx:${fallbackIndex}`;
+}
+
+/**
+ * 清洗一个可重放 item。
+ *
+ * 当前策略：
+ * - 删除 `id` / `status` 这类服务端运行态字段；
+ * - 保留 `call_id` / `name` / `arguments` / `output` 等真正有上下文意义的字段；
+ * - 丢弃“完全空”的 reasoning item，避免把无意义占位继续带进后续 prompt。
+ *
+ * @param {any} item
+ * @returns {Object|null}
+ */
+export function sanitizeResponsesReplayItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const cloned = cloneDataSafely(item);
+  if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) {
+    return null;
+  }
+
+  delete cloned.id;
+  delete cloned.status;
+
+  const type = String(cloned.type || '').trim().toLowerCase();
+  if (type === 'reasoning') {
+    const hasSummary = Array.isArray(cloned.summary)
+      && cloned.summary.some(part => typeof part?.text === 'string' && part.text.trim());
+    const hasEncryptedContent = typeof cloned.encrypted_content === 'string'
+      && cloned.encrypted_content.trim();
+    if (!hasSummary && !hasEncryptedContent) {
+      return null;
+    }
+  }
+
+  return cloned;
+}
+
+/**
+ * 合并多批可重放 item，去重后保留稳定顺序。
+ *
+ * 规则：
+ * - 先保留已有顺序；
+ * - 后到 item 若键相同，则覆盖原位置；
+ * - 新键直接追加到末尾。
+ *
+ * 这样可以同时满足：
+ * - SSE 中 `output_item.done` 与 `response.completed` 的重复回传去重；
+ * - 同一 turn 内多次 tool follow-up 逐步累积历史；
+ * - 后续 turn 直接使用本字段重放。
+ *
+ * @param {any} existingItems
+ * @param {any} incomingItems
+ * @returns {Array<Object>}
+ */
+export function mergeResponsesInputItems(existingItems, incomingItems) {
+  const merged = Array.isArray(existingItems)
+    ? existingItems
+      .map(item => sanitizeResponsesReplayItem(item))
+      .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+
+  const keyToIndex = new Map();
+  merged.forEach((item, index) => {
+    keyToIndex.set(getResponsesReplayItemKey(item, index), index);
+  });
+
+  (Array.isArray(incomingItems) ? incomingItems : []).forEach((item, index) => {
+    const sanitized = sanitizeResponsesReplayItem(item);
+    if (!sanitized) return;
+
+    const key = getResponsesReplayItemKey(sanitized, merged.length + index);
+    const existingIndex = keyToIndex.get(key);
+    if (typeof existingIndex === 'number' && existingIndex >= 0) {
+      merged[existingIndex] = sanitized;
+      return;
+    }
+
+    keyToIndex.set(key, merged.length);
+    merged.push(sanitized);
+  });
+
+  return merged;
+}
+
+/**
+ * 复制一批已规整的可重放 item。
+ *
+ * @param {any} items
+ * @returns {Array<Object>}
+ */
+export function cloneResponsesInputItems(items) {
+  return mergeResponsesInputItems([], items);
+}
