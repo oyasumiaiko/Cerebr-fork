@@ -4731,6 +4731,12 @@ export function createMessageSender(appContext) {
 
     const nextBody = cloneDataSafely(requestBody) || {};
     nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
+    // 关键约束：
+    // - 后续 function_call_output follow-up 依赖 previous_response_id；
+    // - 若响应未被服务端保存，则某些兼容端点会直接报
+    //   “No tool call found for function call output with call_id ...”；
+    // - 因此只要启用了客户端自定义函数工具链路，这里就显式要求 store=true。
+    nextBody.store = true;
     return nextBody;
   }
 
