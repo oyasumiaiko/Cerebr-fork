@@ -4524,12 +4524,16 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 把 frame 快照格式化为隐藏 system message，帮助模型在一次 js_runtime_execute 调用里直接选择目标 frame_ids。
+   * 把 frame 快照格式化为一次性 Responses instructions 片段，帮助模型在一次 js_runtime_execute 调用里直接选择目标 frame_ids。
+   *
+   * 注意：
+   * - 某些 OpenAI 兼容 Responses 端点会拒绝 input 里的 system message；
+   * - 因此这里不用隐藏 system 消息，而是拼到顶层 instructions。
    *
    * @param {Array<{frameId:number, documentId:string|null, url:string, title:string, isTop:boolean}>|null} frames
    * @returns {string}
    */
-  function buildJsRuntimeFrameContextMessage(frames) {
+  function buildJsRuntimeFrameContextInstructions(frames) {
     const normalizedFrames = Array.isArray(frames) ? frames : [];
     if (normalizedFrames.length <= 0) return '';
     const payload = normalizedFrames.map((item) => ({
@@ -4548,24 +4552,17 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 将一次性 system 上下文插入请求消息中，但不写入历史。
-   * 规则：插到现有 system 消息之后、第一条非 system 消息之前。
+   * 将一次性附加 instructions 合并到现有 Responses requestBody.instructions。
    *
-   * @param {Array<Object>} messages
+   * @param {string|undefined|null} baseInstructions
    * @param {string} content
-   * @returns {Array<Object>}
+   * @returns {string|undefined}
    */
-  function appendEphemeralSystemMessage(messages, content) {
-    if (!Array.isArray(messages)) return messages;
+  function appendEphemeralResponsesInstructions(baseInstructions, content) {
     const text = (typeof content === 'string') ? content.trim() : '';
-    if (!text) return messages;
-    const next = messages.slice();
-    let insertIndex = 0;
-    while (insertIndex < next.length && next[insertIndex]?.role === 'system') {
-      insertIndex += 1;
-    }
-    next.splice(insertIndex, 0, { role: 'system', content: text });
-    return next;
+    if (!text) return (typeof baseInstructions === 'string' && baseInstructions.trim()) ? baseInstructions : undefined;
+    const base = (typeof baseInstructions === 'string') ? baseInstructions.trim() : '';
+    return base ? `${base}\n\n${text}` : text;
   }
 
   function GetInputContainer() {
@@ -5841,7 +5838,7 @@ export function createMessageSender(appContext) {
         config = apiManager.getSelectedConfig();
       }
       effectiveApiConfig = config;
-      let requestMessages = finalMessages;
+      let ephemeralResponsesInstructions = '';
 
       const shouldInjectJsRuntimeFrameContext = (
         Array.isArray(getResponsesCustomFunctionTools(effectiveApiConfig))
@@ -5851,9 +5848,9 @@ export function createMessageSender(appContext) {
       if (shouldInjectJsRuntimeFrameContext) {
         updateLoadingStatus(loadingMessage, '正在获取 JS Runtime frame 上下文...', { stage: 'get_js_runtime_frames' });
         const jsRuntimeFrames = await getJsRuntimeFrameSnapshot();
-        const jsRuntimeFrameContext = buildJsRuntimeFrameContextMessage(jsRuntimeFrames);
+        const jsRuntimeFrameContext = buildJsRuntimeFrameContextInstructions(jsRuntimeFrames);
         if (jsRuntimeFrameContext) {
-          requestMessages = appendEphemeralSystemMessage(requestMessages, jsRuntimeFrameContext);
+          ephemeralResponsesInstructions = jsRuntimeFrameContext;
         }
       }
 
@@ -5901,10 +5898,16 @@ export function createMessageSender(appContext) {
       }
 
       const requestBody = await apiManager.buildRequest({
-        messages: requestMessages,
+        messages: finalMessages,
         config: config,
         overrides: requestOverrides
       });
+      if (ephemeralResponsesInstructions && isOpenAIResponsesApiConfig(effectiveApiConfig)) {
+        requestBody.instructions = appendEphemeralResponsesInstructions(
+          requestBody.instructions,
+          ephemeralResponsesInstructions
+        );
+      }
       const preparedRequestBody = prepareResponsesRequestBodyForCustomTools(requestBody, effectiveApiConfig);
 
       await executeApiRequestLifecycle({
