@@ -1101,6 +1101,179 @@ export function createMessageSender(appContext) {
     return mergeStreamingThoughts(prev, next);
   }
 
+  /**
+   * 合并 Responses 可见正文分片。
+   *
+   * 背景：
+   * - `response.output_text.delta` 是增量；
+   * - `response.output_text.done` / `response.output_item.done` / `response.completed`
+   *   往往会再给一次“完整正文”。
+   *
+   * 目标：
+   * - 流式阶段继续做增量拼接；
+   * - done/completed 阶段如果拿到的是完整文本，则直接覆盖草稿，
+   *   避免出现“streaming 一份 + done 再来一份”的双份正文。
+   */
+  function mergeResponsesOutputTextPartText(previous, incoming, options = {}) {
+    const prev = (typeof previous === 'string') ? previous : '';
+    const next = (typeof incoming === 'string') ? incoming : '';
+    if (!prev) return next;
+    if (!next) return prev;
+
+    if (options.isCompleted) {
+      if (next === prev) return prev;
+      if (next.startsWith(prev) || next.includes(prev) || next.length >= prev.length) {
+        return next;
+      }
+      if (prev.includes(next)) {
+        return prev;
+      }
+    }
+
+    return mergeStreamingThoughts(prev, next);
+  }
+
+  function normalizeResponsesOutputTextOrder(value, fallback = Number.MAX_SAFE_INTEGER) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  }
+
+  /**
+   * 将单个 Responses 正文分片写入状态表。
+   * key 使用 `item_id + content_index`，从而支持：
+   * - 同一 message item 的 delta -> done 覆盖；
+   * - 多个 content part / 多个 output item 的稳定合并。
+   */
+  function upsertResponsesOutputTextPartState(stateMap, payload, text, options = {}) {
+    if (!(stateMap instanceof Map)) return false;
+    const nextText = (typeof text === 'string') ? text : '';
+    if (!nextText) return false;
+
+    const outputIndex = normalizeResponsesOutputTextOrder(
+      payload?.output_index,
+      normalizeResponsesOutputTextOrder(options.outputIndexFallback, Number.MAX_SAFE_INTEGER)
+    );
+    const contentIndex = normalizeResponsesOutputTextOrder(
+      payload?.content_index,
+      normalizeResponsesOutputTextOrder(options.contentIndexFallback, 0)
+    );
+    const itemId = (typeof payload?.item_id === 'string' && payload.item_id)
+      || (typeof payload?.output_item_id === 'string' && payload.output_item_id)
+      || (typeof payload?.id === 'string' && payload.id)
+      || '';
+    const key = itemId
+      ? `${itemId}:${contentIndex}`
+      : `${outputIndex}:${contentIndex}`;
+    const previous = stateMap.get(key);
+    const status = options.status || payload?.status || '';
+    const mergedText = mergeResponsesOutputTextPartText(previous?.text || '', nextText, {
+      isCompleted: isResponsesActivityEntryCompleted({ status })
+    });
+
+    stateMap.set(key, {
+      key,
+      itemId: itemId || null,
+      outputIndex,
+      contentIndex,
+      order: previous?.order ?? stateMap.size,
+      status,
+      text: mergedText
+    });
+    return true;
+  }
+
+  /**
+   * 当某个 item 后续被确认是 commentary 时，把之前误归入正文的分片移除。
+   * 这可兜住“output_text.delta 先到、phase 映射后到”的事件乱序场景。
+   */
+  function removeResponsesOutputTextPartsForItem(stateMap, itemId) {
+    if (!(stateMap instanceof Map)) return false;
+    const normalizedItemId = (typeof itemId === 'string') ? itemId.trim() : '';
+    if (!normalizedItemId) return false;
+
+    let removedAny = false;
+    Array.from(stateMap.keys()).forEach((key) => {
+      if (!key.startsWith(`${normalizedItemId}:`)) return;
+      stateMap.delete(key);
+      removedAny = true;
+    });
+    return removedAny;
+  }
+
+  /**
+   * 从 Responses message item 中提取“可见正文”分片并写入状态表。
+   * 仅处理非 commentary 的可见文本，reasoning / refusal 不计入正文。
+   */
+  function upsertResponsesOutputTextPartsFromMessageItem(stateMap, item, options = {}) {
+    if (!(stateMap instanceof Map) || !item || typeof item !== 'object') return false;
+    const itemPhase = normalizeResponsesMessagePhase(item.phase);
+    if (isResponsesCommentaryPhase(itemPhase)) {
+      return removeResponsesOutputTextPartsForItem(stateMap, item.id || item.item_id || '');
+    }
+
+    const contentParts = Array.isArray(item.content) ? item.content : [];
+    let wroteAny = false;
+    contentParts.forEach((part, index) => {
+      if (!part || typeof part !== 'object') return;
+      const partType = String(part.type || '').toLowerCase();
+      if (partType === 'refusal' || partType.includes('reasoning')) return;
+      const partText = (typeof part.text === 'string')
+        ? part.text
+        : ((typeof part.output_text === 'string') ? part.output_text : '');
+      if (!partText) return;
+
+      wroteAny = upsertResponsesOutputTextPartState(
+        stateMap,
+        {
+          item_id: item.id || item.item_id || '',
+          output_index: options.outputIndexFallback,
+          content_index: index,
+          status: item.status || options.status || ''
+        },
+        partText,
+        {
+          status: options.status || item.status || 'completed',
+          outputIndexFallback: options.outputIndexFallback,
+          contentIndexFallback: index
+        }
+      ) || wroteAny;
+    });
+    return wroteAny;
+  }
+
+  /**
+   * 从完整 Responses payload 中回填正文状态。
+   * 用于 `response.completed` 这类“给出完整 output 数组”的场景。
+   */
+  function upsertResponsesOutputTextPartsFromOutputPayload(stateMap, payload, options = {}) {
+    if (!(stateMap instanceof Map)) return false;
+    const outputItems = Array.isArray(payload?.output) ? payload.output : [];
+    let wroteAny = false;
+    outputItems.forEach((item, index) => {
+      if (!item || typeof item !== 'object') return;
+      if (String(item.type || '').toLowerCase() !== 'message') return;
+      wroteAny = upsertResponsesOutputTextPartsFromMessageItem(stateMap, item, {
+        status: options.status || item.status || 'completed',
+        outputIndexFallback: normalizeResponsesOutputTextOrder(item.output_index, index)
+      }) || wroteAny;
+    });
+    return wroteAny;
+  }
+
+  function buildResponsesVisibleAnswerFromOutputTextState(stateMap) {
+    if (!(stateMap instanceof Map) || stateMap.size === 0) return '';
+    return Array.from(stateMap.values())
+      .sort((left, right) => {
+        const outputDiff = left.outputIndex - right.outputIndex;
+        if (outputDiff !== 0) return outputDiff;
+        const contentDiff = left.contentIndex - right.contentIndex;
+        if (contentDiff !== 0) return contentDiff;
+        return left.order - right.order;
+      })
+      .map(entry => (typeof entry?.text === 'string') ? entry.text : '')
+      .join('');
+  }
+
   function isResponsesActivityTimelineInProgress(timeline) {
     return Array.isArray(timeline) && timeline.some((entry) => isResponsesActivityEntryInProgress(entry));
   }
@@ -5858,6 +6031,8 @@ export function createMessageSender(appContext) {
       let latestResponsesActivityTimeline = [];
       let latestResponsesAssistantPhase = null;
       const latestResponsesOutputItemPhaseById = new Map();
+      // Responses API：记录“正文可见文本”的分片状态，避免 delta/done/full item 多次到来时重复拼接。
+      const latestResponsesOutputTextState = new Map();
       // OpenAI 兼容：记录末尾 usage 分片（通常出现在 finish_reason=stop 的最后一个 chunk）。
       let latestOpenAIUsage = null;
 		    // 当前流对应的 AI 消息 ID：
@@ -6502,6 +6677,7 @@ export function createMessageSender(appContext) {
         let currentEventAnswerDelta = '';
         let currentEventReasoningDelta = '';
         let hasToolCallsDelta = false;
+        let shouldRebuildResponsesVisibleAnswer = false;
 
         if (eventType === 'response.output_text.delta' || eventType === 'response.output_text.done') {
           const outputItemId = (typeof data?.item_id === 'string' && data.item_id)
@@ -6528,7 +6704,19 @@ export function createMessageSender(appContext) {
               );
             }
           } else {
-            currentEventAnswerDelta = outputTextDelta;
+            shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartState(
+              latestResponsesOutputTextState,
+              {
+                item_id: outputItemId || data?.item_id || data?.output_item_id || '',
+                output_index: data?.output_index,
+                content_index: data?.content_index,
+                status: eventType.endsWith('.done') ? 'completed' : (data?.status || 'streaming')
+              },
+              outputTextDelta,
+              {
+                status: eventType.endsWith('.done') ? 'completed' : (data?.status || 'streaming')
+              }
+            ) || shouldRebuildResponsesVisibleAnswer;
           }
         } else if (
           eventType === 'response.reasoning_text.delta'
@@ -6559,8 +6747,18 @@ export function createMessageSender(appContext) {
             if (outputItemId && outputItem.type === 'message' && outputItemPhase) {
               latestResponsesOutputItemPhaseById.set(outputItemId, outputItemPhase);
             }
+            if (outputItem.type === 'message') {
+              shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartsFromMessageItem(
+                latestResponsesOutputTextState,
+                outputItem,
+                {
+                  status: eventType === 'response.output_item.done' ? 'completed' : (outputItem.status || data?.status || ''),
+                  outputIndexFallback: data?.output_index
+                }
+              ) || shouldRebuildResponsesVisibleAnswer;
+            }
             const extractedItem = extractOpenAIResponsesOutput({ output: [outputItem] });
-            if (!aiResponse && typeof extractedItem.answer === 'string' && extractedItem.answer) {
+            if (!shouldRebuildResponsesVisibleAnswer && typeof extractedItem.answer === 'string' && extractedItem.answer) {
               currentEventAnswerDelta = extractedItem.answer;
             }
             if (typeof extractedItem.assistantPhase === 'string' && extractedItem.assistantPhase) {
@@ -6597,8 +6795,13 @@ export function createMessageSender(appContext) {
           hasToolCallsDelta = true;
         } else if (eventType === 'response.completed') {
           const completedPayload = (data?.response && typeof data.response === 'object') ? data.response : data;
+          shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartsFromOutputPayload(
+            latestResponsesOutputTextState,
+            completedPayload,
+            { status: 'completed' }
+          ) || shouldRebuildResponsesVisibleAnswer;
           const extracted = extractOpenAIResponsesOutput(completedPayload);
-          if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
+          if (!shouldRebuildResponsesVisibleAnswer && typeof extracted.answer === 'string' && extracted.answer) {
             currentEventAnswerDelta = extracted.answer;
           }
           if (typeof extracted.assistantPhase === 'string' && extracted.assistantPhase) {
@@ -6617,8 +6820,13 @@ export function createMessageSender(appContext) {
             hasToolCallsDelta = true;
           }
         } else if (!eventType && isOpenAIResponsesPayload(data)) {
+          shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartsFromOutputPayload(
+            latestResponsesOutputTextState,
+            data,
+            { status: 'completed' }
+          ) || shouldRebuildResponsesVisibleAnswer;
           const extracted = extractOpenAIResponsesOutput(data);
-          if (!aiResponse && typeof extracted.answer === 'string' && extracted.answer) {
+          if (!shouldRebuildResponsesVisibleAnswer && typeof extracted.answer === 'string' && extracted.answer) {
             currentEventAnswerDelta = extracted.answer;
           }
           if (typeof extracted.assistantPhase === 'string' && extracted.assistantPhase) {
@@ -6638,20 +6846,28 @@ export function createMessageSender(appContext) {
           }
         }
 
-        const hasAnyDelta = !!(currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
-        if (!hasAnyDelta) return;
-
-        const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
-        aiResponse += split.answerDelta;
-
-        if (split.thoughtDelta) {
-          aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
+        if (shouldRebuildResponsesVisibleAnswer) {
+          const rebuiltAnswer = buildResponsesVisibleAnswerFromOutputTextState(latestResponsesOutputTextState);
+          const thinkExtraction = extractThinkingFromText(rebuiltAnswer);
+          aiResponse = thinkExtraction.cleanText;
         }
 
-        const thinkExtraction = extractThinkingFromText(aiResponse);
-        aiResponse = thinkExtraction.cleanText;
-        if (thinkExtraction.thoughtText) {
-          aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+        const hasAnyDelta = !!(shouldRebuildResponsesVisibleAnswer || currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
+        if (!hasAnyDelta) return;
+
+        if (!shouldRebuildResponsesVisibleAnswer) {
+          const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);
+          aiResponse += split.answerDelta;
+
+          if (split.thoughtDelta) {
+            aiThoughtsRaw = mergeStreamingThoughts(aiThoughtsRaw, split.thoughtDelta);
+          }
+
+          const thinkExtraction = extractThinkingFromText(aiResponse);
+          aiResponse = thinkExtraction.cleanText;
+          if (thinkExtraction.thoughtText) {
+            aiThoughtsRaw = mergeThoughts(aiThoughtsRaw, thinkExtraction.thoughtText);
+          }
         }
 
         applyStreamingRenderTransition({ hasDelta: hasAnyDelta });
