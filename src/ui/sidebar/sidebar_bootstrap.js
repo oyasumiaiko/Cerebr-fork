@@ -1,5 +1,6 @@
 import { PromptSettings } from '../../core/prompt_settings.js';
 import { createChatHistoryManager } from '../../core/chat_history_manager.js';
+import { createConversationRuntimeStore } from '../../core/conversation_runtime_store.js';
 import { createMessageProcessor } from '../../core/message_processor.js';
 import { createImageHandler } from '../../utils/image_handler.js';
 import { createChatHistoryUI } from '../chat_history_ui.js';
@@ -44,6 +45,7 @@ export async function initializeSidebarServices(appContext) {
   appContext.services.settingsManager = createSettingsManager(appContext);
   appContext.services.imageHandler = createImageHandler(appContext);
   appContext.services.apiManager = createApiManager(appContext);
+  appContext.services.conversationRuntimeStore = createConversationRuntimeStore();
 
   appContext.services.messageProcessor = createMessageProcessor(appContext);
 

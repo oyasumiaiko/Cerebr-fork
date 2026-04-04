@@ -15,6 +15,7 @@ import { renderMarkdownSafe } from '../utils/markdown_renderer.js';
 import { enhanceMermaidDiagrams } from '../utils/mermaid_renderer.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
+import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 
 /**
  * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
@@ -163,6 +164,8 @@ export function createMessageProcessor(appContext) {
   const chatHistoryManager = services.chatHistoryManager;
   const imageHandler = services.imageHandler;
   const scrollToBottom = utils.scrollToBottom;
+  const settingsManager = services.settingsManager;
+  const apiManager = services.apiManager;
   
   // 保留占位：数学渲染现改为在 Markdown 渲染阶段由 KaTeX 完成
 
@@ -2022,6 +2025,44 @@ export function createMessageProcessor(appContext) {
   }
 
   /**
+   * 根据历史节点渲染 assistant footer。
+   *
+   * 设计说明：
+   * - footer 也是视图投影的一部分，不应继续由 sender 分散地直接操作 DOM；
+   * - sender 负责先把 apiUuid/apiUsage 等 durable 字段写入节点，再由 renderer 统一投影到界面。
+   *
+   * @param {HTMLElement|null} messageWrapperDiv
+   * @param {Object|null} nodeLike
+   * @returns {boolean}
+   */
+  function renderAssistantApiFooter(messageWrapperDiv, nodeLike) {
+    if (!messageWrapperDiv || !nodeLike || typeof nodeLike !== 'object') return false;
+    const role = String(nodeLike.role || '').toLowerCase();
+    if (role !== 'assistant' && role !== 'ai') return false;
+
+    let footer = messageWrapperDiv.querySelector('.api-footer');
+    if (!footer) {
+      footer = document.createElement('div');
+      footer.className = 'api-footer';
+      messageWrapperDiv.appendChild(footer);
+    }
+
+    const allConfigs = (typeof apiManager?.getAllConfigs === 'function')
+      ? (apiManager.getAllConfigs() || [])
+      : [];
+    const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
+    const renderData = buildApiFooterRenderData(nodeLike, {
+      allConfigs,
+      template: footerTemplate,
+      tooltipTemplate: footerTooltipTemplate
+    });
+    footer.textContent = renderData.text;
+    footer.title = renderData.title;
+    return true;
+  }
+
+  /**
    * 根据历史节点把 assistant 消息的附加元数据显示到 DOM。
    * @param {string|null} messageId
    * @param {Object|null} nodeLike
@@ -2051,6 +2092,64 @@ export function createMessageProcessor(appContext) {
     enhanceMarkdownContent(messageWrapperDiv);
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
     return true;
+  }
+
+  /**
+   * 统一同步 assistant 消息视图。
+   *
+   * Phase 1 目标：
+   * - sender 只负责先改 durable/runtime state；
+   * - 再通过这一入口触发正文 / thoughts / response activity / footer 的视图投影；
+   * - 不再让 sender 到处散调多个 DOM patch 函数。
+   *
+   * @param {string|null} messageId
+   * @param {{
+   *   node?: Object|null,
+   *   runtimeSnapshot?: Object|null,
+   *   fallbackElement?: HTMLElement|null,
+   *   content?: string,
+   *   thoughtsRaw?: string|null,
+   *   suppressMissingNodeWarning?: boolean
+   * }} [options]
+   * @returns {boolean}
+   */
+  function syncAssistantMessageView(messageId, options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    let node = (normalizedOptions.node && typeof normalizedOptions.node === 'object')
+      ? normalizedOptions.node
+      : (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null);
+    const fallbackElement = normalizedOptions.fallbackElement || null;
+
+    if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'content')) {
+      updateAIMessage(
+        messageId,
+        normalizedOptions.content || '',
+        normalizedOptions.thoughtsRaw,
+        {
+          fallbackNode: node || null,
+          suppressMissingNodeWarning: normalizedOptions.suppressMissingNodeWarning === true
+        }
+      );
+      node = (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null) || node;
+    }
+
+    const messageWrapperDiv = fallbackElement || resolveMessageElement(messageId);
+    if (messageWrapperDiv?.dataset) {
+      const runtimeStatus = String(normalizedOptions.runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
+      const boundAssistantMessageId = String(normalizedOptions.runtimeSnapshot?.activeTurn?.boundAssistantMessageId || '').trim();
+      if (runtimeStatus && boundAssistantMessageId && boundAssistantMessageId === String(messageId || '').trim()) {
+        messageWrapperDiv.dataset.responseRuntimeStatus = runtimeStatus;
+      } else {
+        delete messageWrapperDiv.dataset.responseRuntimeStatus;
+      }
+    }
+
+    let syncedAny = false;
+    if (messageWrapperDiv && node) {
+      syncedAny = syncAssistantMessageMetadata(messageId, node, { fallbackElement: messageWrapperDiv }) || syncedAny;
+      syncedAny = renderAssistantApiFooter(messageWrapperDiv, node) || syncedAny;
+    }
+    return syncedAny;
   }
 
   function scheduleFlushDeferredAiRenders() {
@@ -2438,7 +2537,9 @@ export function createMessageProcessor(appContext) {
   return {
     appendMessage,
     updateAIMessage,
+    syncAssistantMessageView,
     syncAssistantMessageMetadata,
+    renderAssistantApiFooter,
     processMathAndMarkdown,
     enhanceMarkdownContent,
     decorateMarkdownLinks,

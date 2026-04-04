@@ -13,7 +13,7 @@ import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttle
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { resolveResponseHandlingMode, planStreamingRenderTransition } from './response_flow_state.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
-import { buildApiFooterRenderData, normalizeApiUsageMeta } from '../utils/api_footer_template.js';
+import { normalizeApiUsageMeta } from '../utils/api_footer_template.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 
@@ -34,6 +34,7 @@ export function createMessageSender(appContext) {
 
   const apiManager = services.apiManager;
   const messageProcessor = services.messageProcessor;
+  const conversationRuntimeStore = services.conversationRuntimeStore;
   const imageHandler = services.imageHandler;
   const chatHistoryUI = services.chatHistoryUI;
   const chatHistoryManager = services.chatHistoryManager;
@@ -298,15 +299,182 @@ export function createMessageSender(appContext) {
     };
   }
 
+  function getRuntimeConversationKey(conversationId) {
+    return resolveConversationQueueKey(conversationId);
+  }
+
+  function getAttemptRuntimeConversationKey(attemptState, fallbackConversationId = '') {
+    const explicitRuntimeKey = (typeof attemptState?.runtimeConversationKey === 'string' && attemptState.runtimeConversationKey.trim())
+      ? attemptState.runtimeConversationKey.trim()
+      : '';
+    if (explicitRuntimeKey) return explicitRuntimeKey;
+
+    const boundConversationId = normalizeConversationId(attemptState?.boundConversationId);
+    if (boundConversationId) return getRuntimeConversationKey(boundConversationId);
+
+    const normalizedFallbackConversationId = normalizeConversationId(fallbackConversationId);
+    if (normalizedFallbackConversationId) return getRuntimeConversationKey(normalizedFallbackConversationId);
+
+    const activeConversationId = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    if (activeConversationId) return getRuntimeConversationKey(activeConversationId);
+
+    return getActiveDraftConversationQueueKey();
+  }
+
+  function getAttemptRuntimeSnapshot(attemptState, fallbackConversationId = '') {
+    if (!conversationRuntimeStore?.getConversationRuntimeState) return null;
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState, fallbackConversationId);
+    if (!runtimeConversationKey) return null;
+    return conversationRuntimeStore.getConversationRuntimeState(runtimeConversationKey);
+  }
+
+  function updateConversationRuntimeStateByKey(runtimeConversationKey, recipe) {
+    const normalizedRuntimeKey = (typeof runtimeConversationKey === 'string' && runtimeConversationKey.trim())
+      ? runtimeConversationKey.trim()
+      : '';
+    if (!normalizedRuntimeKey || !conversationRuntimeStore?.updateConversationRuntimeState) return null;
+    return conversationRuntimeStore.updateConversationRuntimeState(normalizedRuntimeKey, recipe);
+  }
+
+  function updateAttemptRuntimeState(attemptState, recipe, options = {}) {
+    if (!attemptState || !conversationRuntimeStore?.updateConversationRuntimeState) return null;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(
+      attemptState,
+      normalizedOptions.conversationId || ''
+    );
+    if (!runtimeConversationKey) return null;
+    attemptState.runtimeConversationKey = runtimeConversationKey;
+    return updateConversationRuntimeStateByKey(runtimeConversationKey, recipe);
+  }
+
+  function hasMeaningfulRuntimeSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    if (String(snapshot?.activeTurn?.status || '').trim().toLowerCase() !== 'idle') return true;
+    if (snapshot?.activeTurn?.attemptId || snapshot?.activeTurn?.boundAssistantMessageId) return true;
+    if (Array.isArray(snapshot?.responses?.accumulatedInputItems) && snapshot.responses.accumulatedInputItems.length > 0) return true;
+    if (Array.isArray(snapshot?.responses?.accumulatedTimeline) && snapshot.responses.accumulatedTimeline.length > 0) return true;
+    if (snapshot?.responses?.assistantPhase || snapshot?.responses?.lastResponseId) return true;
+    if (Array.isArray(snapshot?.queue?.items) && snapshot.queue.items.length > 0) return true;
+    if (snapshot?.queue?.isFlushing || snapshot?.queue?.pausedHeadId) return true;
+    if (Array.isArray(snapshot?.steer?.pendingSteers) && snapshot.steer.pendingSteers.length > 0) return true;
+    if (snapshot?.steer?.targetTurnId || snapshot?.steer?.targetTurnStartedAtMs) return true;
+    return false;
+  }
+
+  function migrateConversationRuntimeState(fromConversationId, toConversationId) {
+    if (!conversationRuntimeStore?.getConversationRuntimeState || !conversationRuntimeStore?.clearConversationRuntimeState) {
+      return false;
+    }
+    const fromRuntimeKey = getRuntimeConversationKey(fromConversationId);
+    const toRuntimeKey = getRuntimeConversationKey(toConversationId);
+    if (!fromRuntimeKey || !toRuntimeKey || fromRuntimeKey === toRuntimeKey) return false;
+
+    const snapshot = conversationRuntimeStore.getConversationRuntimeState(fromRuntimeKey);
+    if (!hasMeaningfulRuntimeSnapshot(snapshot)) {
+      return false;
+    }
+
+    updateConversationRuntimeStateByKey(toRuntimeKey, (draft) => {
+      draft.activeTurn = cloneDataSafely(snapshot.activeTurn) || draft.activeTurn;
+      draft.responses = cloneDataSafely(snapshot.responses) || draft.responses;
+      draft.steer = cloneDataSafely(snapshot.steer) || draft.steer;
+    });
+    conversationRuntimeStore.clearConversationRuntimeState(fromRuntimeKey);
+    return true;
+  }
+
+  function syncConversationQueueRuntime(queueKey) {
+    const runtimeConversationKey = getRuntimeConversationKey(queueKey);
+    if (!runtimeConversationKey) return null;
+    const queueItems = getConversationSendQueue(runtimeConversationKey).map(task => cloneDataSafely(task));
+    const pausedHeadId = queueItems[0]?.paused === true && typeof queueItems[0]?.id === 'string'
+      ? queueItems[0].id
+      : null;
+    return updateConversationRuntimeStateByKey(runtimeConversationKey, (draft) => {
+      draft.queue.items = queueItems;
+      draft.queue.isFlushing = conversationQueueDrainLocks.has(runtimeConversationKey);
+      draft.queue.pausedHeadId = pausedHeadId;
+    });
+  }
+
+  function syncAttemptResponsesRuntimeState(attemptState, meta = {}) {
+    if (!attemptState) return null;
+    const normalizedMeta = (meta && typeof meta === 'object') ? meta : {};
+    const nextTimeline = Array.isArray(normalizedMeta.timeline)
+      ? cloneResponsesActivityTimeline(normalizedMeta.timeline)
+      : (Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
+        ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
+        : []);
+    const nextInputItems = Array.isArray(normalizedMeta.inputItems)
+      ? cloneResponsesReplayOutputItems(normalizedMeta.inputItems)
+      : (Array.isArray(attemptState.responsesToolLoopAccumulatedInputItems)
+        ? cloneResponsesReplayOutputItems(attemptState.responsesToolLoopAccumulatedInputItems)
+        : []);
+    const nextAssistantPhase = Object.prototype.hasOwnProperty.call(normalizedMeta, 'assistantPhase')
+      ? (normalizedMeta.assistantPhase || null)
+      : (attemptState.responsesToolLoopAssistantPhase || null);
+    const nextResponseId = Object.prototype.hasOwnProperty.call(normalizedMeta, 'responseId')
+      ? (normalizedMeta.responseId || null)
+      : (attemptState.responsesToolLoopLastResponseId || null);
+
+    attemptState.responsesToolLoopAccumulatedTimeline = nextTimeline.length > 0 ? nextTimeline : null;
+    attemptState.responsesToolLoopAccumulatedInputItems = nextInputItems.length > 0 ? nextInputItems : null;
+    attemptState.responsesToolLoopAssistantPhase = nextAssistantPhase;
+    attemptState.responsesToolLoopLastResponseId = nextResponseId;
+
+    return updateAttemptRuntimeState(attemptState, (draft) => {
+      draft.responses.accumulatedTimeline = nextTimeline;
+      draft.responses.accumulatedInputItems = nextInputItems;
+      draft.responses.assistantPhase = nextAssistantPhase;
+      draft.responses.lastResponseId = nextResponseId;
+    });
+  }
+
+  function syncAttemptAssistantView(messageId, options = {}) {
+    if (!messageId || typeof messageProcessor?.syncAssistantMessageView !== 'function') return false;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const attemptState = normalizedOptions.attemptState || null;
+    const node = (normalizedOptions.node && typeof normalizedOptions.node === 'object')
+      ? normalizedOptions.node
+      : resolveAttemptAiNode(attemptState, messageId);
+    const runtimeSnapshot = normalizedOptions.runtimeSnapshot
+      || getAttemptRuntimeSnapshot(attemptState, normalizedOptions.conversationId || '');
+    const viewOptions = {
+      node: node || null,
+      runtimeSnapshot,
+      fallbackElement: normalizedOptions.fallbackElement || null,
+      suppressMissingNodeWarning: normalizedOptions.suppressMissingNodeWarning === true
+    };
+    if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'content')) {
+      viewOptions.content = normalizedOptions.content;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'thoughtsRaw')) {
+      viewOptions.thoughtsRaw = normalizedOptions.thoughtsRaw;
+    }
+    return !!messageProcessor.syncAssistantMessageView(messageId, viewOptions);
+  }
+
   function updateAttemptBoundConversationId(attemptState, nextConversationId) {
     if (!attemptState) return;
     const normalizedNext = normalizeConversationId(nextConversationId);
     const normalizedCurrent = normalizeConversationId(attemptState.boundConversationId);
     if (normalizedCurrent === normalizedNext) return;
+    const previousRuntimeConversationKey = getAttemptRuntimeConversationKey(attemptState, normalizedCurrent || '');
     if (normalizedNext) {
       backgroundCompletedConversationIds.delete(normalizedNext);
     }
     attemptState.boundConversationId = normalizedNext;
+    const nextRuntimeConversationKey = getAttemptRuntimeConversationKey(attemptState, normalizedNext || '');
+    if (
+      previousRuntimeConversationKey
+      && nextRuntimeConversationKey
+      && previousRuntimeConversationKey !== nextRuntimeConversationKey
+    ) {
+      migrateConversationRuntimeState(previousRuntimeConversationKey, nextRuntimeConversationKey);
+    }
+    attemptState.runtimeConversationKey = nextRuntimeConversationKey || previousRuntimeConversationKey || null;
     notifyStreamingConversationStateChanged();
   }
 
@@ -2012,6 +2180,7 @@ export function createMessageSender(appContext) {
     if (Array.isArray(existing)) return normalizeConversationSendQueueTasks(existing);
     const created = [];
     conversationSendQueues.set(normalizedQueueKey, created);
+    syncConversationQueueRuntime(normalizedQueueKey);
     return created;
   }
 
@@ -2029,6 +2198,7 @@ export function createMessageSender(appContext) {
   function enqueueConversationSend(queueKey, queuedTask) {
     const queue = ensureConversationSendQueue(queueKey);
     queue.push(normalizeConversationQueuedTask(queuedTask));
+    syncConversationQueueRuntime(queueKey);
     refreshCurrentConversationQueuedSendPreview();
     return queue.length;
   }
@@ -2043,6 +2213,7 @@ export function createMessageSender(appContext) {
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
+    syncConversationQueueRuntime(normalizedQueueKey);
     refreshCurrentConversationQueuedSendPreview();
     return removedTask || null;
   }
@@ -2051,6 +2222,7 @@ export function createMessageSender(appContext) {
     const task = getQueuedConversationTask(queueKey, taskId);
     if (!task) return null;
     task.paused = paused === true;
+    syncConversationQueueRuntime(queueKey);
     refreshCurrentConversationQueuedSendPreview();
     return task;
   }
@@ -2068,6 +2240,7 @@ export function createMessageSender(appContext) {
     if (placement === 'after') insertIndex += 1;
     insertIndex = Math.max(0, Math.min(insertIndex, queue.length));
     queue.splice(insertIndex, 0, movedTask);
+    syncConversationQueueRuntime(normalizedQueueKey);
     refreshCurrentConversationQueuedSendPreview();
     return true;
   }
@@ -2627,6 +2800,8 @@ export function createMessageSender(appContext) {
     const targetQueue = ensureConversationSendQueue(normalizedToKey);
     targetQueue.push(...fromQueue);
     conversationSendQueues.delete(normalizedFromKey);
+    syncConversationQueueRuntime(normalizedFromKey);
+    syncConversationQueueRuntime(normalizedToKey);
     refreshCurrentConversationQueuedSendPreview();
   }
 
@@ -2693,11 +2868,13 @@ export function createMessageSender(appContext) {
     const queue = normalizeConversationSendQueueTasks(conversationSendQueues.get(normalizedQueueKey));
     if (!Array.isArray(queue) || queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
+      syncConversationQueueRuntime(normalizedQueueKey);
       return false;
     }
 
     const frontTask = normalizeConversationQueuedTask(queue[0]);
     if (frontTask.paused) {
+      syncConversationQueueRuntime(normalizedQueueKey);
       refreshCurrentConversationQueuedSendPreview();
       return false;
     }
@@ -2706,6 +2883,7 @@ export function createMessageSender(appContext) {
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
+    syncConversationQueueRuntime(normalizedQueueKey);
     refreshCurrentConversationQueuedSendPreview();
     if (!nextTask || !nextTask.options) {
       if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
@@ -2715,6 +2893,7 @@ export function createMessageSender(appContext) {
     }
 
     conversationQueueDrainLocks.add(normalizedQueueKey);
+    syncConversationQueueRuntime(normalizedQueueKey);
     try {
       let dispatchOptions = nextTask.options;
       const queueConversationId = normalizeConversationId(normalizedQueueKey);
@@ -2738,6 +2917,7 @@ export function createMessageSender(appContext) {
       console.error('处理会话发送队列失败:', error);
     } finally {
       conversationQueueDrainLocks.delete(normalizedQueueKey);
+      syncConversationQueueRuntime(normalizedQueueKey);
       if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
         scheduleConversationQueueFlush(normalizedQueueKey);
       }
@@ -2798,6 +2978,7 @@ export function createMessageSender(appContext) {
 
     if (!previousConversationId && nextConversationId) {
       moveConversationSendQueue(previousQueueKey, nextConversationId);
+      migrateConversationRuntimeState(previousQueueKey, nextConversationId);
     } else if (previousConversationId && !nextConversationId) {
       rotateActiveDraftConversationQueueKey();
     }
@@ -2810,6 +2991,7 @@ export function createMessageSender(appContext) {
       services.conversationPresence?.setActiveConversationId?.(currentConversationId);
     } catch (_) {}
 
+    syncConversationQueueRuntime(nextConversationId || getActiveDraftConversationQueueKey());
     scheduleConversationQueueFlush(nextConversationId || getActiveDraftConversationQueueKey());
   }
 
@@ -2933,6 +3115,9 @@ export function createMessageSender(appContext) {
     if (!normalizedId) return;
     attemptState.aiMessageId = normalizedId;
     attemptState.aiMessageNode = explicitNode || resolveAttemptAiNode(attemptState, normalizedId) || null;
+    updateAttemptRuntimeState(attemptState, (draft) => {
+      draft.activeTurn.boundAssistantMessageId = normalizedId;
+    });
   }
 
   function isAttemptMainConversationActive(attemptState) {
@@ -2955,6 +3140,9 @@ export function createMessageSender(appContext) {
     }
     if (attemptState.boundApiLock === undefined) {
       attemptState.boundApiLock = chatHistoryUI?.getActiveConversationApiLock?.() || null;
+    }
+    if (!attemptState.runtimeConversationKey) {
+      attemptState.runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
     }
   }
 
@@ -4323,7 +4511,11 @@ export function createMessageSender(appContext) {
           || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
         : null;
       if (element) {
-        messageProcessor.syncAssistantMessageMetadata?.(id, node, { fallbackElement: element });
+        syncAttemptAssistantView(id, {
+          attemptState,
+          node,
+          fallbackElement: element
+        });
       }
       return true;
     } catch (_) {
@@ -5291,9 +5483,7 @@ export function createMessageSender(appContext) {
   function applyResponsesActivityTimelineToAttempt(attemptState, timeline) {
     if (!attemptState) return false;
     const normalizedTimeline = mergeResponsesActivityTimeline([], timeline);
-    attemptState.responsesToolLoopAccumulatedTimeline = normalizedTimeline.length > 0
-      ? cloneResponsesActivityTimeline(normalizedTimeline)
-      : null;
+    syncAttemptResponsesRuntimeState(attemptState, { timeline: normalizedTimeline });
 
     const node = attemptState.aiMessageNode
       || resolveAttemptAiNode(attemptState, attemptState.aiMessageId || '');
@@ -5303,10 +5493,13 @@ export function createMessageSender(appContext) {
     applyResponsesActivityTimelineToNode(node, normalizedTimeline);
 
     const wrapper = resolveMessageElementForSender(attemptState.aiMessageId || '');
-    messageProcessor.syncAssistantMessageMetadata?.(
+    syncAttemptAssistantView(
       attemptState.aiMessageId || '',
-      node,
-      wrapper ? { fallbackElement: wrapper } : undefined
+      {
+        attemptState,
+        node,
+        fallbackElement: wrapper || null
+      }
     );
     return true;
   }
@@ -5314,9 +5507,7 @@ export function createMessageSender(appContext) {
   function applyResponsesInputItemsToAttempt(attemptState, items) {
     if (!attemptState) return false;
     const normalizedItems = cloneResponsesReplayOutputItems(items);
-    attemptState.responsesToolLoopAccumulatedInputItems = normalizedItems.length > 0
-      ? normalizedItems
-      : null;
+    syncAttemptResponsesRuntimeState(attemptState, { inputItems: normalizedItems });
 
     const node = attemptState.aiMessageNode
       || resolveAttemptAiNode(attemptState, attemptState.aiMessageId || '');
@@ -5326,10 +5517,13 @@ export function createMessageSender(appContext) {
     applyResponsesInputItemsToNode(node, normalizedItems);
 
     const wrapper = resolveMessageElementForSender(attemptState.aiMessageId || '');
-    messageProcessor.syncAssistantMessageMetadata?.(
+    syncAttemptAssistantView(
       attemptState.aiMessageId || '',
-      node,
-      wrapper ? { fallbackElement: wrapper } : undefined
+      {
+        attemptState,
+        node,
+        fallbackElement: wrapper || null
+      }
     );
     return true;
   }
@@ -5410,6 +5604,9 @@ export function createMessageSender(appContext) {
         modelName: usedApiConfig?.modelName || ''
       });
     }
+    updateAttemptRuntimeState(attemptState, (draft) => {
+      draft.activeTurn.status = 'streaming';
+    });
 
     const response = await apiManager.sendRequest({
       requestBody,
@@ -5498,6 +5695,9 @@ export function createMessageSender(appContext) {
         return lastHandleResult;
       }
 
+      updateAttemptRuntimeState(attemptState, (draft) => {
+        draft.activeTurn.status = 'waiting_tool';
+      });
       await persistAttemptConversationSnapshot(attemptState, { force: true });
 
       const functionCallOutputs = [];
@@ -5509,6 +5709,9 @@ export function createMessageSender(appContext) {
       }
 
       if (attemptState) {
+        updateAttemptRuntimeState(attemptState, (draft) => {
+          draft.activeTurn.status = 'applying_followup';
+        });
         const mergedTimeline = mergeResponsesFunctionOutputsIntoTimeline(
           attemptState.responsesToolLoopAccumulatedTimeline || lastHandleResult?.responseActivityTimeline,
           pendingFunctionCalls,
@@ -5785,10 +5988,25 @@ export function createMessageSender(appContext) {
         persistPromise: null,
         pendingPersist: false,
         pendingForcedPersist: false,
+        responsesToolLoopAccumulatedTimeline: null,
         responsesToolLoopAccumulatedInputItems: null,
+        responsesToolLoopAssistantPhase: null,
+        responsesToolLoopLastResponseId: null,
+        runtimeConversationKey: getCurrentActiveConversationQueueKey(),
         completedSuccessfully: false
       };
       activeAttempts.set(attemptState.id, attemptState);
+      updateAttemptRuntimeState(attemptState, (draft) => {
+        draft.activeTurn.attemptId = attemptState.id;
+        draft.activeTurn.status = 'streaming';
+        draft.activeTurn.startedAt = Date.now();
+        draft.activeTurn.boundAssistantMessageId = null;
+        draft.activeTurn.writeMode = normalizedTargetAiMessageId ? 'replace' : 'append';
+        draft.responses.accumulatedInputItems = [];
+        draft.responses.accumulatedTimeline = [];
+        draft.responses.assistantPhase = null;
+        draft.responses.lastResponseId = null;
+      });
       notifyStreamingConversationStateChanged();
 
       // 如果这是第一个进行中的请求，开启全局“正在处理”状态与自动滚动
@@ -5812,6 +6030,11 @@ export function createMessageSender(appContext) {
 
 	      attemptState.finished = true;
 	      activeAttempts.delete(attemptState.id);
+      updateAttemptRuntimeState(attemptState, (draft) => {
+        draft.activeTurn.status = attemptState.completedSuccessfully
+          ? 'completed'
+          : (attemptState.manualAbort ? 'aborted' : 'error');
+      });
 
       if (attemptState.completedSuccessfully) {
         const boundId = normalizeConversationId(attemptState.boundConversationId);
@@ -6800,30 +7023,6 @@ export function createMessageSender(appContext) {
       return chatContainer;
     };
 
-    function renderApiFooter(messageElement, nodeLike) {
-      try {
-        if (!messageElement || !nodeLike) return;
-        let footer = messageElement.querySelector('.api-footer');
-        if (!footer) {
-          footer = document.createElement('div');
-          footer.classList.add('api-footer');
-          messageElement.appendChild(footer);
-        }
-        const allConfigs = (apiManager.getAllConfigs && apiManager.getAllConfigs()) || [];
-        const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
-        const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
-        const renderData = buildApiFooterRenderData(nodeLike, {
-          allConfigs,
-          template: footerTemplate,
-          tooltipTemplate: footerTooltipTemplate
-        });
-        footer.textContent = renderData.text;
-        footer.title = renderData.title;
-      } catch (e) {
-        console.warn('渲染API footer失败:', e);
-      }
-    }
-
     function applyApiMetaToMessage(messageId, apiConfig, messageDiv) {
       try {
         if (!messageId) return;
@@ -6840,7 +7039,11 @@ export function createMessageSender(appContext) {
           ? (chatContainer.querySelector(selector)
             || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
           : null;
-        renderApiFooter(messageDiv || fallbackEl, node);
+        syncAttemptAssistantView(messageId, {
+          attemptState,
+          node,
+          fallbackElement: messageDiv || fallbackEl || null
+        });
       } catch (e) {
         console.warn('记录/渲染API信息失败:', e);
       }
@@ -6861,7 +7064,11 @@ export function createMessageSender(appContext) {
           ? (chatContainer.querySelector(selector)
             || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
           : null;
-        renderApiFooter(messageDiv || fallbackEl, node);
+        syncAttemptAssistantView(messageId, {
+          attemptState,
+          node,
+          fallbackElement: messageDiv || fallbackEl || null
+        });
       } catch (e) {
         console.warn('记录/渲染API用量失败:', e);
       }
@@ -6899,8 +7106,12 @@ export function createMessageSender(appContext) {
       try { loadingMessage.classList.add('ai-message'); } catch (_) {}
       loadingMessage.textContent = '';
       loadingMessage.removeAttribute('title');
-      messageProcessor.updateAIMessage(node.id, answer || '', thoughts || '', {
-        fallbackNode: node,
+      syncAttemptAssistantView(node.id, {
+        attemptState,
+        node,
+        fallbackElement: loadingMessage,
+        content: answer || '',
+        thoughtsRaw: thoughts || '',
         suppressMissingNodeWarning: true
       });
       applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
@@ -6912,7 +7123,6 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
-      renderApiFooter,
       promoteLoadingMessageToAi
     };
   }
@@ -6948,7 +7158,6 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
-      renderApiFooter,
       promoteLoadingMessageToAi
     } = createResponseUiBindings({
       threadContext,
@@ -7079,6 +7288,12 @@ export function createMessageSender(appContext) {
                 phase: latestResponsesAssistantPhase,
                 inputItems: payload.responsesInputItems
               });
+              syncAttemptResponsesRuntimeState(attemptState, {
+                timeline: payload.responsesActivityTimeline,
+                inputItems: payload.responsesInputItems,
+                assistantPhase: latestResponsesAssistantPhase,
+                responseId: latestResponsesResponseId || null
+              });
             }
           }
 	        const regenContainer = getUiContainer();
@@ -7086,22 +7301,13 @@ export function createMessageSender(appContext) {
 	          ? captureReadingAnchorForRegenerate(regenContainer, payload.messageId, attemptState)
 	          : null;
 	        try {
-          messageProcessor.updateAIMessage(
-            payload.messageId,
-            payload.answer || '',
-            payload.thoughts ?? null,
-            {
-              fallbackNode: boundNode || attemptState?.aiMessageNode || null,
-              suppressMissingNodeWarning: true
-            }
-          );
-          if (
-            Array.isArray(payload.responsesActivityTimeline)
-            && boundNode
-            && (payload.responsesActivityTimeline.length > 0 || Array.isArray(boundNode.response_activity_timeline))
-          ) {
-            messageProcessor.syncAssistantMessageMetadata?.(payload.messageId, boundNode);
-          }
+          syncAttemptAssistantView(payload.messageId, {
+            attemptState,
+            node: boundNode || attemptState?.aiMessageNode || null,
+            content: payload.answer || '',
+            thoughtsRaw: payload.thoughts ?? null,
+            suppressMissingNodeWarning: true
+          });
           void persistAttemptConversationSnapshot(attemptState);
 	        } finally {
 	          if (regenContainer) {
@@ -7150,6 +7356,12 @@ export function createMessageSender(appContext) {
               phase: latestResponsesAssistantPhase,
               inputItems: latestResponsesInputItems
             });
+            syncAttemptResponsesRuntimeState(attemptState, {
+              timeline: latestResponsesActivityTimeline,
+              inputItems: latestResponsesInputItems,
+              assistantPhase: latestResponsesAssistantPhase,
+              responseId: latestResponsesResponseId || null
+            });
           }
         }
         const regenContainer = getUiContainer();
@@ -7157,15 +7369,13 @@ export function createMessageSender(appContext) {
           ? captureReadingAnchorForRegenerate(regenContainer, currentAiMessageId, attemptState)
           : null;
         try {
-          messageProcessor.updateAIMessage(
-            currentAiMessageId,
-            aiResponse,
-            isOpenAIResponsesStream ? null : aiThoughtsRaw,
-            {
-              fallbackNode: boundNode || attemptState?.aiMessageNode || null,
-              suppressMissingNodeWarning: true
-            }
-          );
+          syncAttemptAssistantView(currentAiMessageId, {
+            attemptState,
+            node: boundNode || attemptState?.aiMessageNode || null,
+            content: aiResponse,
+            thoughtsRaw: isOpenAIResponsesStream ? null : aiThoughtsRaw,
+            suppressMissingNodeWarning: true
+          });
           if (!hasClearedBoundSignatureForRegenerate) {
             hasClearedBoundSignatureForRegenerate = clearBoundSignatureForRegenerate(currentAiMessageId, attemptState);
           }
@@ -7175,7 +7385,10 @@ export function createMessageSender(appContext) {
               phase: latestResponsesAssistantPhase,
               inputItems: latestResponsesInputItems
             });
-            messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, boundNode);
+            syncAttemptAssistantView(currentAiMessageId, {
+              attemptState,
+              node: boundNode
+            });
           }
           applyApiMetaToMessage(currentAiMessageId, usedApiConfig);
         } catch (e) {
@@ -7208,7 +7421,16 @@ export function createMessageSender(appContext) {
                 phase: latestResponsesAssistantPhase,
                 inputItems: latestResponsesInputItems
               });
-              messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, promotedNode);
+              syncAttemptResponsesRuntimeState(attemptState, {
+                timeline: latestResponsesActivityTimeline,
+                inputItems: latestResponsesInputItems,
+                assistantPhase: latestResponsesAssistantPhase,
+                responseId: latestResponsesResponseId || null
+              });
+              syncAttemptAssistantView(currentAiMessageId, {
+                attemptState,
+                node: promotedNode
+              });
             }
           }
         }
@@ -7277,7 +7499,17 @@ export function createMessageSender(appContext) {
                   phase: latestResponsesAssistantPhase,
                   inputItems: latestResponsesInputItems
                 });
-                messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, createdNode, { fallbackElement: newAiMessageDiv });
+                syncAttemptResponsesRuntimeState(attemptState, {
+                  timeline: latestResponsesActivityTimeline,
+                  inputItems: latestResponsesInputItems,
+                  assistantPhase: latestResponsesAssistantPhase,
+                  responseId: latestResponsesResponseId || null
+                });
+                syncAttemptAssistantView(currentAiMessageId, {
+                  attemptState,
+                  node: createdNode,
+                  fallbackElement: newAiMessageDiv
+                });
               }
             }
             applyApiMetaToMessage(currentAiMessageId, usedApiConfig, newAiMessageDiv);
@@ -7414,13 +7646,16 @@ export function createMessageSender(appContext) {
 
           const safeMessageId = escapeMessageIdForSelector(currentAiMessageId);
           const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
-          const el = selector
+	          const el = selector
 	            ? (chatContainer.querySelector(selector)
 	              || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
 	            : null;
 	          if (el) {
-                messageProcessor.syncAssistantMessageMetadata?.(currentAiMessageId, node, { fallbackElement: el });
-	            renderApiFooter(el, node);
+                syncAttemptAssistantView(currentAiMessageId, {
+                  attemptState,
+                  node,
+                  fallbackElement: el
+                });
 	          }
 	        }
 	      } catch (e) {
@@ -7429,14 +7664,12 @@ export function createMessageSender(appContext) {
 	    }
 
       if (isOpenAIResponsesStream && attemptState) {
-        attemptState.responsesToolLoopAccumulatedTimeline = (Array.isArray(latestResponsesActivityTimeline) && latestResponsesActivityTimeline.length > 0)
-          ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
-          : null;
-        attemptState.responsesToolLoopAccumulatedInputItems = latestResponsesInputItems.length > 0
-          ? cloneResponsesReplayOutputItems(latestResponsesInputItems)
-          : null;
-        attemptState.responsesToolLoopAssistantPhase = latestResponsesAssistantPhase || null;
-        attemptState.responsesToolLoopLastResponseId = latestResponsesResponseId || null;
+        syncAttemptResponsesRuntimeState(attemptState, {
+          timeline: latestResponsesActivityTimeline,
+          inputItems: latestResponsesInputItems,
+          assistantPhase: latestResponsesAssistantPhase || null,
+          responseId: latestResponsesResponseId || null
+        });
       }
 
       await persistAttemptConversationSnapshot(attemptState, { force: true });
@@ -8075,7 +8308,6 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
-      renderApiFooter,
       promoteLoadingMessageToAi
     } = createResponseUiBindings({
       threadContext,
@@ -8130,14 +8362,12 @@ export function createMessageSender(appContext) {
       && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
     const finalizeNonStreamResult = () => {
       if (isResponsesApi && attemptState) {
-        attemptState.responsesToolLoopAccumulatedTimeline = (Array.isArray(responseActivityTimeline) && responseActivityTimeline.length > 0)
-          ? cloneResponsesActivityTimeline(responseActivityTimeline)
-          : null;
-        attemptState.responsesToolLoopAccumulatedInputItems = responsesInputItems.length > 0
-          ? cloneResponsesReplayOutputItems(responsesInputItems)
-          : null;
-        attemptState.responsesToolLoopAssistantPhase = responsesAssistantPhase || null;
-        attemptState.responsesToolLoopLastResponseId = responsesResponseId || null;
+        syncAttemptResponsesRuntimeState(attemptState, {
+          timeline: responseActivityTimeline,
+          inputItems: responsesInputItems,
+          assistantPhase: responsesAssistantPhase || null,
+          responseId: responsesResponseId || null
+        });
       }
       return {
         answer: answer || '',
@@ -8343,8 +8573,12 @@ export function createMessageSender(appContext) {
                 inputItems: responsesInputItems
               });
             }
-            messageProcessor.updateAIMessage(existingMessageId, answer || '', displayThoughts, {
-              fallbackNode: existingNode,
+            syncAttemptAssistantView(existingMessageId, {
+              attemptState,
+              node: existingNode,
+              fallbackElement: existingEl,
+              content: answer || '',
+              thoughtsRaw: displayThoughts,
               suppressMissingNodeWarning: true
             });
             // 重新生成（原地替换）：一旦开始写回新内容，旧签名就不再匹配，必须先清空
@@ -8356,7 +8590,11 @@ export function createMessageSender(appContext) {
               try {
                 existingNode.thoughtSignature = thoughtSignature;
                 if (thoughtSignatureSource) existingNode.thoughtSignatureSource = thoughtSignatureSource;
-                renderApiFooter(existingEl, existingNode);
+                syncAttemptAssistantView(existingMessageId, {
+                  attemptState,
+                  node: existingNode,
+                  fallbackElement: existingEl
+                });
               } catch (e) {
                 console.warn('记录推理签名失败（非流式，原地替换）:', e);
               }
@@ -8369,7 +8607,11 @@ export function createMessageSender(appContext) {
                   phase: responsesAssistantPhase,
                   inputItems: responsesInputItems
                 });
-                messageProcessor.syncAssistantMessageMetadata?.(existingMessageId, existingNode, { fallbackElement: existingEl });
+                syncAttemptAssistantView(existingMessageId, {
+                  attemptState,
+                  node: existingNode,
+                  fallbackElement: existingEl
+                });
               } catch (e) {
                 console.warn('记录 Responses 元信息失败（非流式，原地替换）:', e);
               }
@@ -8415,7 +8657,11 @@ export function createMessageSender(appContext) {
         if (node && thoughtSignature) {
           node.thoughtSignature = thoughtSignature;
           if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
-          renderApiFooter(loadingMessage, node);
+          syncAttemptAssistantView(promotedId, {
+            attemptState,
+            node,
+            fallbackElement: loadingMessage
+          });
         }
         if (!isGeminiApi && isResponsesApi && node) {
           applyResponsesMetadataToNode(node, {
@@ -8423,7 +8669,11 @@ export function createMessageSender(appContext) {
             phase: responsesAssistantPhase,
             inputItems: responsesInputItems
           });
-          messageProcessor.syncAssistantMessageMetadata?.(promotedId, node, { fallbackElement: loadingMessage });
+          syncAttemptAssistantView(promotedId, {
+            attemptState,
+            node,
+            fallbackElement: loadingMessage
+          });
         } else if (!isGeminiApi && node) {
           if (typeof reasoningContentRaw === 'string' && reasoningContentRaw) {
             node.reasoning_content = reasoningContentRaw;
@@ -8466,6 +8716,10 @@ export function createMessageSender(appContext) {
           try {
             createdNode.thoughtSignature = thoughtSignature;
             if (thoughtSignatureSource) createdNode.thoughtSignatureSource = thoughtSignatureSource;
+            syncAttemptAssistantView(messageId, {
+              attemptState,
+              node: createdNode
+            });
           } catch (e) {
             console.warn('记录推理签名失败（非流式，后台线程）:', e);
           }
@@ -8532,7 +8786,11 @@ export function createMessageSender(appContext) {
           if (node) {
             node.thoughtSignature = thoughtSignature;
             if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
-            renderApiFooter(newAiMessageDiv, node);
+            syncAttemptAssistantView(messageId, {
+              attemptState,
+              node,
+              fallbackElement: newAiMessageDiv
+            });
           }
         } catch (e) {
           console.warn('记录推理签名失败（非流式）:', e);
@@ -8548,7 +8806,11 @@ export function createMessageSender(appContext) {
                   phase: responsesAssistantPhase,
                   inputItems: responsesInputItems
                 });
-                messageProcessor.syncAssistantMessageMetadata?.(messageId, node, { fallbackElement: newAiMessageDiv });
+                syncAttemptAssistantView(messageId, {
+                  attemptState,
+                  node,
+                  fallbackElement: newAiMessageDiv
+                });
 	          }
 	        } catch (e) {
 	          console.warn('记录 Responses 元信息失败（非流式）:', e);

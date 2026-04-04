@@ -3541,16 +3541,21 @@ export function createChatHistoryUI(appContext) {
       }
       messageElem.setAttribute('data-message-id', msg.id);
       try {
-        services.messageProcessor?.syncAssistantMessageMetadata?.(msg.id, msg, { fallbackElement: messageElem });
-      } catch (_) {}
-      // 渲染 API footer（可由用户模板控制展示内容）
-      try {
-        renderApiFooterForMessageElement(messageElem, msg, {
-          role,
-          allConfigs: apiConfigsSnapshot,
-          template: footerTemplate,
-          tooltipTemplate: footerTooltipTemplate
+        services.messageProcessor?.syncAssistantMessageView?.(msg.id, {
+          node: msg,
+          fallbackElement: messageElem
         });
+      } catch (_) {}
+      // 兼容旧路径：若上面的统一 renderer 不可用，再回退到历史 footer 渲染函数。
+      try {
+        if (typeof services.messageProcessor?.syncAssistantMessageView !== 'function') {
+          renderApiFooterForMessageElement(messageElem, msg, {
+            role,
+            allConfigs: apiConfigsSnapshot,
+            template: footerTemplate,
+            tooltipTemplate: footerTooltipTemplate
+          });
+        }
       } catch (_) {}
 
       // 划词线程：根据历史节点补回高亮
