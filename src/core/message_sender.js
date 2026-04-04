@@ -4697,6 +4697,68 @@ export function createMessageSender(appContext) {
     return base ? `${base}\n\n${text}` : text;
   }
 
+  /**
+   * 构造一次性“网页上下文”用户消息。
+   *
+   * 设计目标：
+   * - 用户手写提示词/要求保留在 system/instructions 层；
+   * - 页面提取内容属于“事实背景”，不应继续伪装成 system 指令；
+   * - 这里参考 Codex 对 AGENTS/environment_context 的做法，把背景信息做成独立的 contextual user message。
+   *
+   * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
+   * @returns {{role:'user', content:string}|null}
+   */
+  function buildPageContentContextMessage(pageContent) {
+    if (!pageContent || typeof pageContent !== 'object') return null;
+    const title = (typeof pageContent.title === 'string') ? pageContent.title.trim() : '';
+    const url = (typeof pageContent.url === 'string') ? pageContent.url.trim() : '';
+    const content = (typeof pageContent.content === 'string') ? pageContent.content.trim() : '';
+    if (!title && !url && !content) return null;
+
+    const parts = ['<page_context>'];
+    if (title) parts.push(`标题：${title}`);
+    if (url) parts.push(`URL：${url}`);
+    if (content) {
+      parts.push('内容：');
+      parts.push(content);
+    }
+    parts.push('</page_context>');
+
+    return {
+      role: 'user',
+      content: parts.join('\n')
+    };
+  }
+
+  /**
+   * 将一次性上下文用户消息插入到“当前用户消息”之前。
+   *
+   * 规则：
+   * - 优先插入到最后一条 user 消息前面，这通常就是本轮真正要提交的新用户输入；
+   * - 如果本轮消息列表里没有 user，则退化为追加到尾部。
+   *
+   * @param {Array<Object>} messages
+   * @param {{role:'user', content:string}|null} contextualMessage
+   * @returns {Array<Object>}
+   */
+  function insertContextualUserMessageBeforeLatestUser(messages, contextualMessage) {
+    const source = Array.isArray(messages) ? messages : [];
+    if (!contextualMessage || typeof contextualMessage.content !== 'string' || !contextualMessage.content.trim()) {
+      return source;
+    }
+
+    const cloned = source.map((item) => cloneDataSafely(item));
+    let insertIndex = cloned.length;
+    for (let i = cloned.length - 1; i >= 0; i -= 1) {
+      if (String(cloned[i]?.role || '').trim().toLowerCase() === 'user') {
+        insertIndex = i;
+        break;
+      }
+    }
+    cloned.splice(insertIndex, 0, contextualMessage);
+    return cloned;
+  }
+
   function GetInputContainer() {
     return document.getElementById('input-container');
   }
@@ -6174,9 +6236,13 @@ export function createMessageSender(appContext) {
       const preprocessedMessages = shouldApplyPreprocessText
         ? applyPreprocessedTextToMessages(sanitizedMessages, preprocessedMessageText)
         : sanitizedMessages;
-      const finalMessages = hasInjectedMessages
+      const messagesAfterInjection = hasInjectedMessages
         ? applyInjectedMessages(preprocessedMessages, injectedMessages, { replaceLastUser: injectOnly })
         : preprocessedMessages;
+      const pageContextMessage = buildPageContentContextMessage(pageContentResponse);
+      const finalMessages = pageContextMessage
+        ? insertContextualUserMessageBeforeLatestUser(messagesAfterInjection, pageContextMessage)
+        : messagesAfterInjection;
 
       // 获取API配置：仅使用外部提供（resolvedApiConfig / api 解析）或当前选中。不再做任何内部推断
       let config;

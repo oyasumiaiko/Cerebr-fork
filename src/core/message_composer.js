@@ -120,12 +120,12 @@ export function composeMessages(args) {
     return msg;
   };
 
-  // 1) 系统消息：系统提示词 + 注入系统消息 + 网页内容 + 截图提示
-  const pageContentPrompt = pageContent
-    ? `\n\n当前网页内容：\n标题：${pageContent.title}\nURL：${pageContent.url}\n内容：${pageContent.content}`
-    : '';
-
-  // 仅跳过“提示词设置”中的默认 system.prompt；其他 system 注入（截图/附加系统消息/网页内容）保持不变。
+  // 1) 系统消息：系统提示词 + 注入系统消息 + 截图提示
+  //
+  // 说明：
+  // - 网页内容不再混进 system 消息；
+  // - 这类“页面背景上下文”更适合作为独立的上下文消息，在发送链路中单独插入到当前用户消息之前；
+  // - 这样可以把“行为要求/提示词”和“事实性页面上下文”分层处理，避免两者混在同一优先级里。
   let systemMessageContent = (omitDefaultSystemPrompt === true) ? '' : (prompts.system?.prompt || '');
   if (imageContainsScreenshot) {
     systemMessageContent += "\n用户附加了当前页面的屏幕截图";
@@ -133,7 +133,6 @@ export function composeMessages(args) {
   if (Array.isArray(injectedSystemMessages) && injectedSystemMessages.length > 0) {
     systemMessageContent += "\n" + injectedSystemMessages.join('\n');
   }
-  systemMessageContent += pageContentPrompt;
 
   const hasSystemMessage = typeof systemMessageContent === 'string' && systemMessageContent.trim() !== '';
   if (hasSystemMessage) {
