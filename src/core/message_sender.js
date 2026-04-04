@@ -4568,13 +4568,9 @@ export function createMessageSender(appContext) {
             items: {
               type: 'integer'
             }
-          },
-          inject_immediately: {
-            type: ['boolean', 'null'],
-            description: '是否使用 injectImmediately。默认 false。'
           }
         },
-        required: ['code', 'all_frames', 'frame_ids', 'inject_immediately']
+        required: ['code', 'all_frames', 'frame_ids']
       }
     };
   }
@@ -4732,7 +4728,7 @@ export function createMessageSender(appContext) {
    * 规范化 js_runtime_execute 的参数。
    *
    * @param {any} rawArgs
-   * @returns {{code:string, allFrames:boolean, frameIds:number[]|null, injectImmediately:boolean}}
+   * @returns {{code:string, allFrames:boolean, frameIds:number[]|null}}
    */
   function normalizeResponsesJsRuntimeToolArguments(rawArgs) {
     const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
@@ -4757,8 +4753,7 @@ export function createMessageSender(appContext) {
     return {
       code,
       allFrames,
-      frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null,
-      injectImmediately: args.inject_immediately === true
+      frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
     };
   }
 
@@ -4786,8 +4781,7 @@ export function createMessageSender(appContext) {
       const normalizedArgs = normalizeResponsesJsRuntimeToolArguments(rawArgs);
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
         allFrames: normalizedArgs.allFrames,
-        frameIds: normalizedArgs.frameIds,
-        injectImmediately: normalizedArgs.injectImmediately
+        frameIds: normalizedArgs.frameIds
       });
 
       if (!result || result.success !== true) {
