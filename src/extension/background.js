@@ -1,3 +1,5 @@
+import { createJsRuntimeManager } from './js_runtime_manager.js';
+
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
   console.log('Service Worker 安装中...', new Date().toISOString());
@@ -347,6 +349,56 @@ chrome.runtime.onConnect.addListener((p) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // console.log('收到消息:', message, '来自:', sender.tab?.id);
 
+  if (message?.type === 'GET_JS_RUNTIME_STATUS') {
+    (async () => {
+      try {
+        const status = await jsRuntimeManager.getAvailability();
+        sendResponse({ success: true, status });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || '获取 JS Runtime 状态失败' });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === 'EXECUTE_JS_RUNTIME') {
+    (async () => {
+      try {
+        if (typeof sender?.url === 'string' && sender.url.includes('#standalone')) {
+          sendResponse({
+            success: false,
+            error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持直接执行 JS Runtime。'
+          });
+          return;
+        }
+
+        const explicitTabId = Number(message?.tabId);
+        const queriedTabId = Number((await chrome.tabs.query({ active: true, currentWindow: true }))?.[0]?.id);
+        const targetTabId = Number.isFinite(explicitTabId) ? explicitTabId : queriedTabId;
+        if (!Number.isFinite(targetTabId)) {
+          sendResponse({ success: false, error: '未找到可执行的目标标签页。' });
+          return;
+        }
+
+        const result = await jsRuntimeManager.execute({
+          tabId: targetTabId,
+          code: message?.code || '',
+          frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
+          allFrames: message?.allFrames === true,
+          injectImmediately: message?.injectImmediately === true
+        });
+        sendResponse({
+          success: true,
+          tabId: targetTabId,
+          ...result
+        });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || '执行 JS Runtime 失败' });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === 'GET_OPEN_CONVERSATION_TABS') {
     const ids = Array.isArray(message.conversationIds) ? message.conversationIds : null;
     const snapshot = buildOpenConversationSnapshot(ids);
@@ -471,14 +523,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 处理截屏请求
   if (message.action === 'capture_visible_tab') {
-    chrome.tabs.captureVisibleTab(null, { format: 'png', quality: 100 }, dataURL => {
-      if (chrome.runtime.lastError) {
-        console.error('captureVisibleTab error:', chrome.runtime.lastError.message);
-        sendResponse({ success: false, error: chrome.runtime.lastError.message });
-      } else {
-        sendResponse({ success: true, dataURL });
-      }
-    });
+    (async () => {
+      const result = await captureVisibleTab(sender?.tab?.windowId ?? null);
+      sendResponse(result);
+    })();
     return true; // 指明 sendResponse 将异步调用
   }
 
@@ -579,6 +627,48 @@ async function sendMessageToTab(tabId, message) {
         return chrome.tabs.sendMessage(tabId, message);
     }
     return null;
+}
+
+/**
+ * 后台统一执行“可见区域截图”。
+ * 抽成独立函数后，既能复用给现有截图能力，也能作为 JS Runtime 的扩展桥方法。
+ *
+ * @param {number|null} windowId
+ * @returns {Promise<{success:boolean, dataURL?:string, error?:string}>}
+ */
+async function captureVisibleTab(windowId = null) {
+    try {
+        const normalizedWindowId = Number.isFinite(Number(windowId)) ? Number(windowId) : undefined;
+        const dataURL = await chrome.tabs.captureVisibleTab(normalizedWindowId, { format: 'png', quality: 100 });
+        return { success: true, dataURL };
+    } catch (error) {
+        const message = (typeof error?.message === 'string' && error.message.trim())
+            ? error.message.trim()
+            : (chrome.runtime.lastError?.message || 'captureVisibleTab 失败');
+        return { success: false, error: message };
+    }
+}
+
+/**
+ * JS Runtime manager：
+ * - Phase 1 只负责基于 userScripts 的一次性执行；
+ * - 扩展桥先只暴露高价值能力，不做复杂 capability tree。
+ */
+const jsRuntimeManager = createJsRuntimeManager({
+    getPageContentByTabId: async (tabId) => {
+        const payload = await sendMessageToTab(tabId, { type: 'GET_PAGE_CONTENT_INTERNAL' });
+        if (!payload) {
+            throw new Error('当前标签页未连接内容脚本，无法提取页面内容。');
+        }
+        return payload;
+    },
+    captureVisibleTab
+});
+
+try {
+    jsRuntimeManager.installBridge();
+} catch (error) {
+    console.warn('初始化 JS Runtime 扩展桥失败（已忽略）：', error);
 }
 
 

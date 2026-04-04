@@ -163,6 +163,8 @@ function attachDebugShortcuts(appContext) {
     cleanImageUrlFields: () => chatHistoryUI?.cleanImageUrlFields?.(),
     resaveImagesWithNewScheme: (opts) => chatHistoryUI?.resaveImagesWithNewScheme?.(opts),
     scanDataUrlsInDb: (limit) => chatHistoryUI?.scanDataUrlsInDb?.(limit),
+    getJsRuntimeStatus: () => appContext.utils.getJsRuntimeStatus?.(),
+    executeJsRuntime: (code, options) => appContext.utils.executeJsRuntime?.(code, options),
     messageSender: appContext.services.messageSender
   };
 }

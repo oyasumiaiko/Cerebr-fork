@@ -13,6 +13,8 @@
     "unlimitedStorage",
     "commands",
     "activeTab",
+    "scripting",
+    "userScripts",
     "tabs",
     "webRequest",
     "contextMenus",

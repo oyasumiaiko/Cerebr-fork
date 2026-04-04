@@ -638,6 +638,64 @@ export function registerSidebarUtilities(appContext) {
     window.parent.postMessage({ type: 'CAPTURE_SCREENSHOT' }, '*');
   };
 
+  /**
+   * 获取当前 JS Runtime 可用性。
+   * 供后续工具层与调试入口统一复用。
+   */
+  appContext.utils.getJsRuntimeStatus = async () => {
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      return await chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_STATUS' });
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '获取 JS Runtime 状态失败'
+      };
+    }
+  };
+
+  /**
+   * 在当前网页标签页里执行一段基于 userScripts 的 JS 代码。
+   * 第一阶段先提供给调试入口与后续工具层使用，不额外引入复杂 UI。
+   *
+   * @param {string} code - 作为 async IIFE 函数体执行的代码片段，可直接使用 await / return
+   * @param {Object} [options]
+   * @returns {Promise<Object>}
+   */
+  appContext.utils.executeJsRuntime = async (code, options = {}) => {
+    if (appContext.state.isStandalone) {
+      return {
+        success: false,
+        error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持直接执行 JS Runtime。'
+      };
+    }
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      return await chrome.runtime.sendMessage({
+        type: 'EXECUTE_JS_RUNTIME',
+        code: (typeof code === 'string') ? code : '',
+        frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
+        allFrames: options?.allFrames === true,
+        injectImmediately: options?.injectImmediately === true
+      });
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '执行 JS Runtime 失败'
+      };
+    }
+  };
+
   appContext.utils.addImageToContainer = (imageData, fileName) => {
     const imageTag = appContext.services.imageHandler.createImageTag(imageData, fileName);
     appContext.dom.imageContainer.appendChild(imageTag);
