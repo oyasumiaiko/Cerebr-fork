@@ -663,7 +663,7 @@ async function sendMessageToTab(tabId, message) {
 
 /**
  * 后台统一执行“可见区域截图”。
- * 抽成独立函数后，既能复用给现有截图能力，也能作为 JS Runtime 的扩展桥方法。
+ * 抽成独立函数后，供现有截图能力统一复用。
  *
  * @param {number|null} windowId
  * @returns {Promise<{success:boolean, dataURL?:string, error?:string}>}
@@ -683,24 +683,10 @@ async function captureVisibleTab(windowId = null) {
 
 /**
  * JS Runtime manager：
- * - Phase 1 只负责基于 userScripts 的一次性执行；
- * - 扩展桥先只暴露高价值能力，不做复杂 capability tree。
+ * - 只负责基于 userScripts 的一次性执行；
+ * - 不向页面执行环境注入任何扩展桥或宿主对象。
  */
-const jsRuntimeManager = createJsRuntimeManager({
-    getPageContentByTabId: async (tabId) => {
-        const payload = await sendMessageToTab(tabId, { type: 'GET_PAGE_CONTENT_INTERNAL' });
-        if (!payload) {
-            throw new Error('当前标签页未连接内容脚本，无法提取页面内容。');
-        }
-        return payload;
-    }
-});
-
-try {
-    jsRuntimeManager.installBridge();
-} catch (error) {
-    console.warn('初始化 JS Runtime 扩展桥失败（已忽略）：', error);
-}
+const jsRuntimeManager = createJsRuntimeManager();
 
 
 

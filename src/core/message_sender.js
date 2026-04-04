@@ -4779,8 +4779,8 @@ export function createMessageSender(appContext) {
    * 说明：
    * - 这是模型“看到”的工具面；
    * - 代码真正执行时运行在浏览器页面上下文中；
-   * - 模型在代码体里可以直接 `await` / `return`，
-   *   并通过 `cerebr.invoke(method, params)` 使用扩展桥能力。
+   * - 模型在代码体里可以直接 `await` / `return`；
+   * - 执行环境只提供页面原生 JS / DOM / Web API，不额外注入宿主扩展对象。
    *
    * @returns {Object}
    */
@@ -4790,7 +4790,8 @@ export function createMessageSender(appContext) {
       name: RESPONSES_JS_RUNTIME_TOOL_NAME,
       description: [
         '在当前活动网页标签页中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。'
+        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+        '执行环境仅包含页面原生 JavaScript 与 DOM / Web API，不提供额外宿主对象。'
       ].join(' '),
       strict: true,
       parameters: {
