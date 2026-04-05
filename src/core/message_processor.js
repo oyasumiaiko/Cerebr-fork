@@ -696,6 +696,7 @@ export function createMessageProcessor(appContext) {
           // 用户手动操作后，不再执行“自动折叠/自动展开”，避免与用户意图冲突。
           thoughtsContentDiv.dataset.userToggled = 'true';
           const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
+          thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
           toggleButton.setAttribute('aria-expanded', isExpanded.toString());
         });
         toggleButton.dataset.listenerAdded = 'true';
@@ -729,6 +730,7 @@ export function createMessageProcessor(appContext) {
             e.stopPropagation();
             thoughtsContentDiv.dataset.userToggled = 'true';
             const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
+            thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
             toggleButton.setAttribute('aria-expanded', isExpanded.toString());
           });
           toggleButton.dataset.listenerAdded = 'true';
@@ -745,25 +747,42 @@ export function createMessageProcessor(appContext) {
       }
 
       // 自动展开/折叠策略：
-      // - 只要这条消息还处于生成中（.updating），思考区默认保持展开，方便实时追踪；
-      // - 生成完成后再自动收起，避免长思考块长期占据垂直空间；
-      // - 如果用户已经手动展开/折叠过，则尊重用户选择，不再自动干预。
-      const answerText = messageWrapperDiv.getAttribute('data-original-text') || '';
-      const hasAnswerContent = (typeof answerText === 'string') && answerText.trim() !== '';
-      const isUpdating = messageWrapperDiv.classList.contains('updating');
-      const userHasToggled = thoughtsContentDiv.dataset.userToggled === 'true';
-
-      if (!userHasToggled) {
-        if (isUpdating) {
-          thoughtsContentDiv.classList.add('expanded');
-        } else if (hasAnswerContent) {
-          thoughtsContentDiv.classList.remove('expanded');
-        } else {
-          thoughtsContentDiv.classList.add('expanded');
-        }
+      // - 首次出现且仍在生成时，默认展开一次；
+      // - 生成结束时，自动收起一次；
+      // - 除这两个生命周期动作外，不再反复改写，避免刷新时闪烁；
+      // - 用户一旦手动点击，后续刷新始终尊重用户选择。
+      const isUpdating = messageWrapperDiv.classList.contains('updating')
+        || isResponseActivityTurnRuntimeActive(messageWrapperDiv);
+      if (
+        thoughtsContentDiv.dataset.userToggled === 'true'
+        && !String(thoughtsContentDiv.dataset.manualState || '').trim()
+      ) {
+        thoughtsContentDiv.dataset.manualState = thoughtsContentDiv.classList.contains('expanded') ? 'expanded' : 'collapsed';
       }
+      const manualState = String(thoughtsContentDiv.dataset.manualState || '').trim().toLowerCase();
+      const lifecycleInitialized = thoughtsContentDiv.dataset.autoLifecycleInitialized === 'true';
+      const autoCollapsedAfterFinish = thoughtsContentDiv.dataset.autoCollapsedAfterFinish === 'true';
+      let shouldBeExpanded = thoughtsContentDiv.classList.contains('expanded');
+
+      if (manualState === 'expanded' || manualState === 'collapsed') {
+        shouldBeExpanded = manualState === 'expanded';
+      } else if (!lifecycleInitialized) {
+        thoughtsContentDiv.dataset.autoLifecycleInitialized = 'true';
+        if (isUpdating) {
+          shouldBeExpanded = true;
+          delete thoughtsContentDiv.dataset.autoCollapsedAfterFinish;
+        } else {
+          shouldBeExpanded = false;
+          thoughtsContentDiv.dataset.autoCollapsedAfterFinish = 'true';
+        }
+      } else if (!autoCollapsedAfterFinish && !isUpdating) {
+        shouldBeExpanded = false;
+        thoughtsContentDiv.dataset.autoCollapsedAfterFinish = 'true';
+      }
+
+      thoughtsContentDiv.classList.toggle('expanded', shouldBeExpanded);
       if (toggleButton) {
-        toggleButton.setAttribute('aria-expanded', thoughtsContentDiv.classList.contains('expanded') ? 'true' : 'false');
+        toggleButton.setAttribute('aria-expanded', shouldBeExpanded ? 'true' : 'false');
       }
 
     } else if (thoughtsContentDiv) {
@@ -1197,11 +1216,6 @@ export function createMessageProcessor(appContext) {
     codeInner.textContent = meta.code || '';
     codeBlock.appendChild(codeInner);
     toolBodyInner.appendChild(codeBlock);
-    try {
-      if (typeof hljs !== 'undefined' && codeInner.textContent.trim()) {
-        hljs.highlightElement(codeInner);
-      }
-    } catch (_) {}
 
     if (formattedOutput) {
       const outputTitle = document.createElement('div');
@@ -1406,6 +1420,14 @@ export function createMessageProcessor(appContext) {
     return normalized === 'streaming' || normalized === 'in_progress';
   }
 
+  function isResponseActivityTurnRuntimeActive(messageWrapperDiv) {
+    if (!messageWrapperDiv) return false;
+    if (messageWrapperDiv.classList.contains('updating')) return true;
+    const runtimeStatus = String(messageWrapperDiv.dataset?.responseRuntimeStatus || '').trim().toLowerCase();
+    if (!runtimeStatus) return false;
+    return !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus);
+  }
+
   function getResponseActivityDurationMs(node, timeline, isInProgress = false) {
     const storedDuration = Number(node?.response_activity_duration_ms);
     if (!isInProgress && Number.isFinite(storedDuration) && storedDuration >= 0) {
@@ -1418,13 +1440,14 @@ export function createMessageProcessor(appContext) {
     return Math.max(0, Date.now() - startedAt);
   }
 
-  function buildResponseActivityPanelSummary(node, timeline) {
+  function buildResponseActivityPanelSummary(node, timeline, options = {}) {
     const narrativeCount = timeline.filter((entry) => {
       const kind = String(entry?.kind || '').toLowerCase();
       return kind === 'reasoning_summary' || kind === 'commentary';
     }).length;
     const toolCount = timeline.filter(entry => entry?.kind === 'tool_call').length;
-    const isInProgress = timeline.some(entry => isResponseActivityEntryInProgress(entry));
+    const isInProgress = options.isInProgress === true
+      || timeline.some(entry => isResponseActivityEntryInProgress(entry));
     const durationMs = getResponseActivityDurationMs(node, timeline, isInProgress);
     const durationLabel = formatResponseActivityElapsedDuration(durationMs);
     const metaParts = [];
@@ -1486,20 +1509,38 @@ export function createMessageProcessor(appContext) {
     timelineRoot.dataset[key] = JSON.stringify(list);
   }
 
-  function readExpandedResponseActivityToolKeys(timelineRoot) {
-    return readResponseActivityToolKeySet(timelineRoot, 'expandedToolKeys');
+  function readManuallyExpandedResponseActivityToolKeys(timelineRoot) {
+    const manualKeys = readResponseActivityToolKeySet(timelineRoot, 'manualExpandedToolKeys');
+    readResponseActivityToolKeySet(timelineRoot, 'expandedToolKeys').forEach((key) => manualKeys.add(key));
+    return manualKeys;
   }
 
-  function writeExpandedResponseActivityToolKeys(timelineRoot, keys) {
-    writeResponseActivityToolKeySet(timelineRoot, 'expandedToolKeys', keys);
+  function writeManuallyExpandedResponseActivityToolKeys(timelineRoot, keys) {
+    writeResponseActivityToolKeySet(timelineRoot, 'manualExpandedToolKeys', keys);
+    if (timelineRoot?.dataset) {
+      delete timelineRoot.dataset.expandedToolKeys;
+    }
   }
 
-  function readCollapsedInProgressResponseActivityToolKeys(timelineRoot) {
-    return readResponseActivityToolKeySet(timelineRoot, 'collapsedInProgressToolKeys');
+  function readManuallyCollapsedResponseActivityToolKeys(timelineRoot) {
+    const manualKeys = readResponseActivityToolKeySet(timelineRoot, 'manualCollapsedToolKeys');
+    readResponseActivityToolKeySet(timelineRoot, 'collapsedInProgressToolKeys').forEach((key) => manualKeys.add(key));
+    return manualKeys;
   }
 
-  function writeCollapsedInProgressResponseActivityToolKeys(timelineRoot, keys) {
-    writeResponseActivityToolKeySet(timelineRoot, 'collapsedInProgressToolKeys', keys);
+  function writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, keys) {
+    writeResponseActivityToolKeySet(timelineRoot, 'manualCollapsedToolKeys', keys);
+    if (timelineRoot?.dataset) {
+      delete timelineRoot.dataset.collapsedInProgressToolKeys;
+    }
+  }
+
+  function readAutoCollapsedResponseActivityToolKeys(timelineRoot) {
+    return readResponseActivityToolKeySet(timelineRoot, 'autoCollapsedToolKeys');
+  }
+
+  function writeAutoCollapsedResponseActivityToolKeys(timelineRoot, keys) {
+    writeResponseActivityToolKeySet(timelineRoot, 'autoCollapsedToolKeys', keys);
   }
 
   function getResponseActivityToolSecondaryLines(entry) {
@@ -1597,18 +1638,35 @@ export function createMessageProcessor(appContext) {
       }
     }
 
-    const panelSummary = buildResponseActivityPanelSummary(node, timeline);
-    const panelWasInProgress = timelineRoot.dataset.panelWasInProgress === 'true';
-    if (!panelSummary.isInProgress && panelWasInProgress) {
-      delete timelineRoot.dataset.panelManualState;
-    }
+    const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
+    const panelSummary = buildResponseActivityPanelSummary(node, timeline, {
+      isInProgress: isTurnRuntimeActive
+    });
+    // 面板级自动展开/收起生命周期：
+    // - 首次出现且仍在进行中：默认展开一次；
+    // - 整个面板结束时：自动收起一次；
+    // - 用户一旦手动点击，后续刷新只读 panelManualState，不再自动反复干预。
     const panelManualState = String(timelineRoot.dataset.panelManualState || '').trim().toLowerCase();
-    const panelExpanded = panelSummary.isInProgress
-      ? panelManualState !== 'collapsed'
-      : panelManualState === 'expanded';
+    const panelLifecycleInitialized = timelineRoot.dataset.panelAutoLifecycleInitialized === 'true';
+    const panelAutoCollapsedAfterFinish = timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true';
+    let panelExpanded = timelineRoot.dataset.panelExpanded === 'true';
+    if (panelManualState === 'expanded' || panelManualState === 'collapsed') {
+      panelExpanded = panelManualState === 'expanded';
+    } else if (!panelLifecycleInitialized) {
+      timelineRoot.dataset.panelAutoLifecycleInitialized = 'true';
+      if (panelSummary.isInProgress) {
+        panelExpanded = true;
+        delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
+      } else {
+        panelExpanded = false;
+        timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
+      }
+    } else if (!panelAutoCollapsedAfterFinish && !panelSummary.isInProgress) {
+      panelExpanded = false;
+      timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
+    }
 
     timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
-    timelineRoot.dataset.panelWasInProgress = panelSummary.isInProgress ? 'true' : 'false';
     timelineRoot.classList.toggle('is-expanded', panelExpanded);
     timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
     timelineRoot.innerHTML = '';
@@ -1654,10 +1712,10 @@ export function createMessageProcessor(appContext) {
     panelBodyInner.className = 'response-activity-panel-body-inner';
     panelBody.appendChild(panelBodyInner);
 
-    const expandedToolKeys = readExpandedResponseActivityToolKeys(timelineRoot);
-    const collapsedInProgressToolKeys = readCollapsedInProgressResponseActivityToolKeys(timelineRoot);
+    const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
+    const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
+    const autoCollapsedToolKeys = readAutoCollapsedResponseActivityToolKeys(timelineRoot);
     const visibleToolKeys = new Set();
-    const inProgressToolKeys = new Set();
 
     timeline.forEach((entry, index) => {
       if (entry?.kind !== 'tool_call') return;
@@ -1665,23 +1723,26 @@ export function createMessageProcessor(appContext) {
       if (!hasDetails) return;
       const toolKey = getResponseActivityToolEntryKey(entry, index);
       visibleToolKeys.add(toolKey);
-      if (isResponseActivityEntryInProgress(entry)) {
-        inProgressToolKeys.add(toolKey);
-      }
     });
 
-    Array.from(expandedToolKeys).forEach((key) => {
+    Array.from(manualExpandedToolKeys).forEach((key) => {
       if (!visibleToolKeys.has(key)) {
-        expandedToolKeys.delete(key);
+        manualExpandedToolKeys.delete(key);
       }
     });
-    Array.from(collapsedInProgressToolKeys).forEach((key) => {
-      if (!inProgressToolKeys.has(key)) {
-        collapsedInProgressToolKeys.delete(key);
+    Array.from(manualCollapsedToolKeys).forEach((key) => {
+      if (!visibleToolKeys.has(key)) {
+        manualCollapsedToolKeys.delete(key);
       }
     });
-    writeExpandedResponseActivityToolKeys(timelineRoot, expandedToolKeys);
-    writeCollapsedInProgressResponseActivityToolKeys(timelineRoot, collapsedInProgressToolKeys);
+    Array.from(autoCollapsedToolKeys).forEach((key) => {
+      if (!visibleToolKeys.has(key)) {
+        autoCollapsedToolKeys.delete(key);
+      }
+    });
+    writeManuallyExpandedResponseActivityToolKeys(timelineRoot, manualExpandedToolKeys);
+    writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, manualCollapsedToolKeys);
+    writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
 
     timeline.forEach((entry, index) => {
       if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary') {
@@ -1708,11 +1769,27 @@ export function createMessageProcessor(appContext) {
       const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
       const hasDetails = hasResponseActivityToolDetails(entry);
       const isInProgress = isResponseActivityEntryInProgress(entry);
-      const isExpanded = hasDetails && (
-        isInProgress
-          ? !collapsedInProgressToolKeys.has(toolKey)
-          : expandedToolKeys.has(toolKey)
-      );
+      const hasOutput = typeof entry?.output === 'string' && entry.output.trim() !== '';
+      const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isTurnRuntimeActive);
+      // 工具级生命周期与面板一致：
+      // - 默认只在“首次出现且尚无手动状态”时自动决定一次初始展开；
+      // - 完成后只自动收起一次；
+      // - 之后完全交由 manualExpanded/manualCollapsed 两个集合控制。
+      let isExpanded = false;
+      if (hasDetails) {
+        if (manualExpandedToolKeys.has(toolKey)) {
+          isExpanded = true;
+        } else if (manualCollapsedToolKeys.has(toolKey)) {
+          isExpanded = false;
+        } else if (shouldAutoRemainExpanded) {
+          isExpanded = true;
+        } else {
+          isExpanded = false;
+          if (!autoCollapsedToolKeys.has(toolKey)) {
+            autoCollapsedToolKeys.add(toolKey);
+          }
+        }
+      }
       item.classList.toggle('is-expanded', isExpanded);
 
       const summaryTag = hasDetails ? 'button' : 'div';
@@ -1800,25 +1877,18 @@ export function createMessageProcessor(appContext) {
         chevron.className = 'fa-solid fa-chevron-right response-activity-tool-chevron';
         summary.appendChild(chevron);
         summary.addEventListener('click', () => {
-          const nextExpandedKeys = readExpandedResponseActivityToolKeys(timelineRoot);
-          const nextCollapsedInProgressKeys = readCollapsedInProgressResponseActivityToolKeys(timelineRoot);
-          const entryStillInProgress = isResponseActivityEntryInProgress(entry);
-          if (entryStillInProgress) {
-            if (nextCollapsedInProgressKeys.has(toolKey)) {
-              nextCollapsedInProgressKeys.delete(toolKey);
-            } else {
-              nextCollapsedInProgressKeys.add(toolKey);
-            }
-            writeCollapsedInProgressResponseActivityToolKeys(timelineRoot, nextCollapsedInProgressKeys);
-          } else if (nextExpandedKeys.has(toolKey)) {
-            nextExpandedKeys.delete(toolKey);
+          const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
+          const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
+          const expanded = !item.classList.contains('is-expanded');
+          if (expanded) {
+            nextManualExpandedKeys.add(toolKey);
+            nextManualCollapsedKeys.delete(toolKey);
           } else {
-            nextExpandedKeys.add(toolKey);
+            nextManualCollapsedKeys.add(toolKey);
+            nextManualExpandedKeys.delete(toolKey);
           }
-          writeExpandedResponseActivityToolKeys(timelineRoot, nextExpandedKeys);
-          const expanded = entryStillInProgress
-            ? !nextCollapsedInProgressKeys.has(toolKey)
-            : nextExpandedKeys.has(toolKey);
+          writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
+          writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
           item.classList.toggle('is-expanded', expanded);
           summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
         });
@@ -1889,6 +1959,7 @@ export function createMessageProcessor(appContext) {
       panelBodyInner.appendChild(item);
     });
 
+    writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
     timelineRoot.appendChild(panelBody);
 
     return true;
@@ -2295,7 +2366,30 @@ export function createMessageProcessor(appContext) {
     rootElement.querySelectorAll('pre code').forEach((block) => {
       if (block.closest('.mermaid-diagram__source')) return;
       try {
+        if (typeof hljs === 'undefined' || typeof hljs.highlightElement !== 'function') return;
+        const normalizedClassName = String(block.getAttribute('class') || '')
+          .split(/\s+/)
+          .map(token => token.trim())
+          .filter(token => token && token !== 'hljs')
+          .sort()
+          .join(' ');
+        const sourceText = typeof block.textContent === 'string' ? block.textContent : '';
+        if (!sourceText.trim()) return;
+        const nextSignature = `${normalizedClassName}::${sourceText}`;
+        if (
+          block.dataset.highlighted === 'yes'
+          && block.dataset.cerebrHighlightSignature === nextSignature
+        ) {
+          return;
+        }
+        // highlight.js 再次处理已高亮节点时会刷 warning。
+        // 这里用“代码文本 + 语言 class”的签名判定是否真的发生变化；
+        // 若内容未变则直接跳过，若内容变了则先还原为纯文本后再重新高亮。
+        block.textContent = sourceText;
+        block.classList.remove('hljs');
+        delete block.dataset.highlighted;
         hljs.highlightElement(block);
+        block.dataset.cerebrHighlightSignature = nextSignature;
       } catch (_) {}
     });
 

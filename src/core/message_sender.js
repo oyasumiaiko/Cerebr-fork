@@ -4374,6 +4374,11 @@ export function createMessageSender(appContext) {
     if (thoughtsContent.dataset && thoughtsContent.dataset.userToggled) {
       delete thoughtsContent.dataset.userToggled;
     }
+    if (thoughtsContent.dataset) {
+      delete thoughtsContent.dataset.manualState;
+      delete thoughtsContent.dataset.autoLifecycleInitialized;
+      delete thoughtsContent.dataset.autoCollapsedAfterFinish;
+    }
   }
 
   function resetResponsesActivityToggleStateForRegenerate(targetElement) {
@@ -4382,10 +4387,14 @@ export function createMessageSender(appContext) {
     if (!timelineRoot || !timelineRoot.dataset) return;
     delete timelineRoot.dataset.panelUserToggled;
     delete timelineRoot.dataset.panelManualState;
-    delete timelineRoot.dataset.panelWasInProgress;
     delete timelineRoot.dataset.panelExpanded;
+    delete timelineRoot.dataset.panelAutoLifecycleInitialized;
+    delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
     delete timelineRoot.dataset.expandedToolKeys;
     delete timelineRoot.dataset.collapsedInProgressToolKeys;
+    delete timelineRoot.dataset.manualExpandedToolKeys;
+    delete timelineRoot.dataset.manualCollapsedToolKeys;
+    delete timelineRoot.dataset.autoCollapsedToolKeys;
   }
 
   function applyResponsesActivityTimelineToNode(node, timeline) {
@@ -6029,7 +6038,7 @@ export function createMessageSender(appContext) {
 	      try { attemptState.uiUpdateThrottler = null; } catch (_) {}
 
 	      attemptState.finished = true;
-	      activeAttempts.delete(attemptState.id);
+      activeAttempts.delete(attemptState.id);
       updateAttemptRuntimeState(attemptState, (draft) => {
         draft.activeTurn.status = attemptState.completedSuccessfully
           ? 'completed'
@@ -6073,6 +6082,17 @@ export function createMessageSender(appContext) {
       } else if (attemptState.loadingMessage && attemptState.loadingMessage.parentNode) {
         // 尚未产生正式 AI 消息，仅存在 loading 占位
         attemptState.loadingMessage.remove();
+      }
+      if (attemptState.aiMessageId) {
+        // 注意顺序：
+        // 1. 先把 DOM 上的 updating/regenerating 视觉状态清掉；
+        // 2. 再同步一次 metadata/view。
+        // 否则 renderer 会在“旧的 updating class 仍在”时误判为仍处于进行中，
+        // 导致思考面板和 response activity 面板无法按完成态自动收起。
+        syncAttemptAssistantView(attemptState.aiMessageId, {
+          attemptState,
+          suppressMissingNodeWarning: true
+        });
       }
     };
 
