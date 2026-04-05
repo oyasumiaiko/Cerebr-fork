@@ -563,6 +563,9 @@ body.standalone-mode #empty-state-repomix {
 
 .conversation-send-queue-preview__item {
     position: relative;
+    /* 这里显式使用 border-box，避免 width: 100% 只覆盖内容盒，
+       再叠加内边距和边框后把队列项挤出列表右侧，造成“右边缺一块/不对齐”的视觉问题。 */
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 8px;

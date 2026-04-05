@@ -341,6 +341,47 @@ async function main() {
           };
         });
       }, { timeoutMs: 20000, intervalMs: 250, label: 'queue preview visible' });
+      await page.screenshot({ path: path.join(outputDir, '02-queue-visible.png'), fullPage: true });
+      result.queueDiagnostics = await sidebarFrame.evaluate(() => {
+        const panel = document.querySelector('.conversation-send-queue-preview');
+        if (!panel) return null;
+        const list = panel.querySelector('.conversation-send-queue-preview__list');
+        const firstItem = list?.querySelector('.conversation-send-queue-preview__item');
+        const actions = firstItem?.querySelector('.conversation-send-queue-preview__actions');
+        const summary = firstItem?.querySelector('.conversation-send-queue-preview__summary');
+        const text = firstItem?.querySelector('.conversation-send-queue-preview__text');
+        const collect = (node) => {
+          if (!node) return null;
+          const rect = node.getBoundingClientRect();
+          const style = window.getComputedStyle(node);
+          return {
+            className: node.className || null,
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+            offsetWidth: node.offsetWidth,
+            rect: {
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              height: rect.height,
+              right: rect.right
+            },
+            paddingInlineEnd: style.paddingInlineEnd,
+            marginInlineEnd: style.marginInlineEnd,
+            overflowX: style.overflowX,
+            overflowY: style.overflowY
+          };
+        };
+        return {
+          panel: collect(panel),
+          list: collect(list),
+          firstItem: collect(firstItem),
+          actions: collect(actions),
+          summary: collect(summary),
+          text: collect(text),
+          panelText: (panel.innerText || '').trim()
+        };
+      });
       result.steps.push('queue_visible');
     }
 
@@ -372,7 +413,7 @@ async function main() {
     }, { timeoutMs: 180000, intervalMs: 500, label: 'assistant settled' });
     result.assistant = settled;
     result.highlightWarnings = result.console.filter((entry) => String(entry.text || '').includes('Element previously highlighted'));
-    await page.screenshot({ path: path.join(outputDir, '02-final.png'), fullPage: true });
+    await page.screenshot({ path: path.join(outputDir, scenario === 'queue' ? '03-final.png' : '02-final.png'), fullPage: true });
     result.steps.push('assistant_settled');
 
     result.finishedAt = new Date().toISOString();
