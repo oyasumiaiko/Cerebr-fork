@@ -76,6 +76,34 @@ async function waitFor(condition, { timeoutMs = 30000, intervalMs = 200, label =
   }
 }
 
+async function captureRightBottomCrop(page, outputPath, {
+  width = 420,
+  height = 220,
+  bottomInset = 0,
+  rightInset = 0
+} = {}) {
+  const viewport = page.viewportSize() || await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight
+  }));
+  if (!viewport?.width || !viewport?.height) {
+    throw new Error('page viewport size unavailable for right-bottom crop');
+  }
+  const clipWidth = Math.min(width, viewport.width);
+  const clipHeight = Math.min(height, viewport.height);
+  const x = Math.max(0, viewport.width - clipWidth - rightInset);
+  const y = Math.max(0, viewport.height - clipHeight - bottomInset);
+  await page.screenshot({
+    path: outputPath,
+    clip: {
+      x,
+      y,
+      width: clipWidth,
+      height: clipHeight
+    }
+  });
+}
+
 async function listCdpTargets(cdpPort) {
   const response = await fetch(`http://127.0.0.1:${cdpPort}/json/list`);
   if (!response.ok) throw new Error(`failed to list CDP targets: HTTP ${response.status}`);
@@ -184,6 +212,13 @@ function buildStorageSeed() {
 }
 
 function buildPrompt(currentScenario) {
+  if (currentScenario === 'multi_queue_reorder') {
+    return {
+      first: 'Please directly call js_runtime_execute on the current page, report document.title and location.href on line 1, then continue with 40 short numbered lines so the response keeps streaming for a while.',
+      second: 'When it is your turn, reply with exactly QUEUE_ALPHA_20260405 and nothing else.',
+      third: 'When it is your turn, reply with exactly QUEUE_BETA_20260405 and nothing else.'
+    };
+  }
   if (currentScenario === 'queue') {
     return {
       first: 'Please directly call js_runtime_execute on the current page and briefly report document.title and location.href.',
@@ -318,7 +353,7 @@ async function main() {
     await sendSidebarMessage(prompts.first);
     result.steps.push('first_message_sent');
 
-    if (scenario === 'queue') {
+    if (scenario === 'queue' || scenario === 'multi_queue_reorder') {
       await waitFor(async () => {
         return await sidebarFrame.evaluate(() => {
           const latestAi = Array.from(document.querySelectorAll('.message.ai-message')).slice(-1)[0] || null;
@@ -329,19 +364,30 @@ async function main() {
       await sendSidebarMessage(prompts.second);
       result.steps.push('second_message_sent');
 
+      if (scenario === 'multi_queue_reorder') {
+        await sendSidebarMessage(prompts.third);
+        result.steps.push('third_message_sent');
+      }
+
       result.queueVisible = await waitFor(async () => {
-        return await sidebarFrame.evaluate(() => {
+        return await sidebarFrame.evaluate((currentScenario) => {
           const panel = document.querySelector('.conversation-send-queue-preview');
           if (!panel) return null;
           const count = panel.querySelectorAll('.conversation-send-queue-preview__item').length;
-          if (count <= 0) return null;
+          const requiredCount = currentScenario === 'multi_queue_reorder' ? 2 : 1;
+          if (count < requiredCount) return null;
           return {
             count,
-            text: (panel.innerText || '').trim()
+            text: (panel.innerText || '').trim(),
+            items: Array.from(panel.querySelectorAll('.conversation-send-queue-preview__item')).map((item) => ({
+              text: (item.innerText || '').trim(),
+              taskId: item.getAttribute('data-queue-task-id')
+            }))
           };
-        });
+        }, scenario);
       }, { timeoutMs: 20000, intervalMs: 250, label: 'queue preview visible' });
       await page.screenshot({ path: path.join(outputDir, '02-queue-visible.png'), fullPage: true });
+      await captureRightBottomCrop(page, path.join(outputDir, '02-queue-visible-right-bottom.png'));
       result.queueDiagnostics = await sidebarFrame.evaluate(() => {
         const panel = document.querySelector('.conversation-send-queue-preview');
         if (!panel) return null;
@@ -383,12 +429,58 @@ async function main() {
         };
       });
       result.steps.push('queue_visible');
+
+      if (scenario === 'multi_queue_reorder') {
+        const handles = sidebarFrame.locator('.conversation-send-queue-preview__drag-handle');
+        const items = sidebarFrame.locator('.conversation-send-queue-preview__item');
+        const sourceHandle = handles.nth(1);
+        const targetItem = items.nth(0);
+        await sourceHandle.scrollIntoViewIfNeeded();
+        await targetItem.scrollIntoViewIfNeeded();
+        const sourceBox = await waitFor(async () => await sourceHandle.boundingBox(), {
+          timeoutMs: 5000,
+          intervalMs: 100,
+          label: 'source drag handle box'
+        });
+        const targetBox = await waitFor(async () => await targetItem.boundingBox(), {
+          timeoutMs: 5000,
+          intervalMs: 100,
+          label: 'target queue item box'
+        });
+        result.queueDragBoxes = { sourceBox, targetBox };
+        await page.mouse.move(sourceBox.x + (sourceBox.width / 2), sourceBox.y + (sourceBox.height / 2));
+        await page.mouse.down();
+        await page.mouse.move(targetBox.x + 24, targetBox.y + Math.max(6, targetBox.height * 0.25), { steps: 20 });
+        await page.mouse.up();
+        result.steps.push('queue_reordered');
+        await sleep(500);
+        result.queueOrderImmediatelyAfterDrag = await sidebarFrame.evaluate(() => {
+          return Array.from(document.querySelectorAll('.conversation-send-queue-preview__item'))
+            .map((item) => (item.innerText || '').trim());
+        });
+        await page.screenshot({ path: path.join(outputDir, '03-queue-reordered.png'), fullPage: true });
+        await captureRightBottomCrop(page, path.join(outputDir, '03-queue-reordered-right-bottom.png'));
+      }
     }
 
     const settled = await waitFor(async () => {
       return await sidebarFrame.evaluate((currentScenario) => {
         const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
         const completed = aiMessages.filter((el) => !el.classList.contains('updating'));
+        if (currentScenario === 'multi_queue_reorder') {
+          if (completed.length < 3) return null;
+          const texts = completed.map((el) => (el.innerText || '').trim());
+          const alphaIndex = texts.findIndex((text) => text.includes('QUEUE_ALPHA_20260405'));
+          const betaIndex = texts.findIndex((text) => text.includes('QUEUE_BETA_20260405'));
+          if (alphaIndex < 0 || betaIndex < 0) return null;
+          return {
+            completedCount: completed.length,
+            assistantTexts: texts,
+            alphaIndex,
+            betaIndex,
+            reorderedDeliveryOk: betaIndex < alphaIndex
+          };
+        }
         if (currentScenario === 'queue') {
           if (completed.length < 2) return null;
           return {
@@ -413,7 +505,24 @@ async function main() {
     }, { timeoutMs: 180000, intervalMs: 500, label: 'assistant settled' });
     result.assistant = settled;
     result.highlightWarnings = result.console.filter((entry) => String(entry.text || '').includes('Element previously highlighted'));
-    await page.screenshot({ path: path.join(outputDir, scenario === 'queue' ? '03-final.png' : '02-final.png'), fullPage: true });
+    await page.screenshot({
+      path: path.join(
+        outputDir,
+        scenario === 'multi_queue_reorder'
+          ? '04-final.png'
+          : (scenario === 'queue' ? '03-final.png' : '02-final.png')
+      ),
+      fullPage: true
+    });
+    await captureRightBottomCrop(
+      page,
+      path.join(
+        outputDir,
+        scenario === 'multi_queue_reorder'
+          ? '04-final-right-bottom.png'
+          : (scenario === 'queue' ? '03-final-right-bottom.png' : '02-final-right-bottom.png')
+      )
+    );
     result.steps.push('assistant_settled');
 
     result.finishedAt = new Date().toISOString();
