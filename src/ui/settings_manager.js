@@ -268,30 +268,22 @@ export function createSettingsManager(appContext) {
     select.value = currentValue || DEFAULT_SETTINGS.conversationTitleApi;
   }
 
-  async function copyTextToClipboard(text) {
+  function appendTextToInputEnd(input, text) {
+    if (!input) return false;
     const safeText = String(text ?? '');
     if (!safeText) return false;
-    if (navigator?.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(safeText);
-        return true;
-      } catch (_) {}
-    }
+    const previous = (typeof input.value === 'string') ? input.value : '';
+    const nextValue = `${previous}${safeText}`;
+    input.value = nextValue;
     try {
-      const textarea = document.createElement('textarea');
-      textarea.value = safeText;
-      textarea.setAttribute('readonly', '');
-      textarea.style.position = 'fixed';
-      textarea.style.left = '-9999px';
-      textarea.style.top = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      const copied = !!document.execCommand?.('copy');
-      document.body.removeChild(textarea);
-      return copied;
-    } catch (_) {
-      return false;
-    }
+      input.focus();
+      if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(nextValue.length, nextValue.length);
+      }
+    } catch (_) {}
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
   }
 
   // 动态设置注册表：新增设置仅需在此处登记即可自动渲染与持久化
@@ -700,6 +692,10 @@ export function createSettingsManager(appContext) {
       group: 'display',
       rows: 5,
       placeholder: '示例：{{display_with_total_tokens_k}} 或 {{apiname}} · {{total_tokens_k}} tok（变量列表见下方）',
+      copyableVariablesTitle: '可用变量（点击追加到末尾）',
+      copyableVariablesHint: '点击变量会直接追加到上方输入框末尾，不再复制到剪贴板。',
+      copyableVariables: AI_FOOTER_TEMPLATE_VARIABLES,
+      copyableVariablesPlacement: 'after-item',
       hideClearButton: true,
       defaultValue: DEFAULT_SETTINGS.aiFooterTemplate,
       readFromUI: (el) => (typeof el?.value === 'string' ? el.value : ''),
@@ -714,8 +710,8 @@ export function createSettingsManager(appContext) {
       group: 'display',
       rows: 5,
       placeholder: '示例：{{tooltip_api_line}}\n{{tooltip_signature_line}}\n{{tooltip_usage_lines}}',
-      copyableVariablesTitle: '可用变量（点击复制）',
-      copyableVariablesHint: '已去除同义别名；按分组换行展示，点击即复制 {{变量名}}。',
+      copyableVariablesTitle: '可用变量（点击追加到末尾）',
+      copyableVariablesHint: '已去除同义别名；按分组换行展示，点击会直接追加到上方输入框末尾。',
       copyableVariables: AI_FOOTER_TEMPLATE_VARIABLES,
       copyableVariablesPlacement: 'after-item',
       hideClearButton: true,
@@ -1665,14 +1661,15 @@ export function createSettingsManager(appContext) {
             item.appendChild(actionBar);
           }
 
-          // 文本模板类设置：在输入框下方展示可点击复制的变量列表，降低手写占位符的出错率。
+          // 文本模板类设置：在输入框下方展示可点击变量列表，点击后直接追加到当前输入框末尾，
+          // 降低手写占位符的出错率，也避免“先复制再粘贴”的额外步骤。
           if (Array.isArray(def.copyableVariables) && def.copyableVariables.length > 0) {
             const tooltip = document.createElement('div');
             tooltip.className = 'settings-template-variable-tooltip';
 
             const tooltipTitle = document.createElement('div');
             tooltipTitle.className = 'settings-template-variable-tooltip-title';
-            tooltipTitle.textContent = def.copyableVariablesTitle || '可用变量（点击复制）';
+            tooltipTitle.textContent = def.copyableVariablesTitle || '可用变量（点击追加到末尾）';
             tooltip.appendChild(tooltipTitle);
 
             const groupedVariables = new Map();
@@ -1722,23 +1719,10 @@ export function createSettingsManager(appContext) {
                 if (description) {
                   variableButton.title = `${variableKey}：${description}`;
                 }
-                variableButton.addEventListener('click', async (evt) => {
+                variableButton.addEventListener('click', (evt) => {
                   evt.preventDefault();
                   evt.stopPropagation();
-                  const copied = await copyTextToClipboard(variableToken);
-                  if (copied) {
-                    showNotification?.({
-                      message: `已复制 ${variableToken}`,
-                      type: 'success',
-                      duration: 1200
-                    });
-                  } else {
-                    showNotification?.({
-                      message: '复制失败，请重试',
-                      type: 'error',
-                      duration: 1800
-                    });
-                  }
+                  appendTextToInputEnd(input, variableToken);
                 });
                 variableList.appendChild(variableButton);
               });
