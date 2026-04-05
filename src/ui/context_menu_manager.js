@@ -1071,10 +1071,10 @@ export function createContextMenuManager(appContext) {
     try {
       const apiParam = resolveRegenerateApiParam(regenTarget, apiOverride);
 
-      // 关键：指定 targetAiMessageId，让发送层“原地替换”目标 AI 消息内容（不删除/不新增其他消息）
-      messageSender.sendMessage({
+      // 关键：重新生成现在也统一走 sender 内部的 mutation/job 协调器，
+      // 避免 running / queue / 历史编辑 叠加时继续出现未定义行为。
+      await messageSender.requestRegenerateMessage({
         originalMessageText,
-        regenerateMode: true,
         messageId: userMessageId,
         targetAiMessageId: targetAiMessageId || targetAiMessageIds[0] || null,
         api: apiParam
@@ -2100,52 +2100,11 @@ export function createContextMenuManager(appContext) {
    */
   async function applyInlineEdit(messageElement, messageId, newText) {
     try {
-      // 更新历史节点
-      const node = chatHistory.messages.find(m => m.id === messageId);
-      if (!node) { console.error('未找到消息历史节点'); return; }
-      // 从 DOM 读取当前图片（允许在编辑过程中删除或添加）
-      const currentImageTags = Array.from(messageElement.querySelectorAll('.image-content .image-tag'));
-      const images = currentImageTags.map(tag => {
-        const base64Data = tag.getAttribute('data-image') || tag.querySelector('img')?.src || '';
-        return base64Data ? { type: 'image_url', image_url: { url: base64Data } } : null;
-      }).filter(Boolean);
-
-      if (Array.isArray(node.content)) {
-        const hasText = typeof newText === 'string' && newText.trim() !== '';
-        const newParts = [...images];
-        if (hasText) {
-          newParts.push({ type: 'text', text: newText });
-        }
-        node.content = newParts;
-      } else {
-        // 非数组：升级为多模态结构（根据当前图片与文本）
-        const hasText = typeof newText === 'string' && newText.trim() !== '';
-        if (images.length > 0) {
-          node.content = hasText ? [...images, { type: 'text', text: newText }] : images;
-        } else {
-          node.content = newText;
-        }
-      }
-
-      // 更新 DOM 显示
-      const textDiv = messageElement.querySelector('.text-content');
-      if (textDiv) {
-        if (messageElement.classList.contains('user-message')) {
-          // 用户消息：保持原始文本展示，不进行 Markdown 渲染
-          textDiv.innerText = newText;
-        } else {
-          // AI 消息：使用与初始渲染相同的 Markdown + 数学渲染管线（包含 $/$ 过滤逻辑）
-          const processed = appContext.services.messageProcessor.processMathAndMarkdown(newText);
-          textDiv.innerHTML = processed;
-          // 复用统一的 DOM 挂载后增强链路，确保 Mermaid、链接和代码高亮行为一致。
-          appContext.services.messageProcessor.enhanceMarkdownContent?.(textDiv, { forceMermaid: true });
-        }
-      }
-      // 存储原始文本以便复制功能
-      messageElement.setAttribute('data-original-text', newText);
-
-      // 保存会话
-      await chatHistoryUI.saveCurrentConversation(true);
+      await messageSender.requestConversationHistoryEdit({
+        messageId,
+        newText,
+        messageElement
+      });
     } catch (e) {
       console.error('应用编辑结果失败:', e);
     }

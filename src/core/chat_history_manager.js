@@ -42,6 +42,7 @@
  * @property {Array<MessageNode>} messages - 所有消息节点列表
  * @property {string|null} root - 根节点ID
  * @property {string|null} currentNode - 当前节点ID
+ * @property {number} conversationRevision - 线性会话的“历史修改版本号”
  */
 
 /**
@@ -205,6 +206,13 @@ function clearChatHistory(chatHistory) {
   chatHistory.messages = [];
   chatHistory.root = null;
   chatHistory.currentNode = null;
+  chatHistory.conversationRevision = 0;
+}
+
+function normalizeConversationRevision(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.floor(numeric);
 }
 
 /**
@@ -347,6 +355,14 @@ function insertMessageAfterInHistory(chatHistory, afterMessageId, role, content,
   return newNode;
 }
 
+export function deleteMessageFromChatHistory(chatHistory, messageId) {
+  return deleteMessageFromHistory(chatHistory, messageId);
+}
+
+export function insertMessageAfterInChatHistory(chatHistory, afterMessageId, role, content, options = {}) {
+  return insertMessageAfterInHistory(chatHistory, afterMessageId, role, content, options);
+}
+
 /**
  * 创建一个新的 ChatHistory 对象以及相关操作函数
  * @returns {{
@@ -354,7 +370,10 @@ function insertMessageAfterInHistory(chatHistory, afterMessageId, role, content,
  *   addMessageToTree: (role: string, content: string, parentId?: string|null) => MessageNode,
  *   getCurrentConversationChain: () => Array<MessageNode>,
  *   clearHistory: () => void,
- *   deleteMessage: (messageId: string) => boolean
+ *   deleteMessage: (messageId: string) => boolean,
+ *   getConversationRevision: () => number,
+ *   setConversationRevision: (revision: number) => number,
+ *   bumpConversationRevision: () => number
  * }} - 工厂函数返回一组管理函数
  * @example
  * const { chatHistory, addMessageToTree, getCurrentConversationChain } = createChatHistoryManager();
@@ -364,7 +383,8 @@ export function createChatHistoryManager() {
   const chatHistory = {
     messages: [],
     root: null,
-    currentNode: null
+    currentNode: null,
+    conversationRevision: 0
   };
 
   return {
@@ -376,6 +396,17 @@ export function createChatHistoryManager() {
     clearHistory: () => clearChatHistory(chatHistory),
     deleteMessage: (messageId) => deleteMessageFromHistory(chatHistory, messageId),
     insertMessageAfter: (afterMessageId, role, content, options = {}) =>
-      insertMessageAfterInHistory(chatHistory, afterMessageId, role, content, options)
+      insertMessageAfterInHistory(chatHistory, afterMessageId, role, content, options),
+    getConversationRevision: () => normalizeConversationRevision(chatHistory.conversationRevision),
+    setConversationRevision: (revision) => {
+      const nextRevision = normalizeConversationRevision(revision);
+      chatHistory.conversationRevision = nextRevision;
+      return nextRevision;
+    },
+    bumpConversationRevision: () => {
+      const nextRevision = normalizeConversationRevision(chatHistory.conversationRevision) + 1;
+      chatHistory.conversationRevision = nextRevision;
+      return nextRevision;
+    }
   };
 } 

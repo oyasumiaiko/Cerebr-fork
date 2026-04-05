@@ -580,6 +580,20 @@ body.standalone-mode #empty-state-repomix {
     background: color-mix(in srgb, var(--cerebr-message-user-bg) 80%, var(--cerebr-bg-color) 20%);
 }
 
+.conversation-send-queue-preview__item--stale {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 42%, var(--cerebr-border-color) 58%);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, var(--cerebr-message-user-bg) 90%);
+}
+
+.conversation-send-queue-preview__item--failed {
+    border-color: color-mix(in srgb, var(--cerebr-status-error, #d93025) 38%, var(--cerebr-border-color) 62%);
+    background: color-mix(in srgb, var(--cerebr-status-error, #d93025) 8%, var(--cerebr-message-user-bg) 92%);
+}
+
+.conversation-send-queue-preview__item--delayed-retry {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 26%, var(--cerebr-border-color) 74%);
+}
+
 .conversation-send-queue-preview__item--dragging {
     opacity: 0.48;
 }
@@ -630,6 +644,12 @@ body.standalone-mode #empty-state-repomix {
     background: color-mix(in srgb, var(--cerebr-bg-color) 34%, transparent);
 }
 
+.conversation-send-queue-preview__drag-handle:disabled {
+    cursor: default;
+    opacity: 0.24;
+    background: transparent;
+}
+
 .conversation-send-queue-preview__drag-handle .drag-handle-icon {
     width: 10px;
     height: 14px;
@@ -673,6 +693,20 @@ body.standalone-mode #empty-state-repomix {
 .conversation-send-queue-preview__chip--paused {
     background: color-mix(in srgb, var(--cerebr-highlight) 14%, transparent);
     border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 28%, transparent);
+}
+
+.conversation-send-queue-preview__chip--status {
+    background: color-mix(in srgb, var(--cerebr-bg-color) 54%, transparent);
+}
+
+.conversation-send-queue-preview__pending-mutation {
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--cerebr-text-color);
+    background: color-mix(in srgb, var(--cerebr-highlight) 8%, var(--cerebr-bg-color) 92%);
+    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
 }
 
 .conversation-send-queue-preview__text {

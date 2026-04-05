@@ -29,10 +29,12 @@ function normalizeConversationRuntimeId(conversationId) {
 function createDefaultActiveTurnState() {
   return {
     attemptId: null,
+    jobId: null,
     status: 'idle',
     startedAt: null,
     boundAssistantMessageId: null,
-    writeMode: null
+    writeMode: null,
+    conversationRevisionAtStart: null
   };
 }
 
@@ -47,9 +49,10 @@ function createDefaultResponsesState() {
 
 function createDefaultQueueState() {
   return {
-    items: [],
+    jobs: [],
     isFlushing: false,
-    pausedHeadId: null
+    pausedHeadId: null,
+    pendingMutation: null
   };
 }
 
@@ -82,6 +85,7 @@ function sanitizeConversationRuntimeState(rawState, conversationId) {
 
   base.activeTurn = {
     attemptId: (typeof activeTurn.attemptId === 'string' && activeTurn.attemptId.trim()) ? activeTurn.attemptId.trim() : null,
+    jobId: (typeof activeTurn.jobId === 'string' && activeTurn.jobId.trim()) ? activeTurn.jobId.trim() : null,
     status: (typeof activeTurn.status === 'string' && activeTurn.status.trim()) ? activeTurn.status.trim() : 'idle',
     startedAt: Number.isFinite(Number(activeTurn.startedAt)) ? Number(activeTurn.startedAt) : null,
     boundAssistantMessageId: (typeof activeTurn.boundAssistantMessageId === 'string' && activeTurn.boundAssistantMessageId.trim())
@@ -89,6 +93,9 @@ function sanitizeConversationRuntimeState(rawState, conversationId) {
       : null,
     writeMode: (activeTurn.writeMode === 'append' || activeTurn.writeMode === 'replace')
       ? activeTurn.writeMode
+      : null,
+    conversationRevisionAtStart: Number.isFinite(Number(activeTurn.conversationRevisionAtStart))
+      ? Number(activeTurn.conversationRevisionAtStart)
       : null
   };
 
@@ -108,10 +115,13 @@ function sanitizeConversationRuntimeState(rawState, conversationId) {
   };
 
   base.queue = {
-    items: Array.isArray(queue.items) ? cloneRuntimeData(queue.items) : [],
+    jobs: Array.isArray(queue.jobs) ? cloneRuntimeData(queue.jobs) : [],
     isFlushing: queue.isFlushing === true,
     pausedHeadId: (typeof queue.pausedHeadId === 'string' && queue.pausedHeadId.trim())
       ? queue.pausedHeadId.trim()
+      : null,
+    pendingMutation: (queue.pendingMutation && typeof queue.pendingMutation === 'object')
+      ? cloneRuntimeData(queue.pendingMutation)
       : null
   };
 

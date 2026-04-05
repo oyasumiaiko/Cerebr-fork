@@ -2047,7 +2047,7 @@ export function createChatHistoryUI(appContext) {
   /**
    * 保存或更新当前对话至持久存储
    * @param {boolean} [isUpdate=false] - 是否为更新操作
-   * @param {{ preserveExistingApiLock?: boolean, updateActiveState?: boolean, chatHistoryOverride?: { messages?: Array<any> }, conversationId?: string, apiLockOverride?: any }} [options] - 额外保存选项
+   * @param {{ preserveExistingApiLock?: boolean, updateActiveState?: boolean, chatHistoryOverride?: { messages?: Array<any>, conversationRevision?: number }, conversationId?: string, apiLockOverride?: any }} [options] - 额外保存选项
    *   - preserveExistingApiLock: 当内存态未携带 apiLock 时，是否回退继承已存储会话中的 apiLock（默认 true）
    *   - updateActiveState: 是否同步更新当前激活会话状态（默认 true，后台保存可设为 false）
    *   - chatHistoryOverride: 指定要保存的历史快照（用于后台会话写库）
@@ -2070,6 +2070,9 @@ export function createChatHistoryUI(appContext) {
 
     const chatHistory = overrideChatHistory || services.chatHistoryManager.chatHistory;
     const rawMessages = Array.isArray(chatHistory?.messages) ? chatHistory.messages : [];
+    const conversationRevision = Number.isFinite(Number(chatHistory?.conversationRevision))
+      ? Math.max(0, Math.floor(Number(chatHistory.conversationRevision)))
+      : 0;
     if (rawMessages.length === 0) {
       // 仅在“当前激活会话”的更新路径下执行删除，避免后台保存误删其它会话。
       if (isUpdate && updateActiveState && targetConversationId) {
@@ -2237,6 +2240,7 @@ export function createChatHistoryUI(appContext) {
       startTime,
       endTime,
       messages: messagesCopy,
+      conversationRevision,
       summary: summaryToSave,
       messageCount: messageStats.totalCount,
       mainMessageCount: messageStats.mainMessageCount,
@@ -3574,6 +3578,9 @@ export function createChatHistoryUI(appContext) {
     services.chatHistoryManager.chatHistory.currentNode = lastMainMessage
       ? lastMainMessage.id
       : (fullConversation.messages.length > 0 ? fullConversation.messages[fullConversation.messages.length - 1].id : null);
+    services.chatHistoryManager.chatHistory.conversationRevision = Number.isFinite(Number(fullConversation?.conversationRevision))
+      ? Math.max(0, Math.floor(Number(fullConversation.conversationRevision)))
+      : 0;
     // 保存加载的对话记录ID，用于后续更新操作
     currentConversationId = fullConversation.id;
     
@@ -13789,7 +13796,8 @@ export function createChatHistoryUI(appContext) {
       const newChatHistory = {
         messages: [],
         root: null,
-        currentNode: null
+        currentNode: null,
+        conversationRevision: 0
       };
 
       // 说明：避免复用旧节点引用，确保分支会话内容独立。
@@ -13924,6 +13932,7 @@ export function createChatHistoryUI(appContext) {
         summarySource: 'default',
         startTime: startTime,
         endTime: endTime,
+        conversationRevision: 0,
         title: pageInfo?.title || '',
         url: pageInfo?.url || '',
         // --- 分支元信息（用于“历史面板树状显示”）---
@@ -13948,6 +13957,7 @@ export function createChatHistoryUI(appContext) {
       services.chatHistoryManager.chatHistory.messages = [];
       services.chatHistoryManager.chatHistory.root = null;
       services.chatHistoryManager.chatHistory.currentNode = null;
+      services.chatHistoryManager.chatHistory.conversationRevision = 0;
       
       // 清空聊天容器
       chatContainer.innerHTML = '';

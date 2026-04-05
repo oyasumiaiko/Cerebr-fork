@@ -11,6 +11,7 @@ import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '..
 import { cloneResponsesInputItems, mergeResponsesInputItems } from '../utils/responses_input_items.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
+import { deleteMessageFromChatHistory } from './chat_history_manager.js';
 import {
   resolveResponseHandlingMode,
   resolveReceivedResponseHandlingMode,
@@ -200,7 +201,6 @@ export function createMessageSender(appContext) {
    * - 现在将每一次请求视为独立 attempt，便于实现“按消息粒度的停止生成 / 自动重试”。
    */
   const activeAttempts = new Map();
-  const pendingRetryAttempts = new Map();
   // 对外暴露“哪些会话正在流式生成”，供 ESC 聊天记录面板做实时标记。
   const streamingConversationListeners = new Set();
   const backgroundCompletedConversationIds = new Set();
@@ -217,6 +217,8 @@ export function createMessageSender(appContext) {
   let queueCurrentConversationMessages = true;
   const conversationSendQueues = new Map();
   const conversationQueueDrainLocks = new Set();
+  const conversationQueueWakeTimers = new Map();
+  const pendingConversationMutations = new Map();
   let draftConversationQueueSerial = 0;
   let activeDraftConversationQueueKey = `__draft_queue_${draftConversationQueueSerial}`;
   let queuedConversationTaskSerial = 0;
@@ -231,11 +233,22 @@ export function createMessageSender(appContext) {
   const AUTO_RETRY_MAX_DELAY_MS = 8000;
   // 流式写库节流：避免每个 token 都触发一次 IndexedDB 写入。
   const STREAM_DRAFT_SAVE_INTERVAL_MS = 1200;
+  const CONVERSATION_JOB_KINDS = new Set(['append_user_message', 'regenerate_assistant_turn']);
+  const CONVERSATION_JOB_STATUSES = new Set([
+    'queued',
+    'running',
+    'delayed_retry',
+    'paused',
+    'stale',
+    'failed',
+    'completed',
+    'canceled'
+  ]);
 
   // 临时模式状态不再写入 sessionStorage，改由父页面在内存里同步，避免 F5 刷新仍保留旧状态。
 
   function collectStreamingConversationIds() {
-    if (!activeAttempts.size && !pendingRetryAttempts.size) return [];
+    if (!activeAttempts.size && !conversationSendQueues.size) return [];
     const ids = new Set();
     for (const attempt of activeAttempts.values()) {
       if (!attempt || attempt.finished) continue;
@@ -243,9 +256,12 @@ export function createMessageSender(appContext) {
       if (!boundId) continue;
       ids.add(boundId);
     }
-    for (const retryTask of pendingRetryAttempts.values()) {
-      const boundId = normalizeConversationId(retryTask?.boundConversationId);
-      if (!boundId) continue;
+    for (const [queueKey, queueJobs] of conversationSendQueues.entries()) {
+      const jobs = Array.isArray(queueJobs) ? queueJobs : [];
+      const hasDelayedRetry = jobs.some((job) => normalizeConversationQueuedTask(job).status === 'delayed_retry');
+      if (!hasDelayedRetry) continue;
+      const boundId = normalizeConversationId(queueKey);
+      if (!boundId || boundId.startsWith('__draft_queue_')) continue;
       ids.add(boundId);
     }
     return Array.from(ids).sort();
@@ -356,12 +372,12 @@ export function createMessageSender(appContext) {
   function hasMeaningfulRuntimeSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
     if (String(snapshot?.activeTurn?.status || '').trim().toLowerCase() !== 'idle') return true;
-    if (snapshot?.activeTurn?.attemptId || snapshot?.activeTurn?.boundAssistantMessageId) return true;
+    if (snapshot?.activeTurn?.attemptId || snapshot?.activeTurn?.jobId || snapshot?.activeTurn?.boundAssistantMessageId) return true;
     if (Array.isArray(snapshot?.responses?.accumulatedInputItems) && snapshot.responses.accumulatedInputItems.length > 0) return true;
     if (Array.isArray(snapshot?.responses?.accumulatedTimeline) && snapshot.responses.accumulatedTimeline.length > 0) return true;
     if (snapshot?.responses?.assistantPhase || snapshot?.responses?.lastResponseId) return true;
-    if (Array.isArray(snapshot?.queue?.items) && snapshot.queue.items.length > 0) return true;
-    if (snapshot?.queue?.isFlushing || snapshot?.queue?.pausedHeadId) return true;
+    if (Array.isArray(snapshot?.queue?.jobs) && snapshot.queue.jobs.length > 0) return true;
+    if (snapshot?.queue?.isFlushing || snapshot?.queue?.pausedHeadId || snapshot?.queue?.pendingMutation) return true;
     if (Array.isArray(snapshot?.steer?.pendingSteers) && snapshot.steer.pendingSteers.length > 0) return true;
     if (snapshot?.steer?.targetTurnId || snapshot?.steer?.targetTurnStartedAtMs) return true;
     return false;
@@ -392,14 +408,17 @@ export function createMessageSender(appContext) {
   function syncConversationQueueRuntime(queueKey) {
     const runtimeConversationKey = getRuntimeConversationKey(queueKey);
     if (!runtimeConversationKey) return null;
-    const queueItems = getConversationSendQueue(runtimeConversationKey).map(task => cloneDataSafely(task));
-    const pausedHeadId = queueItems[0]?.paused === true && typeof queueItems[0]?.id === 'string'
+    const queueItems = getConversationSendQueue(runtimeConversationKey)
+      .filter((job) => !isConversationJobTerminal(job))
+      .map(job => cloneDataSafely(job));
+    const pausedHeadId = (queueItems[0] && (isConversationJobUserPaused(queueItems[0]) || isConversationJobBlockedByConfirmation(queueItems[0])))
       ? queueItems[0].id
       : null;
     return updateConversationRuntimeStateByKey(runtimeConversationKey, (draft) => {
-      draft.queue.items = queueItems;
+      draft.queue.jobs = queueItems;
       draft.queue.isFlushing = conversationQueueDrainLocks.has(runtimeConversationKey);
       draft.queue.pausedHeadId = pausedHeadId;
+      draft.queue.pendingMutation = summarizePendingConversationMutation(runtimeConversationKey);
     });
   }
 
@@ -2140,9 +2159,74 @@ export function createMessageSender(appContext) {
     return resolveConversationQueueKey(activeId);
   }
 
+  function normalizeConversationHistoryRevision(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return 0;
+    return Math.floor(numeric);
+  }
+
+  function resolveConversationHistoryRevision(conversationId = '', overrideValue = undefined) {
+    if (overrideValue !== undefined) {
+      return normalizeConversationHistoryRevision(overrideValue);
+    }
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const activeConversationId = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    if (!normalizedConversationId || normalizedConversationId === activeConversationId) {
+      return normalizeConversationHistoryRevision(
+        chatHistoryManager?.getConversationRevision?.()
+          ?? chatHistoryManager?.chatHistory?.conversationRevision
+      );
+    }
+    return 0;
+  }
+
+  function buildDefaultConversationJobRetryPolicy(kind) {
+    const normalizedKind = CONVERSATION_JOB_KINDS.has(kind) ? kind : 'append_user_message';
+    return {
+      enabled: normalizedKind === 'append_user_message',
+      maxAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+      baseDelayMs: AUTO_RETRY_BASE_DELAY_MS,
+      maxDelayMs: AUTO_RETRY_MAX_DELAY_MS
+    };
+  }
+
+  function normalizeConversationJobRetryPolicy(kind, rawPolicy) {
+    const defaults = buildDefaultConversationJobRetryPolicy(kind);
+    const policy = (rawPolicy && typeof rawPolicy === 'object') ? rawPolicy : {};
+    return {
+      enabled: policy.enabled === true ? true : defaults.enabled,
+      maxAttempts: Number.isFinite(Number(policy.maxAttempts))
+        ? Math.max(1, Math.floor(Number(policy.maxAttempts)))
+        : defaults.maxAttempts,
+      baseDelayMs: Number.isFinite(Number(policy.baseDelayMs))
+        ? Math.max(0, Math.floor(Number(policy.baseDelayMs)))
+        : defaults.baseDelayMs,
+      maxDelayMs: Number.isFinite(Number(policy.maxDelayMs))
+        ? Math.max(0, Math.floor(Number(policy.maxDelayMs)))
+        : defaults.maxDelayMs
+    };
+  }
+
+  function isConversationJobTerminal(job) {
+    return job?.status === 'completed' || job?.status === 'canceled';
+  }
+
+  function isConversationJobUserPaused(job) {
+    return job?.status === 'paused' || job?.paused === true;
+  }
+
+  function isConversationJobWaitingForRetry(job) {
+    return job?.status === 'delayed_retry';
+  }
+
+  function isConversationJobBlockedByConfirmation(job) {
+    return job?.status === 'stale' || job?.status === 'failed';
+  }
+
   function createQueuedConversationTaskId() {
     queuedConversationTaskSerial += 1;
-    return `queued_send_${Date.now()}_${queuedConversationTaskSerial}`;
+    return `conversation_job_${Date.now()}_${queuedConversationTaskSerial}`;
   }
 
   function normalizeConversationQueuedTask(queuedTask) {
@@ -2153,15 +2237,123 @@ export function createMessageSender(appContext) {
     if (!normalizedTask.id) {
       normalizedTask.id = createQueuedConversationTaskId();
     }
-    normalizedTask.paused = normalizedTask.paused === true;
-    normalizedTask.options = (normalizedTask.options && typeof normalizedTask.options === 'object')
-      ? normalizedTask.options
-      : {};
+    normalizedTask.kind = CONVERSATION_JOB_KINDS.has(normalizedTask.kind)
+      ? normalizedTask.kind
+      : (normalizedTask.options?.regenerateMode ? 'regenerate_assistant_turn' : 'append_user_message');
+    normalizedTask.status = CONVERSATION_JOB_STATUSES.has(normalizedTask.status)
+      ? normalizedTask.status
+      : 'queued';
+    normalizedTask.payload = (normalizedTask.payload && typeof normalizedTask.payload === 'object')
+      ? normalizedTask.payload
+      : ((normalizedTask.options && typeof normalizedTask.options === 'object')
+        ? normalizedTask.options
+        : {});
+    normalizedTask.options = normalizedTask.payload;
+    normalizedTask.conversationId = normalizeConversationId(
+      normalizedTask.conversationId || normalizedTask.payload?.conversationIdOverride || ''
+    );
+    normalizedTask.conversationRevisionAtEnqueue = normalizeConversationHistoryRevision(
+      normalizedTask.conversationRevisionAtEnqueue
+    );
+    normalizedTask.anchorMessageId = normalizeConversationId(
+      normalizedTask.anchorMessageId || normalizedTask.payload?.messageId || ''
+    );
+    normalizedTask.targetAiMessageId = normalizeConversationId(
+      normalizedTask.targetAiMessageId || normalizedTask.payload?.targetAiMessageId || ''
+    );
+    normalizedTask.retryPolicy = normalizeConversationJobRetryPolicy(normalizedTask.kind, normalizedTask.retryPolicy);
+    normalizedTask.retryCount = Number.isFinite(Number(normalizedTask.retryCount))
+      ? Math.max(0, Math.floor(Number(normalizedTask.retryCount)))
+      : 0;
+    normalizedTask.availableAt = Number.isFinite(Number(normalizedTask.availableAt))
+      ? Number(normalizedTask.availableAt)
+      : null;
+    normalizedTask.staleReason = (typeof normalizedTask.staleReason === 'string' && normalizedTask.staleReason.trim())
+      ? normalizedTask.staleReason.trim()
+      : null;
+    normalizedTask.failureMessage = (typeof normalizedTask.failureMessage === 'string' && normalizedTask.failureMessage.trim())
+      ? normalizedTask.failureMessage.trim()
+      : null;
+    normalizedTask.paused = (
+      normalizedTask.paused === true
+      || normalizedTask.status === 'paused'
+      || normalizedTask.status === 'stale'
+      || normalizedTask.status === 'failed'
+    );
     normalizedTask.queuedAt = Number.isFinite(normalizedTask.queuedAt)
       ? normalizedTask.queuedAt
       : Date.now();
+    normalizedTask.createdAt = Number.isFinite(normalizedTask.createdAt)
+      ? normalizedTask.createdAt
+      : normalizedTask.queuedAt;
+    if (normalizedTask.status === 'delayed_retry' && normalizedTask.availableAt == null) {
+      normalizedTask.availableAt = Date.now();
+    }
+    if (normalizedTask.status === 'paused' && !normalizedTask.paused) {
+      normalizedTask.paused = true;
+    }
+    if (isConversationJobBlockedByConfirmation(normalizedTask)) {
+      normalizedTask.paused = true;
+    }
 
     return normalizedTask;
+  }
+
+  function summarizePendingConversationMutation(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const pendingList = pendingConversationMutations.get(normalizedQueueKey);
+    if (!Array.isArray(pendingList) || pendingList.length === 0) return null;
+    const lastMutation = pendingList[pendingList.length - 1] || null;
+    const kind = (typeof lastMutation?.type === 'string' && lastMutation.type.trim())
+      ? lastMutation.type.trim()
+      : 'history_mutation';
+    const count = pendingList.length;
+    const label = kind === 'regenerate_message'
+      ? '重新生成'
+      : (kind === 'delete_message' ? '删除消息' : '编辑消息');
+    return {
+      count,
+      kind,
+      description: count > 1
+        ? `当前生成结束后将依次应用 ${count} 个历史修改`
+        : `当前生成结束后将应用：${label}`,
+      createdAt: Number.isFinite(Number(lastMutation?.createdAt))
+        ? Number(lastMutation.createdAt)
+        : Date.now()
+    };
+  }
+
+  function clearConversationQueueWakeTimer(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const timerId = conversationQueueWakeTimers.get(normalizedQueueKey);
+    if (timerId) {
+      clearTimeout(timerId);
+      conversationQueueWakeTimers.delete(normalizedQueueKey);
+    }
+  }
+
+  function scheduleConversationQueueWakeTimer(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    clearConversationQueueWakeTimer(normalizedQueueKey);
+    const queue = getConversationSendQueue(normalizedQueueKey);
+    const nextWakeAt = queue
+      .filter((task) => task.status === 'delayed_retry' && !task.paused && Number.isFinite(task.availableAt))
+      .map((task) => Number(task.availableAt))
+      .sort((a, b) => a - b)[0];
+    if (!Number.isFinite(nextWakeAt)) return;
+    const delayMs = Math.max(0, nextWakeAt - Date.now());
+    const timerId = setTimeout(() => {
+      conversationQueueWakeTimers.delete(normalizedQueueKey);
+      void flushConversationSendQueue(normalizedQueueKey);
+    }, delayMs);
+    conversationQueueWakeTimers.set(normalizedQueueKey, timerId);
+  }
+
+  function refreshConversationQueueState(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    syncConversationQueueRuntime(normalizedQueueKey);
+    refreshCurrentConversationQueuedSendPreview();
+    scheduleConversationQueueWakeTimer(normalizedQueueKey);
   }
 
   function normalizeConversationSendQueueTasks(queue) {
@@ -2184,7 +2376,7 @@ export function createMessageSender(appContext) {
     if (Array.isArray(existing)) return normalizeConversationSendQueueTasks(existing);
     const created = [];
     conversationSendQueues.set(normalizedQueueKey, created);
-    syncConversationQueueRuntime(normalizedQueueKey);
+    refreshConversationQueueState(normalizedQueueKey);
     return created;
   }
 
@@ -2199,11 +2391,16 @@ export function createMessageSender(appContext) {
     return queue.find((task) => task?.id === taskId) || null;
   }
 
-  function enqueueConversationSend(queueKey, queuedTask) {
+  function enqueueConversationSend(queueKey, queuedTask, options = {}) {
     const queue = ensureConversationSendQueue(queueKey);
-    queue.push(normalizeConversationQueuedTask(queuedTask));
-    syncConversationQueueRuntime(queueKey);
-    refreshCurrentConversationQueuedSendPreview();
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const nextTask = normalizeConversationQueuedTask(queuedTask);
+    if (normalizedOptions.atFront) {
+      queue.unshift(nextTask);
+    } else {
+      queue.push(nextTask);
+    }
+    refreshConversationQueueState(queueKey);
     return queue.length;
   }
 
@@ -2217,17 +2414,38 @@ export function createMessageSender(appContext) {
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
-    syncConversationQueueRuntime(normalizedQueueKey);
-    refreshCurrentConversationQueuedSendPreview();
+    refreshConversationQueueState(normalizedQueueKey);
     return removedTask || null;
+  }
+
+  function upsertConversationQueuedTask(queueKey, queuedTask) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const queue = ensureConversationSendQueue(normalizedQueueKey);
+    const nextTask = normalizeConversationQueuedTask(queuedTask);
+    const existingIndex = findQueuedConversationTaskIndex(normalizedQueueKey, nextTask.id);
+    if (existingIndex >= 0) {
+      queue.splice(existingIndex, 1, nextTask);
+    } else {
+      queue.push(nextTask);
+    }
+    refreshConversationQueueState(normalizedQueueKey);
+    return nextTask;
   }
 
   function setConversationQueuedTaskPaused(queueKey, taskId, paused) {
     const task = getQueuedConversationTask(queueKey, taskId);
     if (!task) return null;
-    task.paused = paused === true;
-    syncConversationQueueRuntime(queueKey);
-    refreshCurrentConversationQueuedSendPreview();
+    if (task.status === 'stale' || task.status === 'failed') return task;
+    if (paused === true) {
+      task.paused = true;
+      task.status = 'paused';
+    } else {
+      task.paused = false;
+      task.status = (task.availableAt != null && task.availableAt > Date.now())
+        ? 'delayed_retry'
+        : 'queued';
+    }
+    refreshConversationQueueState(queueKey);
     return task;
   }
 
@@ -2244,13 +2462,12 @@ export function createMessageSender(appContext) {
     if (placement === 'after') insertIndex += 1;
     insertIndex = Math.max(0, Math.min(insertIndex, queue.length));
     queue.splice(insertIndex, 0, movedTask);
-    syncConversationQueueRuntime(normalizedQueueKey);
-    refreshCurrentConversationQueuedSendPreview();
+    refreshConversationQueueState(normalizedQueueKey);
     return true;
   }
 
   function hasQueuedMessagesForConversation(queueKey) {
-    return getConversationSendQueue(queueKey).length > 0;
+    return getConversationSendQueue(queueKey).some((task) => !isConversationJobTerminal(task));
   }
 
   /**
@@ -2328,18 +2545,18 @@ export function createMessageSender(appContext) {
    */
   function buildQueuedTaskPreview(queuedTask) {
     const normalizedTask = normalizeConversationQueuedTask(queuedTask);
-    const options = normalizedTask.options;
-    const rawText = (typeof options.originalMessageText === 'string')
-      ? options.originalMessageText
+    const payload = normalizedTask.payload || {};
+    const rawText = (typeof payload.originalMessageText === 'string')
+      ? payload.originalMessageText
       : '';
     const normalizedText = rawText.trim();
-    const images = extractQueuedPreviewImages(options.inputImagesHtmlSnapshot || '');
+    const images = extractQueuedPreviewImages(payload.inputImagesHtmlSnapshot || '');
     const imageCount = images.length;
     const hasScreenshot = !!(
-      options.inputHasScreenshotSnapshot
+      payload.inputHasScreenshotSnapshot
       || images.some((img) => (img.alt || '').trim() === 'page-screenshot.png')
     );
-    const regenerateMode = !!options.regenerateMode;
+    const regenerateMode = normalizedTask.kind === 'regenerate_assistant_turn';
 
     let fallbackText = '（排队中的消息）';
     if (regenerateMode) {
@@ -2350,15 +2567,41 @@ export function createMessageSender(appContext) {
       fallbackText = '（排队中的图片消息）';
     }
 
+    const statusLabelMap = {
+      queued: '排队中',
+      running: '发送中',
+      delayed_retry: '等待重试',
+      paused: '已暂停',
+      stale: '待确认',
+      failed: '失败',
+      completed: '已完成',
+      canceled: '已取消'
+    };
+    const staleReasonText = normalizedTask.staleReason === 'history_mutated'
+      ? '历史已修改'
+      : (normalizedTask.staleReason || '');
+
     return {
       id: normalizedTask.id,
+      kind: normalizedTask.kind,
+      status: normalizedTask.status,
+      statusLabel: statusLabelMap[normalizedTask.status] || normalizedTask.status || '排队中',
       text: normalizedText || fallbackText,
       rawText,
       imageCount,
       images,
       hasScreenshot,
       regenerateMode,
-      paused: normalizedTask.paused === true
+      paused: normalizedTask.paused === true,
+      staleReasonText,
+      failureMessage: normalizedTask.failureMessage || '',
+      canPauseToggle: normalizedTask.status === 'queued'
+        || normalizedTask.status === 'paused'
+        || normalizedTask.status === 'delayed_retry',
+      canContinue: normalizedTask.status === 'stale' || normalizedTask.status === 'failed',
+      canDrag: normalizedTask.status === 'queued'
+        || normalizedTask.status === 'paused'
+        || normalizedTask.status === 'delayed_retry'
     };
   }
 
@@ -2445,8 +2688,8 @@ export function createMessageSender(appContext) {
     const normalizedTask = normalizeConversationQueuedTask(task);
     clearInputs();
 
-    const nextText = typeof normalizedTask.options.originalMessageText === 'string'
-      ? normalizedTask.options.originalMessageText
+    const nextText = typeof normalizedTask.payload?.originalMessageText === 'string'
+      ? normalizedTask.payload.originalMessageText
       : '';
     inputController?.setInputText?.(nextText);
     if (!inputController?.setInputText && messageInput) {
@@ -2455,7 +2698,7 @@ export function createMessageSender(appContext) {
 
     try {
       if (imageContainer) imageContainer.innerHTML = '';
-      const queuedImages = extractQueuedInputImages(normalizedTask.options.inputImagesHtmlSnapshot || '');
+      const queuedImages = extractQueuedInputImages(normalizedTask.payload?.inputImagesHtmlSnapshot || '');
       const fragment = document.createDocumentFragment();
       queuedImages.forEach((image) => {
         const imageTag = imageHandler?.createImageTag?.(
@@ -2479,11 +2722,43 @@ export function createMessageSender(appContext) {
     inputController?.focusToEnd?.();
   }
 
+  async function continueQueuedConversationTask(queueKey, taskId) {
+    const existingTask = getQueuedConversationTask(queueKey, taskId);
+    if (!existingTask) return null;
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const nextTask = normalizeConversationQueuedTask({
+      ...cloneDataSafely(existingTask),
+      id: createQueuedConversationTaskId(),
+      status: 'queued',
+      paused: false,
+      retryCount: 0,
+      availableAt: null,
+      staleReason: null,
+      failureMessage: null,
+      conversationRevisionAtEnqueue: resolveConversationHistoryRevision(normalizedQueueKey),
+      queuedAt: Date.now(),
+      createdAt: Date.now()
+    });
+    removeConversationQueuedTask(normalizedQueueKey, taskId);
+    const hasPendingWork = hasPendingWorkForConversationQueue(normalizedQueueKey);
+    const hasQueuedMessages = hasQueuedMessagesForConversation(normalizedQueueKey);
+    if (!hasPendingWork && !hasQueuedMessages) {
+      return executeConversationQueueJob(normalizedQueueKey, nextTask);
+    }
+    enqueueConversationSend(normalizedQueueKey, nextTask);
+    scheduleConversationQueueFlush(normalizedQueueKey);
+    return { ok: true, queued: true };
+  }
+
   function handleQueuePreviewEdit(queueKey, taskId) {
     const removedTask = removeConversationQueuedTask(queueKey, taskId);
     if (!removedTask) return;
     restoreQueuedTaskToComposer(removedTask);
     scheduleConversationQueueFlush(queueKey);
+  }
+
+  async function handleQueuePreviewContinue(queueKey, taskId) {
+    await continueQueuedConversationTask(queueKey, taskId);
   }
 
   function handleQueuePreviewTogglePaused(queueKey, taskId) {
@@ -2614,9 +2889,13 @@ export function createMessageSender(appContext) {
   function refreshCurrentConversationQueuedSendPreview() {
     const existingContainer = getConversationQueuedSendPreviewContainer();
     const activeQueueKey = getCurrentActiveConversationQueueKey();
-    const queue = getConversationSendQueue(activeQueueKey);
+    const runtimeQueueSnapshot = conversationRuntimeStore?.getConversationRuntimeState?.(activeQueueKey)?.queue || null;
+    const queue = Array.isArray(runtimeQueueSnapshot?.jobs)
+      ? runtimeQueueSnapshot.jobs.map((job) => normalizeConversationQueuedTask(job))
+      : getConversationSendQueue(activeQueueKey);
+    const pendingMutation = runtimeQueueSnapshot?.pendingMutation || summarizePendingConversationMutation(activeQueueKey);
 
-    if (!Array.isArray(queue) || queue.length === 0) {
+    if ((!Array.isArray(queue) || queue.length === 0) && !pendingMutation) {
       existingContainer?.remove();
       return;
     }
@@ -2630,6 +2909,13 @@ export function createMessageSender(appContext) {
     list.className = 'conversation-send-queue-preview__list';
     container.setAttribute('aria-label', `当前会话待发送消息队列，共 ${queue.length} 条`);
 
+    if (pendingMutation) {
+      const pendingNotice = document.createElement('div');
+      pendingNotice.className = 'conversation-send-queue-preview__pending-mutation';
+      pendingNotice.textContent = pendingMutation.description || '当前生成结束后将应用历史修改';
+      list.appendChild(pendingNotice);
+    }
+
     queue.forEach((task, index) => {
       const preview = buildQueuedTaskPreview(task);
       const item = document.createElement('article');
@@ -2639,12 +2925,20 @@ export function createMessageSender(appContext) {
       if (preview.paused) {
         item.classList.add('conversation-send-queue-preview__item--paused');
       }
+      if (preview.status === 'stale') {
+        item.classList.add('conversation-send-queue-preview__item--stale');
+      } else if (preview.status === 'failed') {
+        item.classList.add('conversation-send-queue-preview__item--failed');
+      } else if (preview.status === 'delayed_retry') {
+        item.classList.add('conversation-send-queue-preview__item--delayed-retry');
+      }
 
       const handle = document.createElement('button');
       handle.type = 'button';
       handle.className = 'conversation-send-queue-preview__drag-handle';
       handle.title = '拖动调整顺序';
       handle.setAttribute('aria-label', `拖动调整第 ${index + 1} 条排队消息顺序`);
+      handle.disabled = !preview.canDrag;
       const handleIcon = document.createElement('span');
       handleIcon.className = 'drag-handle-icon';
       handle.appendChild(handleIcon);
@@ -2660,18 +2954,23 @@ export function createMessageSender(appContext) {
       orderChip.textContent = `#${index + 1}`;
       summary.appendChild(orderChip);
 
-      if (preview.paused) {
-        const pausedChip = document.createElement('span');
-        pausedChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--paused';
-        pausedChip.textContent = '已暂停';
-        summary.appendChild(pausedChip);
-      }
+      const statusChip = document.createElement('span');
+      statusChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--status';
+      statusChip.textContent = preview.statusLabel;
+      summary.appendChild(statusChip);
 
       if (preview.regenerateMode) {
         const regenerateChip = document.createElement('span');
         regenerateChip.className = 'conversation-send-queue-preview__chip';
         regenerateChip.textContent = '重新生成';
         summary.appendChild(regenerateChip);
+      }
+
+      if (preview.staleReasonText) {
+        const staleChip = document.createElement('span');
+        staleChip.className = 'conversation-send-queue-preview__chip conversation-send-queue-preview__chip--paused';
+        staleChip.textContent = preview.staleReasonText;
+        summary.appendChild(staleChip);
       }
 
       if (preview.hasScreenshot) {
@@ -2691,7 +2990,9 @@ export function createMessageSender(appContext) {
       const text = document.createElement('div');
       text.className = 'conversation-send-queue-preview__text';
       text.textContent = preview.text;
-      text.title = preview.rawText || preview.text;
+      text.title = preview.failureMessage
+        ? `${preview.rawText || preview.text}\n${preview.failureMessage}`
+        : (preview.rawText || preview.text);
       summary.appendChild(text);
 
       const images = buildQueuePreviewImages(preview.images);
@@ -2701,18 +3002,28 @@ export function createMessageSender(appContext) {
 
       const actions = document.createElement('div');
       actions.className = 'conversation-send-queue-preview__actions';
+      if (preview.canContinue) {
+        actions.appendChild(createQueuePreviewActionButton(
+          '继续',
+          'conversation-send-queue-preview__action--pause',
+          '基于当前最新历史，重新创建一条新的发送任务',
+          () => { void handleQueuePreviewContinue(activeQueueKey, preview.id); }
+        ));
+      }
       actions.appendChild(createQueuePreviewActionButton(
         '修改',
         'conversation-send-queue-preview__action--edit',
         '移出队列并放回输入框',
         () => handleQueuePreviewEdit(activeQueueKey, preview.id)
       ));
-      actions.appendChild(createQueuePreviewActionButton(
-        preview.paused ? '继续' : '暂停',
-        'conversation-send-queue-preview__action--pause',
-        preview.paused ? '取消暂停，允许轮到时自动发送' : '暂停自动发送，轮到时保留在队列中',
-        () => handleQueuePreviewTogglePaused(activeQueueKey, preview.id)
-      ));
+      if (preview.canPauseToggle) {
+        actions.appendChild(createQueuePreviewActionButton(
+          preview.paused ? '继续' : '暂停',
+          'conversation-send-queue-preview__action--pause',
+          preview.paused ? '取消暂停，允许轮到时自动发送' : '暂停自动发送，轮到时保留在队列中',
+          () => handleQueuePreviewTogglePaused(activeQueueKey, preview.id)
+        ));
+      }
       actions.appendChild(createQueuePreviewActionButton(
         '移除',
         'conversation-send-queue-preview__action--remove',
@@ -2723,7 +3034,9 @@ export function createMessageSender(appContext) {
       item.appendChild(handle);
       item.appendChild(body);
       item.appendChild(actions);
-      bindQueuePreviewDragEvents(item, handle, activeQueueKey, preview.id, list);
+      if (preview.canDrag) {
+        bindQueuePreviewDragEvents(item, handle, activeQueueKey, preview.id, list);
+      }
       list.appendChild(item);
     });
 
@@ -2795,18 +3108,38 @@ export function createMessageSender(appContext) {
     if (!normalizedFromKey || !normalizedToKey || normalizedFromKey === normalizedToKey) return;
 
     const fromQueue = conversationSendQueues.get(normalizedFromKey);
+    const fromMutations = pendingConversationMutations.get(normalizedFromKey);
     if (!Array.isArray(fromQueue) || fromQueue.length === 0) {
       conversationSendQueues.delete(normalizedFromKey);
-      refreshCurrentConversationQueuedSendPreview();
+      if (Array.isArray(fromMutations) && fromMutations.length > 0) {
+        pendingConversationMutations.set(normalizedToKey, [
+          ...(pendingConversationMutations.get(normalizedToKey) || []),
+          ...fromMutations
+        ]);
+        pendingConversationMutations.delete(normalizedFromKey);
+      }
+      clearConversationQueueWakeTimer(normalizedFromKey);
+      refreshConversationQueueState(normalizedFromKey);
+      refreshConversationQueueState(normalizedToKey);
       return;
     }
 
     const targetQueue = ensureConversationSendQueue(normalizedToKey);
-    targetQueue.push(...fromQueue);
+    targetQueue.push(...fromQueue.map((task) => normalizeConversationQueuedTask({
+      ...cloneDataSafely(task),
+      conversationId: normalizeConversationId(normalizedToKey) || normalizeConversationId(task?.conversationId)
+    })));
     conversationSendQueues.delete(normalizedFromKey);
-    syncConversationQueueRuntime(normalizedFromKey);
-    syncConversationQueueRuntime(normalizedToKey);
-    refreshCurrentConversationQueuedSendPreview();
+    if (Array.isArray(fromMutations) && fromMutations.length > 0) {
+      pendingConversationMutations.set(normalizedToKey, [
+        ...(pendingConversationMutations.get(normalizedToKey) || []),
+        ...fromMutations
+      ]);
+      pendingConversationMutations.delete(normalizedFromKey);
+    }
+    clearConversationQueueWakeTimer(normalizedFromKey);
+    refreshConversationQueueState(normalizedFromKey);
+    refreshConversationQueueState(normalizedToKey);
   }
 
   function isConversationQueueKeyActive(queueKey) {
@@ -2818,23 +3151,12 @@ export function createMessageSender(appContext) {
     return resolveConversationQueueKey(attemptState.boundConversationId) === resolveConversationQueueKey(queueKey);
   }
 
-  function doesRetryTaskBelongToConversationQueueKey(retryTask, queueKey) {
-    if (!retryTask) return false;
-    return resolveConversationQueueKey(retryTask.boundConversationId) === resolveConversationQueueKey(queueKey);
-  }
-
   function hasPendingWorkForConversationQueue(queueKey) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     if (conversationQueueDrainLocks.has(normalizedQueueKey)) return true;
 
     for (const attemptState of activeAttempts.values()) {
       if (doesAttemptBelongToConversationQueueKey(attemptState, normalizedQueueKey)) {
-        return true;
-      }
-    }
-
-    for (const retryTask of pendingRetryAttempts.values()) {
-      if (doesRetryTaskBelongToConversationQueueKey(retryTask, normalizedQueueKey)) {
         return true;
       }
     }
@@ -2855,6 +3177,81 @@ export function createMessageSender(appContext) {
     }, delayMs);
   }
 
+  async function executeConversationQueueJob(queueKey, queuedTask) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const nextTask = normalizeConversationQueuedTask(queuedTask);
+    if (!normalizedQueueKey || !nextTask || !nextTask.payload) {
+      return { ok: false, error: new Error('invalid_queue_job') };
+    }
+
+    conversationQueueDrainLocks.add(normalizedQueueKey);
+    refreshConversationQueueState(normalizedQueueKey);
+    notifyStreamingConversationStateChanged();
+
+    try {
+      let dispatchOptions = {
+        ...nextTask.payload,
+        __conversationJobId: nextTask.id,
+        __conversationJobKind: nextTask.kind,
+        __conversationQueueKey: normalizedQueueKey,
+        __conversationRevisionAtStart: nextTask.conversationRevisionAtEnqueue,
+        __conversationRetryPolicy: cloneDataSafely(nextTask.retryPolicy),
+        __autoRetryAttempt: nextTask.retryCount
+      };
+      const queueConversationId = normalizeConversationId(normalizedQueueKey);
+      const shouldDispatchInBackground = !!(queueConversationId && !isConversationQueueKeyActive(normalizedQueueKey));
+      if (shouldDispatchInBackground) {
+        const conversationSnapshot = await chatHistoryUI?.getConversationSnapshotById?.(queueConversationId);
+        if (!conversationSnapshot || !Array.isArray(conversationSnapshot.messages)) {
+          throw new Error(`后台续发失败：找不到会话 ${queueConversationId} 的历史快照`);
+        }
+        dispatchOptions = {
+          ...dispatchOptions,
+          conversationIdOverride: queueConversationId,
+          historyMessagesSnapshot: cloneDataSafely(conversationSnapshot.messages) || [],
+          conversationRevisionSnapshot: normalizeConversationHistoryRevision(conversationSnapshot.conversationRevision),
+          conversationApiLockSnapshot: cloneDataSafely(
+            dispatchOptions?.conversationApiLockSnapshot ?? conversationSnapshot.apiLock ?? null
+          )
+        };
+      }
+
+      const result = await sendMessageCore(dispatchOptions);
+      await applyPendingConversationMutationsIfIdle(normalizedQueueKey);
+      if (result?.ok !== true && !result?.retryScheduled && !result?.aborted) {
+        upsertConversationQueuedTask(normalizedQueueKey, {
+          ...nextTask,
+          status: 'failed',
+          paused: true,
+          availableAt: null,
+          failureMessage: (typeof result?.error?.message === 'string' && result.error.message.trim())
+            ? result.error.message.trim()
+            : nextTask.failureMessage
+        });
+      }
+      return result;
+    } catch (error) {
+      console.error('处理会话发送队列失败:', error);
+      upsertConversationQueuedTask(normalizedQueueKey, {
+        ...nextTask,
+        status: 'failed',
+        paused: true,
+        availableAt: null,
+        failureMessage: (typeof error?.message === 'string' && error.message.trim())
+          ? error.message.trim()
+          : nextTask.failureMessage
+      });
+      return { ok: false, error };
+    } finally {
+      conversationQueueDrainLocks.delete(normalizedQueueKey);
+      refreshConversationQueueState(normalizedQueueKey);
+      notifyStreamingConversationStateChanged();
+      if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
+        scheduleConversationQueueFlush(normalizedQueueKey);
+      }
+    }
+  }
+
   /**
    * 启动指定会话队列中的下一条消息。
    *
@@ -2872,14 +3269,30 @@ export function createMessageSender(appContext) {
     const queue = normalizeConversationSendQueueTasks(conversationSendQueues.get(normalizedQueueKey));
     if (!Array.isArray(queue) || queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
-      syncConversationQueueRuntime(normalizedQueueKey);
+      refreshConversationQueueState(normalizedQueueKey);
+      return false;
+    }
+
+    while (queue.length > 0 && isConversationJobTerminal(queue[0])) {
+      queue.shift();
+    }
+    if (queue.length === 0) {
+      conversationSendQueues.delete(normalizedQueueKey);
+      refreshConversationQueueState(normalizedQueueKey);
       return false;
     }
 
     const frontTask = normalizeConversationQueuedTask(queue[0]);
-    if (frontTask.paused) {
-      syncConversationQueueRuntime(normalizedQueueKey);
-      refreshCurrentConversationQueuedSendPreview();
+    if (frontTask.status === 'delayed_retry' && !frontTask.paused) {
+      if (frontTask.availableAt != null && frontTask.availableAt > Date.now()) {
+        refreshConversationQueueState(normalizedQueueKey);
+        return false;
+      }
+      frontTask.status = 'queued';
+      frontTask.availableAt = null;
+    }
+    if (frontTask.paused || frontTask.status === 'paused' || frontTask.status === 'stale' || frontTask.status === 'failed') {
+      refreshConversationQueueState(normalizedQueueKey);
       return false;
     }
 
@@ -2887,47 +3300,14 @@ export function createMessageSender(appContext) {
     if (queue.length === 0) {
       conversationSendQueues.delete(normalizedQueueKey);
     }
-    syncConversationQueueRuntime(normalizedQueueKey);
-    refreshCurrentConversationQueuedSendPreview();
-    if (!nextTask || !nextTask.options) {
+    refreshConversationQueueState(normalizedQueueKey);
+    if (!nextTask || !nextTask.payload) {
       if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
         scheduleConversationQueueFlush(normalizedQueueKey);
       }
       return false;
     }
-
-    conversationQueueDrainLocks.add(normalizedQueueKey);
-    syncConversationQueueRuntime(normalizedQueueKey);
-    try {
-      let dispatchOptions = nextTask.options;
-      const queueConversationId = normalizeConversationId(normalizedQueueKey);
-      const shouldDispatchInBackground = !!(queueConversationId && !isConversationQueueKeyActive(normalizedQueueKey));
-      if (shouldDispatchInBackground) {
-        const conversationSnapshot = await chatHistoryUI?.getConversationSnapshotById?.(queueConversationId);
-        if (!conversationSnapshot || !Array.isArray(conversationSnapshot.messages)) {
-          throw new Error(`后台续发失败：找不到会话 ${queueConversationId} 的历史快照`);
-        }
-        dispatchOptions = {
-          ...dispatchOptions,
-          conversationIdOverride: queueConversationId,
-          historyMessagesSnapshot: cloneDataSafely(conversationSnapshot.messages) || [],
-          conversationApiLockSnapshot: cloneDataSafely(
-            dispatchOptions?.conversationApiLockSnapshot ?? conversationSnapshot.apiLock ?? null
-          )
-        };
-      }
-      await sendMessageCore(dispatchOptions);
-    } catch (error) {
-      console.error('处理会话发送队列失败:', error);
-    } finally {
-      conversationQueueDrainLocks.delete(normalizedQueueKey);
-      syncConversationQueueRuntime(normalizedQueueKey);
-      if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
-        scheduleConversationQueueFlush(normalizedQueueKey);
-      }
-    }
-
-    return true;
+    return !!(await executeConversationQueueJob(normalizedQueueKey, nextTask));
   }
 
   async function waitForConversationQueueIdle(queueKey, timeoutMs = 3000) {
@@ -2948,7 +3328,6 @@ export function createMessageSender(appContext) {
     const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const suppressQueueFlush = normalizedOptions.suppressQueueFlush === true;
     let abortedAny = false;
-    const canceledRetryQueueKeys = new Set();
 
     for (const attemptState of activeAttempts.values()) {
       if (!doesAttemptBelongToConversationQueueKey(attemptState, normalizedQueueKey)) continue;
@@ -2957,19 +3336,33 @@ export function createMessageSender(appContext) {
       abortedAny = true;
     }
 
-    for (const retryTask of Array.from(pendingRetryAttempts.values())) {
-      if (!doesRetryTaskBelongToConversationQueueKey(retryTask, normalizedQueueKey)) continue;
-      const canceled = cancelPendingRetryTask(retryTask, 'retry canceled by conversation abort');
-      abortedAny = canceled || abortedAny;
-      if (canceled) {
-        canceledRetryQueueKeys.add(resolveConversationQueueKey(retryTask.boundConversationId));
+    const queue = getConversationSendQueue(normalizedQueueKey);
+    let queueChanged = false;
+    queue.forEach((task, index) => {
+      const normalizedTask = normalizeConversationQueuedTask(task);
+      if (normalizedTask.status !== 'delayed_retry') return;
+      queue[index] = normalizeConversationQueuedTask({
+        ...normalizedTask,
+        status: 'canceled',
+        paused: false,
+        availableAt: null,
+        staleReason: 'aborted'
+      });
+      queueChanged = true;
+      abortedAny = true;
+    });
+    if (queueChanged) {
+      while (queue.length > 0 && isConversationJobTerminal(queue[0])) {
+        queue.shift();
       }
+      if (queue.length === 0) {
+        conversationSendQueues.delete(normalizedQueueKey);
+      }
+      refreshConversationQueueState(normalizedQueueKey);
     }
 
-    if (!suppressQueueFlush) {
-      for (const canceledQueueKey of canceledRetryQueueKeys) {
-        scheduleConversationQueueFlush(canceledQueueKey);
-      }
+    if (!suppressQueueFlush && hasQueuedMessagesForConversation(normalizedQueueKey)) {
+      scheduleConversationQueueFlush(normalizedQueueKey);
     }
 
     return abortedAny;
@@ -2995,7 +3388,7 @@ export function createMessageSender(appContext) {
       services.conversationPresence?.setActiveConversationId?.(currentConversationId);
     } catch (_) {}
 
-    syncConversationQueueRuntime(nextConversationId || getActiveDraftConversationQueueKey());
+    refreshConversationQueueState(nextConversationId || getActiveDraftConversationQueueKey());
     scheduleConversationQueueFlush(nextConversationId || getActiveDraftConversationQueueKey());
   }
 
@@ -3025,66 +3418,23 @@ export function createMessageSender(appContext) {
     return matchesById || matchesByLoading;
   }
 
-  function doesRetryTaskMatchAbortTarget(task, normalizedTargetId) {
+  function doesQueuedTaskMatchAbortTarget(task, normalizedTargetId) {
     if (!task || !normalizedTargetId) return false;
     const taskAiId = normalizeConversationId(task?.targetAiMessageId);
-    const taskParentId = normalizeConversationId(task?.parentMessageId);
+    const taskParentId = normalizeConversationId(task?.anchorMessageId);
     return taskAiId === normalizedTargetId || taskParentId === normalizedTargetId;
   }
 
-  function cancelPendingRetryTask(task, reason = 'aborted') {
-    if (!task) return false;
-    try { if (task.timerId) clearTimeout(task.timerId); } catch (_) {}
-    pendingRetryAttempts.delete(task.id);
-    notifyStreamingConversationStateChanged();
-
-    if (typeof task.resolve === 'function') {
-      const abortError = new Error(reason || 'aborted');
-      abortError.name = 'AbortError';
-      try {
-        task.resolve({ ok: false, error: abortError, aborted: true });
-      } catch (_) {}
-    }
-    return true;
-  }
-
-  function scheduleRetryTask({
-    delayMs = 0,
-    retryHint = {},
-    override = {},
-    boundConversationId = '',
-    targetAiMessageId = '',
-    parentMessageId = ''
-  } = {}) {
-    const safeDelayMs = Math.max(0, Number.isFinite(delayMs) ? delayMs : 0);
-    return new Promise((resolve) => {
-      const retryTask = {
-        id: `retry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        timerId: null,
-        resolve,
-        boundConversationId: normalizeConversationId(boundConversationId),
-        targetAiMessageId: normalizeConversationId(targetAiMessageId),
-        parentMessageId: normalizeConversationId(parentMessageId)
-      };
-      pendingRetryAttempts.set(retryTask.id, retryTask);
-      notifyStreamingConversationStateChanged();
-
-      retryTask.timerId = setTimeout(async () => {
-        if (!pendingRetryAttempts.has(retryTask.id)) return;
-        pendingRetryAttempts.delete(retryTask.id);
-        notifyStreamingConversationStateChanged();
-        resolve(await sendMessageCore({ ...retryHint, ...override }));
-      }, safeDelayMs);
-    });
-  }
-
   function hasAbortableRequest(target = null) {
-    if (!activeAttempts.size && !pendingRetryAttempts.size) return false;
-    if (!target) return true;
+    const hasDelayedRetryJob = Array.from(conversationSendQueues.values()).some((queue) => (
+      Array.isArray(queue) && queue.some((task) => normalizeConversationQueuedTask(task).status === 'delayed_retry')
+    ));
+    if (!activeAttempts.size && !hasDelayedRetryJob) return false;
+    if (!target) return activeAttempts.size > 0 || hasDelayedRetryJob;
 
     const { targetElement, normalizedTargetId } = resolveAbortTarget(target);
     if (!targetElement && !normalizedTargetId) {
-      return activeAttempts.size > 0 || pendingRetryAttempts.size > 0;
+      return activeAttempts.size > 0 || hasDelayedRetryJob;
     }
 
     for (const attempt of activeAttempts.values()) {
@@ -3092,8 +3442,13 @@ export function createMessageSender(appContext) {
         return true;
       }
     }
-    for (const retryTask of pendingRetryAttempts.values()) {
-      if (doesRetryTaskMatchAbortTarget(retryTask, normalizedTargetId)) {
+    for (const queue of conversationSendQueues.values()) {
+      const hasMatchingRetryJob = (Array.isArray(queue) ? queue : []).some((task) => {
+        const normalizedTask = normalizeConversationQueuedTask(task);
+        return normalizedTask.status === 'delayed_retry'
+          && doesQueuedTaskMatchAbortTarget(normalizedTask, normalizedTargetId);
+      });
+      if (hasMatchingRetryJob) {
         return true;
       }
     }
@@ -3111,6 +3466,346 @@ export function createMessageSender(appContext) {
       ? attemptState.historyMessagesRef
       : [];
     return fallbackList.find(m => m.id === normalizedId) || null;
+  }
+
+  function isConversationIdCurrentlyActive(conversationId) {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    if (!normalizedConversationId) return true;
+    const activeConversationId = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    return !!(normalizedConversationId && activeConversationId && normalizedConversationId === activeConversationId);
+  }
+
+  function findVisibleMessageElementById(messageId) {
+    const safeMessageId = escapeMessageIdForSelector(messageId);
+    if (!safeMessageId) return null;
+    const selector = `.message[data-message-id="${safeMessageId}"]`;
+    return chatContainer.querySelector(selector)
+      || (threadContainer ? threadContainer.querySelector(selector) : null)
+      || null;
+  }
+
+  function captureMessageElementImageDescriptors(messageElement) {
+    if (!messageElement) return [];
+    return Array.from(messageElement.querySelectorAll('.image-content .image-tag'))
+      .map((tag) => {
+        const base64Data = tag.getAttribute('data-image') || tag.querySelector('img')?.src || '';
+        const fileName = tag.getAttribute('title') || tag.querySelector('img')?.getAttribute('alt') || '';
+        if (!base64Data) return null;
+        return { url: base64Data, fileName };
+      })
+      .filter(Boolean);
+  }
+
+  async function loadConversationMutationContext(conversationId) {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    if (!normalizedConversationId || isConversationIdCurrentlyActive(normalizedConversationId)) {
+      return {
+        conversationId: normalizedConversationId,
+        isActive: true,
+        chatHistory: chatHistoryManager.chatHistory
+      };
+    }
+    const snapshot = await chatHistoryUI?.getConversationSnapshotById?.(normalizedConversationId);
+    if (!snapshot || !Array.isArray(snapshot.messages)) {
+      throw new Error(`找不到会话 ${normalizedConversationId} 的历史快照`);
+    }
+    snapshot.conversationRevision = normalizeConversationHistoryRevision(snapshot.conversationRevision);
+    return {
+      conversationId: normalizedConversationId,
+      isActive: false,
+      chatHistory: snapshot
+    };
+  }
+
+  async function saveConversationMutationContext(context) {
+    if (!context?.chatHistory || typeof chatHistoryUI?.saveCurrentConversation !== 'function') return null;
+    const normalizedConversationId = normalizeConversationId(context.conversationId);
+    const shouldUpdateActiveState = context.isActive !== false;
+    return chatHistoryUI.saveCurrentConversation(!!normalizedConversationId, {
+      conversationId: normalizedConversationId || undefined,
+      chatHistoryOverride: {
+        messages: context.chatHistory.messages,
+        conversationRevision: normalizeConversationHistoryRevision(context.chatHistory.conversationRevision)
+      },
+      updateActiveState: shouldUpdateActiveState,
+      preserveExistingApiLock: true
+    });
+  }
+
+  function updateVisibleMessageElementForEdit(messageId, newText, imageDescriptors, role) {
+    const messageElement = findVisibleMessageElementById(messageId);
+    if (!messageElement) return;
+
+    try {
+      let imageContainerEl = messageElement.querySelector('.image-content');
+      if (Array.isArray(imageDescriptors) && imageDescriptors.length > 0) {
+        if (!imageContainerEl) {
+          imageContainerEl = document.createElement('div');
+          imageContainerEl.className = 'image-content';
+          const textDiv = messageElement.querySelector('.text-content');
+          if (textDiv && textDiv.parentNode === messageElement) {
+            messageElement.insertBefore(imageContainerEl, textDiv);
+          } else {
+            messageElement.prepend(imageContainerEl);
+          }
+        }
+        imageContainerEl.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        imageDescriptors.forEach((image) => {
+          const imageTag = imageHandler?.createImageTag?.(image.url, image.fileName || '');
+          if (imageTag) fragment.appendChild(imageTag);
+        });
+        imageContainerEl.appendChild(fragment);
+      } else if (imageContainerEl) {
+        imageContainerEl.remove();
+      }
+    } catch (error) {
+      console.warn('同步编辑后的图片 DOM 失败:', error);
+    }
+
+    const textDiv = messageElement.querySelector('.text-content');
+    if (textDiv) {
+      if (String(role || '').toLowerCase() === 'user') {
+        textDiv.innerText = newText;
+      } else {
+        const processed = messageProcessor.processMathAndMarkdown(newText);
+        textDiv.innerHTML = processed;
+        messageProcessor.enhanceMarkdownContent?.(textDiv, { forceMermaid: true });
+      }
+    }
+    messageElement.setAttribute('data-original-text', newText);
+  }
+
+  function hasRunningAttemptForConversationQueue(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    for (const attemptState of activeAttempts.values()) {
+      if (doesAttemptBelongToConversationQueueKey(attemptState, normalizedQueueKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function markConversationQueuedJobsStale(queueKey, conversationRevision) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const nextRevision = normalizeConversationHistoryRevision(conversationRevision);
+    const queue = getConversationSendQueue(normalizedQueueKey);
+    let changed = false;
+    queue.forEach((task, index) => {
+      const normalizedTask = normalizeConversationQueuedTask(task);
+      if (isConversationJobTerminal(normalizedTask) || normalizedTask.status === 'running') return;
+      if (normalizedTask.conversationRevisionAtEnqueue >= nextRevision) return;
+      if (normalizedTask.status === 'stale' && normalizedTask.staleReason === 'history_mutated') return;
+      queue[index] = normalizeConversationQueuedTask({
+        ...normalizedTask,
+        status: 'stale',
+        paused: true,
+        availableAt: null,
+        staleReason: 'history_mutated'
+      });
+      changed = true;
+    });
+    if (changed) {
+      refreshConversationQueueState(normalizedQueueKey);
+    }
+    return changed;
+  }
+
+  async function dispatchConversationJob(queueKey, queuedTask, options = {}) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const nextTask = normalizeConversationQueuedTask(queuedTask);
+    const hasPendingWork = hasPendingWorkForConversationQueue(normalizedQueueKey);
+    const hasQueuedMessages = hasQueuedMessagesForConversation(normalizedQueueKey);
+    const canBypassQueuedMessages = normalizedOptions.ignoreQueuedMessages === true;
+    if (!hasPendingWork && (!hasQueuedMessages || canBypassQueuedMessages) && normalizedOptions.forceQueue !== true) {
+      return executeConversationQueueJob(normalizedQueueKey, nextTask);
+    }
+    enqueueConversationSend(normalizedQueueKey, nextTask, { atFront: normalizedOptions.atFront === true });
+    scheduleConversationQueueFlush(normalizedQueueKey);
+    return { ok: true, queued: true, queueLength: getConversationSendQueue(normalizedQueueKey).length };
+  }
+
+  function enqueuePendingConversationMutation(queueKey, descriptor) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const pendingList = pendingConversationMutations.get(normalizedQueueKey) || [];
+    pendingList.push({
+      ...descriptor,
+      createdAt: Number.isFinite(Number(descriptor?.createdAt)) ? Number(descriptor.createdAt) : Date.now()
+    });
+    pendingConversationMutations.set(normalizedQueueKey, pendingList);
+    refreshConversationQueueState(normalizedQueueKey);
+  }
+
+  async function applyPendingConversationMutationsIfIdle(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    if (hasRunningAttemptForConversationQueue(normalizedQueueKey)) return false;
+    const pendingList = pendingConversationMutations.get(normalizedQueueKey);
+    if (!Array.isArray(pendingList) || pendingList.length === 0) return false;
+    pendingConversationMutations.delete(normalizedQueueKey);
+    refreshConversationQueueState(normalizedQueueKey);
+    for (const mutation of pendingList) {
+      try {
+        await mutation.apply?.(normalizedQueueKey);
+      } catch (error) {
+        console.error('应用挂起的历史修改失败:', error);
+      }
+    }
+    refreshConversationQueueState(normalizedQueueKey);
+    return true;
+  }
+
+  async function requestConversationHistoryEdit({ messageId, newText, messageElement = null, conversationId = '' } = {}) {
+    const normalizedMessageId = normalizeConversationId(messageId);
+    if (!normalizedMessageId) return { ok: false, reason: 'missing_message_id' };
+    const targetConversationId = normalizeConversationId(conversationId)
+      || normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const targetQueueKey = resolveConversationQueueKey(targetConversationId);
+    const imageDescriptors = captureMessageElementImageDescriptors(messageElement);
+    const descriptor = {
+      type: 'edit_message',
+      createdAt: Date.now(),
+      apply: async (effectiveQueueKey = targetQueueKey) => {
+        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const context = await loadConversationMutationContext(effectiveConversationId);
+        const node = Array.isArray(context.chatHistory?.messages)
+          ? context.chatHistory.messages.find((item) => item?.id === normalizedMessageId)
+          : null;
+        if (!node) {
+          throw new Error('未找到待编辑的消息节点');
+        }
+        const hasText = typeof newText === 'string' && newText.trim() !== '';
+        const normalizedImages = Array.isArray(imageDescriptors) ? imageDescriptors : [];
+        if (Array.isArray(node.content)) {
+          const nextParts = normalizedImages.map((image) => ({
+            type: 'image_url',
+            image_url: { url: image.url }
+          }));
+          if (hasText) {
+            nextParts.push({ type: 'text', text: newText });
+          }
+          node.content = nextParts;
+        } else if (normalizedImages.length > 0) {
+          node.content = hasText
+            ? [
+              ...normalizedImages.map((image) => ({ type: 'image_url', image_url: { url: image.url } })),
+              { type: 'text', text: newText }
+            ]
+            : normalizedImages.map((image) => ({ type: 'image_url', image_url: { url: image.url } }));
+        } else {
+          node.content = newText;
+        }
+        context.chatHistory.conversationRevision = normalizeConversationHistoryRevision(context.chatHistory.conversationRevision) + 1;
+        markConversationQueuedJobsStale(effectiveQueueKey, context.chatHistory.conversationRevision);
+        await saveConversationMutationContext(context);
+        if (context.isActive) {
+          updateVisibleMessageElementForEdit(normalizedMessageId, newText, normalizedImages, node.role);
+        }
+      }
+    };
+
+    if (hasRunningAttemptForConversationQueue(targetQueueKey)) {
+      enqueuePendingConversationMutation(targetQueueKey, descriptor);
+      showNotification?.({ message: '当前仍在生成，本次编辑将在结束后自动应用', type: 'info', duration: 1800 });
+      return { ok: true, deferred: true };
+    }
+    await descriptor.apply();
+    return { ok: true, deferred: false };
+  }
+
+  async function requestConversationMessageDeletion({ messageId, conversationId = '' } = {}) {
+    const normalizedMessageId = normalizeConversationId(messageId);
+    if (!normalizedMessageId) return { ok: false, reason: 'missing_message_id' };
+    const targetConversationId = normalizeConversationId(conversationId)
+      || normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const targetQueueKey = resolveConversationQueueKey(targetConversationId);
+    const descriptor = {
+      type: 'delete_message',
+      createdAt: Date.now(),
+      apply: async (effectiveQueueKey = targetQueueKey) => {
+        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const context = await loadConversationMutationContext(effectiveConversationId);
+        const node = Array.isArray(context.chatHistory?.messages)
+          ? context.chatHistory.messages.find((item) => item?.id === normalizedMessageId)
+          : null;
+        const threadId = node?.threadId || null;
+        const deleted = deleteMessageFromChatHistory(context.chatHistory, normalizedMessageId);
+        if (!deleted) {
+          throw new Error('未找到待删除的消息节点');
+        }
+        context.chatHistory.conversationRevision = normalizeConversationHistoryRevision(context.chatHistory.conversationRevision) + 1;
+        markConversationQueuedJobsStale(effectiveQueueKey, context.chatHistory.conversationRevision);
+        await saveConversationMutationContext(context);
+        if (context.isActive) {
+          findVisibleMessageElementById(normalizedMessageId)?.remove();
+          if (threadId) {
+            services.selectionThreadManager?.repairThreadAnnotation?.(threadId);
+          }
+        }
+      }
+    };
+
+    if (hasRunningAttemptForConversationQueue(targetQueueKey)) {
+      enqueuePendingConversationMutation(targetQueueKey, descriptor);
+      showNotification?.({ message: '当前仍在生成，本次删除将在结束后自动应用', type: 'info', duration: 1800 });
+      return { ok: true, deferred: true };
+    }
+    await descriptor.apply();
+    return { ok: true, deferred: false };
+  }
+
+  async function requestRegenerateMessage(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const targetConversationId = normalizeConversationId(normalizedOptions.conversationId)
+      || normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const targetQueueKey = resolveConversationQueueKey(targetConversationId);
+    const descriptor = {
+      type: 'regenerate_message',
+      createdAt: Date.now(),
+      apply: async (effectiveQueueKey = targetQueueKey) => {
+        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const context = await loadConversationMutationContext(effectiveConversationId);
+        const nextRevision = normalizeConversationHistoryRevision(context.chatHistory?.conversationRevision) + 1;
+        context.chatHistory.conversationRevision = nextRevision;
+        await saveConversationMutationContext(context);
+        markConversationQueuedJobsStale(effectiveQueueKey, nextRevision);
+        const regenerateJob = normalizeConversationQueuedTask({
+          kind: 'regenerate_assistant_turn',
+          status: 'queued',
+          paused: false,
+          conversationId: effectiveConversationId,
+          conversationRevisionAtEnqueue: nextRevision,
+          anchorMessageId: normalizedOptions.messageId || '',
+          targetAiMessageId: normalizedOptions.targetAiMessageId || '',
+          payload: {
+            originalMessageText: normalizedOptions.originalMessageText,
+            regenerateMode: true,
+            messageId: normalizedOptions.messageId,
+            targetAiMessageId: normalizedOptions.targetAiMessageId || null,
+            api: normalizedOptions.api ?? null,
+            resolvedApiConfig: normalizedOptions.resolvedApiConfig ?? null,
+            specificPromptType: normalizedOptions.specificPromptType ?? null,
+            promptMeta: normalizedOptions.promptMeta ?? null
+          }
+        });
+        await dispatchConversationJob(effectiveQueueKey, regenerateJob, {
+          atFront: true,
+          ignoreQueuedMessages: true
+        });
+      }
+    };
+
+    if (hasRunningAttemptForConversationQueue(targetQueueKey)) {
+      enqueuePendingConversationMutation(targetQueueKey, descriptor);
+      showNotification?.({ message: '当前仍在生成，本次重新生成将在结束后自动应用', type: 'info', duration: 1800 });
+      return { ok: true, deferred: true };
+    }
+    await descriptor.apply();
+    return { ok: true, deferred: false };
   }
 
   function bindAttemptAiMessage(attemptState, messageId, explicitNode = null) {
@@ -3147,6 +3842,12 @@ export function createMessageSender(appContext) {
     }
     if (!attemptState.runtimeConversationKey) {
       attemptState.runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
+    }
+    if (!Number.isFinite(Number(attemptState.historyConversationRevision))) {
+      attemptState.historyConversationRevision = resolveConversationHistoryRevision(
+        attemptState.boundConversationId,
+        attemptState.historyConversationRevision
+      );
     }
   }
 
@@ -3196,7 +3897,10 @@ export function createMessageSender(appContext) {
 
       const savedConversation = await chatHistoryUI.saveCurrentConversation(!!boundId, {
         conversationId: boundId || undefined,
-        chatHistoryOverride: { messages: historyMessages },
+        chatHistoryOverride: {
+          messages: historyMessages,
+          conversationRevision: normalizeConversationHistoryRevision(attemptState.historyConversationRevision)
+        },
         // 若当前界面已切到其它会话，只做后台落库，不反向抢占 UI 当前会话。
         updateActiveState: shouldActivate,
         preserveExistingApiLock: true,
@@ -3206,6 +3910,11 @@ export function createMessageSender(appContext) {
       const savedId = normalizeConversationId(savedConversation?.id)
         || boundId
         || (shouldActivate ? activeId : '');
+      if (savedConversation) {
+        attemptState.historyConversationRevision = normalizeConversationHistoryRevision(
+          savedConversation.conversationRevision
+        );
+      }
       if (savedId) {
         updateAttemptBoundConversationId(attemptState, savedId);
         if (shouldActivate) {
@@ -5803,9 +6512,15 @@ export function createMessageSender(appContext) {
       resolvedApiConfig = null,
       pageContentSnapshot = null,
       conversationSnapshot = null,
+      conversationRevisionSnapshot = null,
       omitDefaultSystemPrompt: externalOmitDefaultSystemPrompt = false,
       aspectRatioOverride: externalAspectRatioOverride = null,
-      __skipClearInputs = false
+      __skipClearInputs = false,
+      __conversationJobId = '',
+      __conversationJobKind = '',
+      __conversationQueueKey = '',
+      __conversationRevisionAtStart = null,
+      __conversationRetryPolicy = null
     } = options;
 
     const conversationApiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
@@ -5850,6 +6565,20 @@ export function createMessageSender(appContext) {
     const autoRetryAttempt = (typeof options.__autoRetryAttempt === 'number' && options.__autoRetryAttempt >= 0)
       ? options.__autoRetryAttempt
       : 0;
+    const normalizedConversationJobId = (typeof __conversationJobId === 'string' && __conversationJobId.trim())
+      ? __conversationJobId.trim()
+      : '';
+    const normalizedConversationJobKind = CONVERSATION_JOB_KINDS.has(__conversationJobKind)
+      ? __conversationJobKind
+      : (regenerateMode ? 'regenerate_assistant_turn' : 'append_user_message');
+    const normalizedConversationQueueKey = (typeof __conversationQueueKey === 'string' && __conversationQueueKey.trim())
+      ? resolveConversationQueueKey(__conversationQueueKey)
+      : getCurrentActiveConversationQueueKey();
+    const normalizedConversationRevisionAtStart = normalizeConversationHistoryRevision(__conversationRevisionAtStart);
+    const normalizedConversationRetryPolicy = normalizeConversationJobRetryPolicy(
+      normalizedConversationJobKind,
+      __conversationRetryPolicy
+    );
     let aspectRatioOverride = externalAspectRatioOverride || null;
 
     const snapshotImagesHtml = (typeof inputImagesHtmlSnapshot === 'string')
@@ -6010,16 +6739,25 @@ export function createMessageSender(appContext) {
         responsesToolLoopAccumulatedInputItems: null,
         responsesToolLoopAssistantPhase: null,
         responsesToolLoopLastResponseId: null,
-        runtimeConversationKey: getCurrentActiveConversationQueueKey(),
-        completedSuccessfully: false
+        runtimeConversationKey: normalizedConversationQueueKey || getCurrentActiveConversationQueueKey(),
+        completedSuccessfully: false,
+        conversationJobId: normalizedConversationJobId || null,
+        conversationJobKind: normalizedConversationJobKind,
+        conversationRevisionAtStart: normalizedConversationRevisionAtStart,
+        historyConversationRevision: conversationRevisionSnapshot != null
+          ? normalizeConversationHistoryRevision(conversationRevisionSnapshot)
+          : normalizedConversationRevisionAtStart,
+        retryPolicy: normalizedConversationRetryPolicy
       };
       activeAttempts.set(attemptState.id, attemptState);
       updateAttemptRuntimeState(attemptState, (draft) => {
         draft.activeTurn.attemptId = attemptState.id;
+        draft.activeTurn.jobId = attemptState.conversationJobId;
         draft.activeTurn.status = 'streaming';
         draft.activeTurn.startedAt = Date.now();
         draft.activeTurn.boundAssistantMessageId = null;
         draft.activeTurn.writeMode = normalizedTargetAiMessageId ? 'replace' : 'append';
+        draft.activeTurn.conversationRevisionAtStart = attemptState.conversationRevisionAtStart;
         draft.responses.accumulatedInputItems = [];
         draft.responses.accumulatedTimeline = [];
         draft.responses.assistantPhase = null;
@@ -6112,6 +6850,9 @@ export function createMessageSender(appContext) {
       attempt = beginAttempt();
       if (Array.isArray(historyMessagesSnapshot)) {
         attempt.historyMessagesRef = historyMessagesSnapshot;
+      }
+      if (conversationRevisionSnapshot != null) {
+        attempt.historyConversationRevision = normalizeConversationHistoryRevision(conversationRevisionSnapshot);
       }
       if (conversationIdOverride) {
         updateAttemptBoundConversationId(attempt, conversationIdOverride);
@@ -6605,7 +7346,7 @@ export function createMessageSender(appContext) {
         }
         await persistAttemptConversationSnapshot(attempt, { force: true });
         console.log('用户手动停止更新');
-        return;
+        return { ok: false, aborted: true };
       }
 
       console.error('发送消息失败:', error);
@@ -6623,53 +7364,104 @@ export function createMessageSender(appContext) {
       const retryHint = {
         injectedSystemMessages: existingInjectedSystemMessages,
         specificPromptType,
+        promptMeta: externalPromptMeta,
         originalMessageText: retryOriginalMessageText,
-        regenerateMode: true,
+        inputImagesHtmlSnapshot,
+        inputHasImagesSnapshot,
+        inputHasScreenshotSnapshot,
+        conversationIdOverride,
+        historyMessagesSnapshot,
+        conversationRevisionSnapshot: attempt?.historyConversationRevision ?? conversationRevisionSnapshot,
+        conversationApiLockSnapshot,
+        regenerateMode,
         messageId,
         targetAiMessageId: normalizedTargetAiMessageId,
         forceSendFullHistory,
-        pageContentSnapshot: pageContentResponse || null,
-        conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : null,
+        pageContentSnapshot: pageContentResponse || pageContentSnapshot || null,
+        conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : conversationSnapshot,
         omitDefaultSystemPrompt,
         aspectRatioOverride,
+        __skipClearInputs: true,
         __skipUserMessagePreprocess: skipNextPreprocess,
         // 透传外部策略决定的API（若有）
         resolvedApiConfig,
         api
       };
-      const retry = (delayMs = 0, override = {}) => {
+      const retry = async (override = {}) => {
         const mergedHint = { ...retryHint, ...override };
         const retryBoundConversationId = normalizeConversationId(attempt?.boundConversationId)
           || normalizeConversationId(currentConversationId)
           || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
-        return scheduleRetryTask({
-          delayMs,
-          retryHint,
-          override,
-          boundConversationId: retryBoundConversationId,
+        if (normalizedConversationJobId) {
+          removeConversationQueuedTask(normalizedConversationQueueKey || retryBoundConversationId, normalizedConversationJobId);
+        }
+        const nextJob = normalizeConversationQueuedTask({
+          id: createQueuedConversationTaskId(),
+          kind: normalizedConversationJobKind,
+          status: 'queued',
+          paused: false,
+          conversationId: retryBoundConversationId,
+          conversationRevisionAtEnqueue: resolveConversationHistoryRevision(retryBoundConversationId),
+          anchorMessageId: normalizeConversationId(mergedHint.messageId),
           targetAiMessageId: normalizeConversationId(mergedHint.targetAiMessageId),
-          parentMessageId: normalizeConversationId(mergedHint.messageId)
+          retryPolicy: normalizedConversationRetryPolicy,
+          retryCount: 0,
+          payload: mergedHint
         });
+        return dispatchConversationJob(
+          normalizedConversationQueueKey || retryBoundConversationId,
+          nextJob
+        );
       };
 
-      const canAutoRetry = autoRetryEnabled && autoRetryAttempt < (MAX_AUTO_RETRY_ATTEMPTS - 1);
+      const canAutoRetry = (
+        autoRetryEnabled
+        && normalizedConversationJobKind === 'append_user_message'
+        && normalizedConversationRetryPolicy.enabled
+        && autoRetryAttempt < (normalizedConversationRetryPolicy.maxAttempts - 1)
+      );
       if (canAutoRetry) {
         if (loadingMessage && loadingMessage.parentNode) {
           loadingMessage.remove();
         }
         const nextAttemptIndex = autoRetryAttempt + 1;
-        const delayMs = getAutoRetryDelayMs(autoRetryAttempt);
+        const delayMs = Math.min(
+          normalizedConversationRetryPolicy.maxDelayMs,
+          getAutoRetryDelayMs(autoRetryAttempt)
+        );
         if (typeof showNotification === 'function') {
           const delayText = delayMs >= 1000
             ? `${(delayMs / 1000).toFixed(delayMs >= 10000 ? 0 : 1)}秒`
             : `${delayMs}毫秒`;
           // 警告：发送失败，进入自动重试
           showNotification({
-            message: `发送失败，将在 ${delayText} 后自动重试 (${nextAttemptIndex}/${MAX_AUTO_RETRY_ATTEMPTS})`,
+            message: `发送失败，将在 ${delayText} 后自动重试 (${nextAttemptIndex}/${normalizedConversationRetryPolicy.maxAttempts})`,
             type: 'warning'
           });
         }
-        return retry(delayMs, { __autoRetryAttempt: nextAttemptIndex });
+        upsertConversationQueuedTask(normalizedConversationQueueKey, {
+          id: normalizedConversationJobId || createQueuedConversationTaskId(),
+          kind: normalizedConversationJobKind,
+          status: 'delayed_retry',
+          paused: false,
+          conversationId: normalizeConversationId(attempt?.boundConversationId)
+            || normalizeConversationId(currentConversationId)
+            || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.()),
+          conversationRevisionAtEnqueue: normalizedConversationRevisionAtStart,
+          anchorMessageId: normalizeConversationId(messageId),
+          targetAiMessageId: normalizedTargetAiMessageId,
+          retryPolicy: normalizedConversationRetryPolicy,
+          retryCount: nextAttemptIndex,
+          availableAt: Date.now() + delayMs,
+          failureMessage: (typeof error?.message === 'string' && error.message.trim())
+            ? error.message.trim()
+            : '',
+          payload: {
+            ...retryHint,
+            __autoRetryAttempt: nextAttemptIndex
+          }
+        });
+        return { ok: false, error, retryScheduled: true };
       }
 
       const detail = (typeof error?.message === 'string' && error.message.trim().length > 0)
@@ -6750,14 +7542,16 @@ export function createMessageSender(appContext) {
 
       if (autoRetryEnabled && typeof showNotification === 'function') {
         // 错误：重试达到上限
-        showNotification({ message: '自动重试失败，已达到最大尝试次数', type: 'error' });
+        showNotification({
+          message: `自动重试失败，已达到最大尝试次数 (${normalizedConversationRetryPolicy.maxAttempts})`,
+          type: 'error'
+        });
       }
 
       await persistAttemptConversationSnapshot(attempt, { force: true });
       return { ok: false, error, apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()), retryHint, retry };
     } finally {
       finalizeAttempt(attempt);
-      scheduleConversationQueueFlush(attempt?.boundConversationId || getCurrentActiveConversationQueueKey());
     }
     // 成功：返回 ok 与实际使用的 api 配置（供外部记录/重试）
     return { ok: true, apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()) };
@@ -6973,6 +7767,8 @@ export function createMessageSender(appContext) {
     }
 
     const currentConversationQueueKey = getCurrentActiveConversationQueueKey();
+    const currentConversationIdForSend = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
     const hasPendingWorkInCurrentConversation = hasPendingWorkForConversationQueue(currentConversationQueueKey);
     const hasQueuedMessagesInCurrentConversation = hasQueuedMessagesForConversation(currentConversationQueueKey);
     const canQueueOrInterrupt = !!(
@@ -6982,54 +7778,70 @@ export function createMessageSender(appContext) {
       || hasImagesInInput
     );
 
+    if (singleOpts.regenerateMode) {
+      return requestRegenerateMessage({
+        originalMessageText: singleOpts.originalMessageText ?? baseText,
+        messageId: singleOpts.messageId,
+        targetAiMessageId: singleOpts.targetAiMessageId || null,
+        api: singleOpts.api ?? null,
+        resolvedApiConfig: singleOpts.resolvedApiConfig ?? null,
+        specificPromptType: singleOpts.specificPromptType ?? null,
+        promptMeta: singleOpts.promptMeta ?? null,
+        conversationId: currentConversationIdForSend
+      });
+    }
+
     if ((hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation) && canQueueOrInterrupt) {
       const shouldEnqueue = hasQueuedMessagesInCurrentConversation || queueCurrentConversationMessages;
 
-      if (shouldEnqueue) {
-        const imagesHtmlSnapshot = !singleOpts.regenerateMode
-          ? (inputController ? inputController.getImagesHTML() : imageContainer.innerHTML)
-          : '';
-        const hasScreenshotSnapshot = !singleOpts.regenerateMode
-          ? (inputController ? inputController.hasScreenshot() : !!imageContainer.querySelector('img[alt="page-screenshot.png"]'))
-          : false;
-
-        // 入队后立即清空本次输入，避免用户误以为发送未被接收；
-        // 真正执行时使用冻结快照，不再触碰此后的实时输入框内容。
-        if (!singleOpts.regenerateMode) {
-          clearInputs();
-          inputController?.focusToEnd?.();
-        }
-
-        const queuedOptions = await buildQueuedSendOptions(singleOpts, {
-          baseText,
-          imagesHtml: imagesHtmlSnapshot,
-          hasImages: hasImagesInInput,
-          hasScreenshot: hasScreenshotSnapshot
-        });
-        const queueLength = enqueueConversationSend(currentConversationQueueKey, {
-          options: queuedOptions,
-          queuedAt: Date.now()
-        });
-        scheduleConversationQueueFlush(currentConversationQueueKey);
-
-        if (typeof showNotification === 'function') {
-          const waitingCount = Math.max(0, queueLength - 1);
-          showNotification({
-            message: waitingCount > 0
-              ? `已加入发送队列，前方还有 ${waitingCount} 条`
-              : '已加入发送队列，当前回复完成后自动发送',
-            type: 'info',
-            duration: 1800
-          });
-        }
-        return { ok: true, queued: true, queueLength };
+      if (!shouldEnqueue) {
+        abortRequestsForConversationQueue(currentConversationQueueKey, { suppressQueueFlush: true });
+        await waitForConversationQueueIdle(currentConversationQueueKey);
       }
-
-      abortRequestsForConversationQueue(currentConversationQueueKey, { suppressQueueFlush: true });
-      await waitForConversationQueueIdle(currentConversationQueueKey);
     }
 
-    return sendMessageCore(singleOpts);
+    const imagesHtmlSnapshot = inputController ? inputController.getImagesHTML() : imageContainer.innerHTML;
+    const hasScreenshotSnapshot = inputController
+      ? inputController.hasScreenshot()
+      : !!imageContainer.querySelector('img[alt="page-screenshot.png"]');
+    const queuedOptions = await buildQueuedSendOptions(singleOpts, {
+      baseText,
+      imagesHtml: imagesHtmlSnapshot,
+      hasImages: hasImagesInInput,
+      hasScreenshot: hasScreenshotSnapshot
+    });
+    const nextJob = normalizeConversationQueuedTask({
+      kind: 'append_user_message',
+      status: 'queued',
+      paused: false,
+      conversationId: currentConversationIdForSend,
+      conversationRevisionAtEnqueue: resolveConversationHistoryRevision(currentConversationIdForSend),
+      anchorMessageId: '',
+      targetAiMessageId: '',
+      payload: queuedOptions,
+      retryPolicy: buildDefaultConversationJobRetryPolicy('append_user_message')
+    });
+
+    clearInputs();
+    inputController?.focusToEnd?.();
+
+    const shouldForceQueue = hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation;
+    const result = await dispatchConversationJob(currentConversationQueueKey, nextJob, {
+      forceQueue: shouldForceQueue
+    });
+    if (result?.queued && typeof showNotification === 'function') {
+      const queueLength = getConversationSendQueue(currentConversationQueueKey)
+        .filter((task) => !isConversationJobTerminal(task)).length;
+      const waitingCount = Math.max(0, queueLength - 1);
+      showNotification({
+        message: waitingCount > 0
+          ? `已加入发送队列，前方还有 ${waitingCount} 条`
+          : '已加入发送队列，当前回复完成后自动发送',
+        type: 'info',
+        duration: 1800
+      });
+    }
+    return result;
   }
 
   // Message composition itself is delegated to composeMessages in message_composer.js.
@@ -8947,10 +9759,9 @@ export function createMessageSender(appContext) {
    * @param {{ strictTarget?: boolean }} [options] - strictTarget=true 时仅中止精确命中的请求，不回退到“最近一次请求”
    */
   function abortCurrentRequest(target, options = {}) {
-    if (!activeAttempts.size && !pendingRetryAttempts.size) return false;
+    if (!activeAttempts.size && !conversationSendQueues.size) return false;
 
     let abortedAny = false;
-    const canceledRetryQueueKeys = new Set();
     const strictTarget = !!(options && typeof options === 'object' && options.strictTarget);
     const { targetElement, normalizedTargetId } = resolveAbortTarget(target);
 
@@ -8962,12 +9773,31 @@ export function createMessageSender(appContext) {
         abortedAny = true;
       }
 
-      for (const retryTask of Array.from(pendingRetryAttempts.values())) {
-        if (!doesRetryTaskMatchAbortTarget(retryTask, normalizedTargetId)) continue;
-        const canceled = cancelPendingRetryTask(retryTask, 'retry canceled by manual abort');
-        abortedAny = canceled || abortedAny;
-        if (canceled) {
-          canceledRetryQueueKeys.add(resolveConversationQueueKey(retryTask.boundConversationId));
+      for (const [queueKey, queue] of conversationSendQueues.entries()) {
+        if (!Array.isArray(queue)) continue;
+        let queueChanged = false;
+        queue.forEach((task, index) => {
+          const normalizedTask = normalizeConversationQueuedTask(task);
+          if (normalizedTask.status !== 'delayed_retry') return;
+          if (!doesQueuedTaskMatchAbortTarget(normalizedTask, normalizedTargetId)) return;
+          queue[index] = normalizeConversationQueuedTask({
+            ...normalizedTask,
+            status: 'canceled',
+            paused: false,
+            availableAt: null,
+            staleReason: 'aborted'
+          });
+          queueChanged = true;
+          abortedAny = true;
+        });
+        if (queueChanged) {
+          while (queue.length > 0 && isConversationJobTerminal(queue[0])) {
+            queue.shift();
+          }
+          if (queue.length === 0) {
+            conversationSendQueues.delete(resolveConversationQueueKey(queueKey));
+          }
+          refreshConversationQueueState(queueKey);
         }
       }
 
@@ -8978,13 +9808,14 @@ export function createMessageSender(appContext) {
           try { lastAttempt.controller?.abort(); } catch (e) { console.error('中止当前请求失败:', e); }
           abortedAny = true;
         } else {
-          const lastRetryTask = Array.from(pendingRetryAttempts.values()).slice(-1)[0] || null;
-          if (lastRetryTask) {
-            const canceled = cancelPendingRetryTask(lastRetryTask, 'retry canceled by manual abort');
-            abortedAny = canceled || abortedAny;
-            if (canceled) {
-              canceledRetryQueueKeys.add(resolveConversationQueueKey(lastRetryTask.boundConversationId));
-            }
+          const allDelayedRetryJobs = Array.from(conversationSendQueues.entries())
+            .flatMap(([queueKey, queue]) => (Array.isArray(queue) ? queue.map((task) => ({ queueKey, task })) : []))
+            .map(({ queueKey, task }) => ({ queueKey, task: normalizeConversationQueuedTask(task) }))
+            .filter(({ task }) => task.status === 'delayed_retry');
+          const lastRetryJob = allDelayedRetryJobs[allDelayedRetryJobs.length - 1] || null;
+          if (lastRetryJob) {
+            removeConversationQueuedTask(lastRetryJob.queueKey, lastRetryJob.task.id);
+            abortedAny = true;
           }
         }
       }
@@ -8996,11 +9827,30 @@ export function createMessageSender(appContext) {
         abortedAny = true;
       }
 
-      for (const retryTask of Array.from(pendingRetryAttempts.values())) {
-        const canceled = cancelPendingRetryTask(retryTask, 'retry canceled by global abort');
-        abortedAny = canceled || abortedAny;
-        if (canceled) {
-          canceledRetryQueueKeys.add(resolveConversationQueueKey(retryTask.boundConversationId));
+      for (const [queueKey, queue] of conversationSendQueues.entries()) {
+        if (!Array.isArray(queue)) continue;
+        let queueChanged = false;
+        queue.forEach((task, index) => {
+          const normalizedTask = normalizeConversationQueuedTask(task);
+          if (normalizedTask.status !== 'delayed_retry') return;
+          queue[index] = normalizeConversationQueuedTask({
+            ...normalizedTask,
+            status: 'canceled',
+            paused: false,
+            availableAt: null,
+            staleReason: 'aborted'
+          });
+          queueChanged = true;
+          abortedAny = true;
+        });
+        if (queueChanged) {
+          while (queue.length > 0 && isConversationJobTerminal(queue[0])) {
+            queue.shift();
+          }
+          if (queue.length === 0) {
+            conversationSendQueues.delete(resolveConversationQueueKey(queueKey));
+          }
+          refreshConversationQueueState(queueKey);
         }
       }
 
@@ -9023,10 +9873,6 @@ export function createMessageSender(appContext) {
           console.error('中止后清理占位消息失败:', e);
         }
       }
-    }
-
-    for (const queueKey of canceledRetryQueueKeys) {
-      scheduleConversationQueueFlush(queueKey);
     }
 
     return abortedAny;
@@ -9104,6 +9950,9 @@ export function createMessageSender(appContext) {
     setQueueCurrentConversationMessages,
     setCurrentConversationId,
     getCurrentConversationId,
+    requestConversationHistoryEdit,
+    requestConversationMessageDeletion,
+    requestRegenerateMessage,
     getShouldAutoScroll,
     setShouldAutoScroll,
     getSlashCommandList,
