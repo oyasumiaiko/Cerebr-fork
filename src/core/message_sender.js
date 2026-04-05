@@ -23,7 +23,7 @@ import {
   resolvePendingSteerRestoreDisposition
 } from './conversation_pending_steer.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
-import { normalizeApiUsageMeta } from '../utils/api_footer_template.js';
+import { normalizeApiUsageMeta, normalizeApiTimingMeta } from '../utils/api_footer_template.js';
 import {
   normalizeResponsesPromptCacheKey,
   buildDefaultResponsesPromptCacheKey
@@ -4286,6 +4286,7 @@ export function createMessageSender(appContext) {
       apiDisplayName: '',
       apiModelId: '',
       apiUsage: null,
+      responseTiming: null,
       hasInlineImages: false,
       promptType: null,
       promptMeta: null,
@@ -7200,9 +7201,12 @@ export function createMessageSender(appContext) {
 
     const beginAttempt = () => {
       // 为当前请求创建独立的取消控制器与状态对象
+      const startedAt = Date.now();
       const attemptState = {
         id: `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         controller: new AbortController(),
+        startedAt,
+        firstVisibleOutputAtMs: null,
         manualAbort: false,
         finished: false,
         loadingMessage: null,
@@ -7240,7 +7244,7 @@ export function createMessageSender(appContext) {
         draft.activeTurn.attemptId = attemptState.id;
         draft.activeTurn.jobId = attemptState.conversationJobId;
         draft.activeTurn.status = 'streaming';
-        draft.activeTurn.startedAt = Date.now();
+        draft.activeTurn.startedAt = startedAt;
         draft.activeTurn.boundAssistantMessageId = null;
         draft.activeTurn.writeMode = normalizedTargetAiMessageId ? 'replace' : 'append';
         draft.activeTurn.conversationRevisionAtStart = attemptState.conversationRevisionAtStart;
@@ -7529,6 +7533,8 @@ export function createMessageSender(appContext) {
             // - preserveReadingPosition 用于总开关，避免普通发送/普通更新带来额外开销。
             attempt.preserveReadingPosition = true;
             attempt.preserveTargetMessageId = normalizedTargetAiMessageId;
+            resetAssistantResponseMetaForAttempt(normalizedTargetAiMessageId, el);
+            clearBoundSignatureForRegenerate(normalizedTargetAiMessageId, attempt);
             if (el) {
               // 若该消息曾进入错误态（红字/重试按钮），开始重试前先清理，避免视觉状态遗留。
               try {
@@ -8595,6 +8601,83 @@ export function createMessageSender(appContext) {
       }
     }
 
+    function applyTimingMetaToMessage(messageId, rawTiming, messageDiv) {
+      try {
+        if (!messageId) return;
+        const timingMeta = normalizeApiTimingMeta(rawTiming);
+        if (!timingMeta) return;
+        const node = resolveAttemptAiNode(attemptState, messageId);
+        if (node) {
+          node.responseTiming = timingMeta;
+        }
+        const safeMessageId = escapeMessageIdForSelector(messageId);
+        const selector = safeMessageId ? `.message[data-message-id="${safeMessageId}"]` : '';
+        const fallbackEl = selector
+          ? (chatContainer.querySelector(selector)
+            || (threadContext?.container ? threadContext.container.querySelector(selector) : null))
+          : null;
+        syncAttemptAssistantView(messageId, {
+          attemptState,
+          node,
+          fallbackElement: messageDiv || fallbackEl || null
+        });
+      } catch (e) {
+        console.warn('记录/渲染响应时序失败:', e);
+      }
+    }
+
+    function buildAttemptTimingMeta(overrides = {}) {
+      const overrideObject = (overrides && typeof overrides === 'object') ? overrides : {};
+      const startedAtMs = Number.isFinite(Number(overrideObject.startedAtMs))
+        ? Number(overrideObject.startedAtMs)
+        : (Number.isFinite(Number(attemptState?.startedAt)) ? Number(attemptState.startedAt) : null);
+      const firstVisibleOutputAtMs = Number.isFinite(Number(overrideObject.firstVisibleOutputAtMs))
+        ? Number(overrideObject.firstVisibleOutputAtMs)
+        : (Number.isFinite(Number(attemptState?.firstVisibleOutputAtMs)) ? Number(attemptState.firstVisibleOutputAtMs) : null);
+      const completedAtMs = Number.isFinite(Number(overrideObject.completedAtMs))
+        ? Number(overrideObject.completedAtMs)
+        : null;
+      const generationDurationMs = (startedAtMs != null && completedAtMs != null)
+        ? Math.max(0, completedAtMs - startedAtMs)
+        : null;
+      const outputDurationMs = (firstVisibleOutputAtMs != null && completedAtMs != null && completedAtMs >= firstVisibleOutputAtMs)
+        ? Math.max(0, completedAtMs - firstVisibleOutputAtMs)
+        : null;
+      const fallbackThinkingDurationMs = Number.isFinite(Number(overrideObject.thinkingDurationMs))
+        ? Number(overrideObject.thinkingDurationMs)
+        : null;
+      const thinkingDurationMs = (startedAtMs != null && firstVisibleOutputAtMs != null && firstVisibleOutputAtMs >= startedAtMs)
+        ? Math.max(0, firstVisibleOutputAtMs - startedAtMs)
+        : fallbackThinkingDurationMs;
+      return {
+        startedAtMs,
+        firstVisibleOutputAtMs,
+        completedAtMs,
+        generationDurationMs,
+        thinkingDurationMs,
+        outputDurationMs
+      };
+    }
+
+    function resetAssistantResponseMetaForAttempt(messageId, messageDiv) {
+      try {
+        if (!messageId) return;
+        const startedAtMs = Number.isFinite(Number(attemptState?.startedAt))
+          ? Number(attemptState.startedAt)
+          : Date.now();
+        const node = resolveAttemptAiNode(attemptState, messageId);
+        if (node) {
+          node.timestamp = startedAtMs;
+          node.apiUsage = null;
+          node.responseTiming = buildAttemptTimingMeta({ startedAtMs });
+          delete node.response_activity_duration_ms;
+        }
+        applyTimingMetaToMessage(messageId, { startedAtMs }, messageDiv);
+      } catch (e) {
+        console.warn('重置响应时序元信息失败:', e);
+      }
+    }
+
     function promoteLoadingMessageToAi({ answer, thoughts }) {
       if (!loadingMessage || !loadingMessage.parentNode) return null;
       const shouldRenderDom = !!getUiContainer();
@@ -8621,6 +8704,9 @@ export function createMessageSender(appContext) {
         // 把线程关联字段一次性打到新节点，保持树结构与 UI 渲染来源一致。
         Object.assign(node, threadHistoryPatch);
       }
+      if (Number.isFinite(Number(attemptState?.startedAt))) {
+        node.timestamp = Number(attemptState.startedAt);
+      }
       bindAttemptAiMessage(attemptState, node.id, node);
       loadingMessage.setAttribute('data-message-id', node.id);
       loadingMessage.classList.remove('loading-message');
@@ -8635,6 +8721,7 @@ export function createMessageSender(appContext) {
         thoughtsRaw: thoughts || '',
         suppressMissingNodeWarning: true
       });
+      resetAssistantResponseMetaForAttempt(node.id, loadingMessage);
       applyApiMetaToMessage(node.id, usedApiConfig, loadingMessage);
       updateThreadLastMessage(threadContext, node.id);
       return node.id;
@@ -8644,6 +8731,9 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
+      applyTimingMetaToMessage,
+      buildAttemptTimingMeta,
+      resetAssistantResponseMetaForAttempt,
       promoteLoadingMessageToAi
     };
   }
@@ -8679,6 +8769,9 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
+      applyTimingMetaToMessage,
+      buildAttemptTimingMeta,
+      resetAssistantResponseMetaForAttempt,
       promoteLoadingMessageToAi
     } = createResponseUiBindings({
       threadContext,
@@ -8978,6 +9071,7 @@ export function createMessageSender(appContext) {
           if (createdNode) {
             currentAiMessageId = createdNode.id;
             bindAttemptAiMessage(attemptState, currentAiMessageId, createdNode);
+            resetAssistantResponseMetaForAttempt(currentAiMessageId, null);
             if (isOpenAIResponsesStream) {
               applyResponsesMetadataToNode(createdNode, {
                 timeline: latestResponsesActivityTimeline,
@@ -9012,6 +9106,7 @@ export function createMessageSender(appContext) {
           if (newAiMessageDiv) {
             currentAiMessageId = newAiMessageDiv.getAttribute('data-message-id');
             bindAttemptAiMessage(attemptState, currentAiMessageId);
+            resetAssistantResponseMetaForAttempt(currentAiMessageId, newAiMessageDiv);
             if (isOpenAIResponsesStream) {
               const createdNode = resolveAttemptAiNode(attemptState, currentAiMessageId);
               if (createdNode) {
@@ -9049,6 +9144,7 @@ export function createMessageSender(appContext) {
     };
 
     const applyStreamingRenderTransition = ({ hasDelta }) => {
+      const hadEverShownAnswerContent = !!streamRenderState.hasEverShownAnswerContent;
       const transition = planStreamingRenderTransition({
         hasDelta,
         hasStartedResponse: streamRenderState.hasStartedResponse,
@@ -9059,6 +9155,24 @@ export function createMessageSender(appContext) {
 
       streamRenderState.hasStartedResponse = transition.nextState.hasStartedResponse;
       streamRenderState.hasEverShownAnswerContent = transition.nextState.hasEverShownAnswerContent;
+
+      const shouldCaptureFirstVisibleOutput = !hadEverShownAnswerContent
+        && transition.nextState.hasEverShownAnswerContent
+        && typeof aiResponse === 'string'
+        && aiResponse.trim() !== '';
+      if (shouldCaptureFirstVisibleOutput && attemptState) {
+        const now = Date.now();
+        if (!Number.isFinite(Number(attemptState.firstVisibleOutputAtMs))) {
+          attemptState.firstVisibleOutputAtMs = now;
+        }
+        if (currentAiMessageId) {
+          applyTimingMetaToMessage(
+            currentAiMessageId,
+            buildAttemptTimingMeta({ firstVisibleOutputAtMs: attemptState.firstVisibleOutputAtMs }),
+            null
+          );
+        }
+      }
 
       if (transition.action === 'noop') {
         return;
@@ -9118,6 +9232,18 @@ export function createMessageSender(appContext) {
 		    // - Gemini：Thought Signature（part-level thought_signature）
 		    // - OpenAI Chat Completions 兼容：thoughtSignature（message-level thoughtSignature + reasoning_content/tool_calls）
         // - Responses API：reasoning summary / output item 工具调用时间线
+      if (currentAiMessageId) {
+        const nodeForTiming = resolveAttemptAiNode(attemptState, currentAiMessageId);
+        const completedAtMs = Date.now();
+        const thinkingDurationMs = Number.isFinite(Number(nodeForTiming?.response_activity_duration_ms))
+          ? Number(nodeForTiming.response_activity_duration_ms)
+          : undefined;
+        applyTimingMetaToMessage(
+          currentAiMessageId,
+          buildAttemptTimingMeta({ completedAtMs, thinkingDurationMs }),
+          null
+        );
+      }
       if (currentAiMessageId && latestOpenAIUsage) {
         applyUsageMetaToMessage(currentAiMessageId, latestOpenAIUsage);
       }
@@ -9829,6 +9955,9 @@ export function createMessageSender(appContext) {
       getUiContainer,
       applyApiMetaToMessage,
       applyUsageMetaToMessage,
+      applyTimingMetaToMessage,
+      buildAttemptTimingMeta,
+      resetAssistantResponseMetaForAttempt,
       promoteLoadingMessageToAi
     } = createResponseUiBindings({
       threadContext,
@@ -9881,6 +10010,26 @@ export function createMessageSender(appContext) {
     const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
     const isResponsesApi = !isGeminiApi
       && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
+    const markNonStreamCompletion = (messageId, messageDiv = null) => {
+      if (!messageId) return;
+      const completedAtMs = Date.now();
+      if (!Number.isFinite(Number(attemptState?.firstVisibleOutputAtMs))) {
+        attemptState.firstVisibleOutputAtMs = completedAtMs;
+      }
+      const node = resolveAttemptAiNode(attemptState, messageId);
+      const thinkingDurationMs = Number.isFinite(Number(node?.response_activity_duration_ms))
+        ? Number(node.response_activity_duration_ms)
+        : undefined;
+      applyTimingMetaToMessage(
+        messageId,
+        buildAttemptTimingMeta({
+          completedAtMs,
+          firstVisibleOutputAtMs: attemptState.firstVisibleOutputAtMs,
+          thinkingDurationMs
+        }),
+        messageDiv
+      );
+    };
     const finalizeNonStreamResult = () => {
       if (isResponsesApi && attemptState) {
         syncAttemptResponsesRuntimeState(attemptState, {
@@ -10106,6 +10255,7 @@ export function createMessageSender(appContext) {
             clearBoundSignatureForRegenerate(existingMessageId, attemptState);
             applyApiMetaToMessage(existingMessageId, usedApiConfig, existingEl);
             applyUsageMetaToMessage(existingMessageId, responseUsageMeta, existingEl);
+            markNonStreamCompletion(existingMessageId, existingEl);
             // 在历史节点上记录推理签名，并刷新 footer 标记
             if (thoughtSignature) {
               try {
@@ -10175,6 +10325,7 @@ export function createMessageSender(appContext) {
       try {
         const node = resolveAttemptAiNode(attemptState, promotedId);
         applyUsageMetaToMessage(promotedId, responseUsageMeta, loadingMessage);
+        markNonStreamCompletion(promotedId, loadingMessage);
         if (node && thoughtSignature) {
           node.thoughtSignature = thoughtSignature;
           if (thoughtSignatureSource) node.thoughtSignatureSource = thoughtSignatureSource;
@@ -10230,8 +10381,10 @@ export function createMessageSender(appContext) {
         const messageId = createdNode.id;
         // 绑定本次 AI 消息到 attempt，便于按消息粒度中止/清理
         bindAttemptAiMessage(attemptState, messageId, createdNode);
+        resetAssistantResponseMetaForAttempt(messageId, null);
         applyApiMetaToMessage(messageId, usedApiConfig);
         applyUsageMetaToMessage(messageId, responseUsageMeta);
+        markNonStreamCompletion(messageId, null);
         updateThreadLastMessage(threadContext, messageId);
         if (thoughtSignature) {
           try {
@@ -10293,13 +10446,15 @@ export function createMessageSender(appContext) {
       null,
       threadOptions
     );
-    if (newAiMessageDiv) {
-      const messageId = newAiMessageDiv.getAttribute('data-message-id');
-      // 绑定本次 AI 消息到 attempt，便于按消息粒度中止/清理
-      bindAttemptAiMessage(attemptState, messageId);
-      applyApiMetaToMessage(messageId, usedApiConfig, newAiMessageDiv);
-      applyUsageMetaToMessage(messageId, responseUsageMeta, newAiMessageDiv);
-      updateThreadLastMessage(threadContext, messageId);
+      if (newAiMessageDiv) {
+        const messageId = newAiMessageDiv.getAttribute('data-message-id');
+        // 绑定本次 AI 消息到 attempt，便于按消息粒度中止/清理
+        bindAttemptAiMessage(attemptState, messageId);
+        resetAssistantResponseMetaForAttempt(messageId, newAiMessageDiv);
+        applyApiMetaToMessage(messageId, usedApiConfig, newAiMessageDiv);
+        applyUsageMetaToMessage(messageId, responseUsageMeta, newAiMessageDiv);
+        markNonStreamCompletion(messageId, newAiMessageDiv);
+        updateThreadLastMessage(threadContext, messageId);
       // 在历史节点上记录推理签名，供后续多轮对话回传使用，并刷新 footer 标记
       if (thoughtSignature) {
         try {

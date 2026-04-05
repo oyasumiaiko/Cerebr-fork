@@ -29,7 +29,8 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {string|null} [apiUuid] - 使用的 API 配置 UUID（配置的 id），用于回溯显示 (可选)
  * @property {string} [apiDisplayName] - 创建消息时记录的 API 显示名称快照 (可选)
  * @property {string} [apiModelId] - 创建消息时记录的模型名（modelName）快照 (可选)
- * @property {{promptTokens:number|null,completionTokens:number|null,totalTokens:number|null}|null} [apiUsage] - API 返回的 token 用量元数据（可选）
+ * @property {{promptTokens:number|null,completionTokens:number|null,totalTokens:number|null,cachedInputTokens?:number|null,reasoningTokens?:number|null}|null} [apiUsage] - API 返回的 token 用量元数据（可选）
+ * @property {{startedAtMs:number|null,firstVisibleOutputAtMs:number|null,completedAtMs:number|null,generationDurationMs:number|null,thinkingDurationMs:number|null,outputDurationMs:number|null}|null} [responseTiming] - AI 响应时序元数据（可选）
  * @property {boolean} [hasInlineImages] - 是否包含内联图片 (可选)
  * @property {string|null} [promptType] - 发送时记录的“指令/提示词类型”（如 summary/selection/query 等，可选）
  * @property {Object|null} [promptMeta] - 与 promptType 配套的元信息（例如 { selectionText }，可选）
@@ -86,6 +87,7 @@ function createMessageNode(role, content, parentId = null) {
     apiDisplayName: '',
     apiModelId: '',
     apiUsage: null,
+    responseTiming: null,
     hasInlineImages: false,
     // --- 指令元信息（用于“对话标题/摘要”等需要知道指令类型的场景）---
     // 设计说明：

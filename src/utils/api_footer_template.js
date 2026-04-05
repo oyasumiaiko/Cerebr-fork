@@ -6,7 +6,7 @@
  */
 
 export const DEFAULT_AI_FOOTER_TEMPLATE = '{{display_label}}';
-export const DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE = '{{tooltip_api_line}}\n{{tooltip_signature_line}}\n{{tooltip_usage_lines}}';
+export const DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE = '{{tooltip_api_line}}\n{{tooltip_signature_line}}\n{{tooltip_usage_lines}}{{#tooltip_usage_detail_lines}}\n{{tooltip_usage_detail_lines}}{{/tooltip_usage_detail_lines}}{{#tooltip_timing_lines}}\n{{tooltip_timing_lines}}{{/tooltip_timing_lines}}';
 
 // AI footer 可配置模板变量（去重后的“主变量”清单，供设置界面展示/复制）。
 export const AI_FOOTER_TEMPLATE_VARIABLES = Object.freeze([
@@ -28,12 +28,29 @@ export const AI_FOOTER_TEMPLATE_VARIABLES = Object.freeze([
   { key: 'total_tokens_k', group: 'Tokens', description: '总 tokens（k/m/b）' },
   { key: 'usage_line', group: 'Tokens', description: 'in/out/total 汇总（千分位）' },
   { key: 'usage_line_k', group: 'Tokens', description: 'in/out/total 汇总（k/m/b）' },
+  { key: 'cached_input_tokens', group: 'Tokens', description: '缓存命中的输入 tokens（原始数值）' },
+  { key: 'cached_input_tokens_k', group: 'Tokens', description: '缓存命中的输入 tokens（k/m/b）' },
+  { key: 'reasoning_tokens', group: 'Tokens', description: '推理/思考输出 tokens（原始数值）' },
+  { key: 'reasoning_tokens_k', group: 'Tokens', description: '推理/思考输出 tokens（k/m/b）' },
   { key: 'tooltip_api_line', group: 'Tooltip 快捷行', description: 'API uuid/displayName/model 的整行文案' },
   { key: 'tooltip_signature_line', group: 'Tooltip 快捷行', description: '有签名时输出 thought_signature: stored' },
   { key: 'tooltip_usage_lines', group: 'Tooltip 快捷行', description: '按可用项拼接的 token 多行（prompt/completion/total）' },
+  { key: 'tooltip_usage_detail_lines', group: 'Tooltip 快捷行', description: '按可用项拼接的缓存/推理 token 多行' },
   { key: 'tooltip_prompt_tokens_line', group: 'Tooltip 快捷行', description: 'prompt_tokens 行（无值为空）' },
   { key: 'tooltip_completion_tokens_line', group: 'Tooltip 快捷行', description: 'completion_tokens 行（无值为空）' },
   { key: 'tooltip_total_tokens_line', group: 'Tooltip 快捷行', description: 'total_tokens 行（无值为空）' },
+  { key: 'tooltip_cached_input_tokens_line', group: 'Tooltip 快捷行', description: 'cached_input_tokens 行（无值为空）' },
+  { key: 'tooltip_reasoning_tokens_line', group: 'Tooltip 快捷行', description: 'reasoning_tokens 行（无值为空）' },
+  { key: 'generation_duration_ms', group: '时长', description: '本次回复总耗时（毫秒）' },
+  { key: 'generation_duration', group: '时长', description: '本次回复总耗时（格式化）' },
+  { key: 'thinking_duration_ms', group: '时长', description: '思考/工具阶段耗时（毫秒）' },
+  { key: 'thinking_duration', group: '时长', description: '思考/工具阶段耗时（格式化）' },
+  { key: 'output_duration_ms', group: '时长', description: '开始输出可见正文后的耗时（毫秒）' },
+  { key: 'output_duration', group: '时长', description: '开始输出可见正文后的耗时（格式化）' },
+  { key: 'tooltip_generation_duration_line', group: 'Tooltip 快捷行', description: 'generation_duration 行（无值为空）' },
+  { key: 'tooltip_thinking_duration_line', group: 'Tooltip 快捷行', description: 'thinking_duration 行（无值为空）' },
+  { key: 'tooltip_output_duration_line', group: 'Tooltip 快捷行', description: 'output_duration 行（无值为空）' },
+  { key: 'tooltip_timing_lines', group: 'Tooltip 快捷行', description: '按可用项拼接的时长多行' },
   { key: 'timestamp', group: '时间', description: '消息时间戳（毫秒）' },
   { key: 'time', group: '时间', description: '时间（HH:mm）' },
   { key: 'date', group: '时间', description: '智能日期（非本日显示 M/D，非本年显示 YYYY/M/D）' },
@@ -82,6 +99,28 @@ function formatTokenCompact(value) {
     .replace(/(\.\d*?)0+$/g, '$1')
     .replace(/\.$/g, '');
   return `${text}${unit.suffix}`;
+}
+
+function formatDurationCompact(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return '';
+  const ms = Math.max(0, Math.round(numeric));
+  if (ms < 1000) return `${ms}毫秒`;
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/(\.\d*?)0+$/g, '$1').replace(/\.$/g, '')}秒`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds - (minutes * 60);
+  if (minutes < 60) {
+    const remainText = remainSeconds > 0
+      ? remainSeconds.toFixed(remainSeconds >= 10 ? 0 : 1).replace(/(\.\d*?)0+$/g, '$1').replace(/\.$/g, '')
+      : '0';
+    return `${minutes}分${remainText}秒`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return `${hours}时${remainMinutes}分`;
 }
 
 function buildUsageLine(usage, formatter) {
@@ -175,14 +214,77 @@ function resolveMatchedConfig(nodeLike, allConfigs) {
  */
 export function normalizeApiUsageMeta(rawUsage) {
   if (!rawUsage || typeof rawUsage !== 'object') return null;
-  const promptTokens = normalizeTokenValue(rawUsage.prompt_tokens ?? rawUsage.promptTokens);
-  const completionTokens = normalizeTokenValue(rawUsage.completion_tokens ?? rawUsage.completionTokens);
+  const promptTokens = normalizeTokenValue(
+    rawUsage.prompt_tokens
+      ?? rawUsage.promptTokens
+      ?? rawUsage.input_tokens
+      ?? rawUsage.inputTokens
+  );
+  const completionTokens = normalizeTokenValue(
+    rawUsage.completion_tokens
+      ?? rawUsage.completionTokens
+      ?? rawUsage.output_tokens
+      ?? rawUsage.outputTokens
+  );
   const totalTokens = normalizeTokenValue(rawUsage.total_tokens ?? rawUsage.totalTokens);
-  if (promptTokens == null && completionTokens == null && totalTokens == null) return null;
+  const cachedInputTokens = normalizeTokenValue(
+    rawUsage.cached_input_tokens
+      ?? rawUsage.cachedInputTokens
+      ?? rawUsage.input_tokens_details?.cached_tokens
+      ?? rawUsage.inputTokensDetails?.cachedTokens
+  );
+  const reasoningTokens = normalizeTokenValue(
+    rawUsage.reasoning_tokens
+      ?? rawUsage.reasoningTokens
+      ?? rawUsage.output_tokens_details?.reasoning_tokens
+      ?? rawUsage.outputTokensDetails?.reasoningTokens
+  );
+  if (
+    promptTokens == null
+    && completionTokens == null
+    && totalTokens == null
+    && cachedInputTokens == null
+    && reasoningTokens == null
+  ) return null;
   return {
     promptTokens,
     completionTokens,
-    totalTokens
+    totalTokens,
+    cachedInputTokens,
+    reasoningTokens
+  };
+}
+
+/**
+ * 统一归一化响应时序元信息。
+ * @param {any} rawTiming
+ * @returns {{startedAtMs:number|null,firstVisibleOutputAtMs:number|null,completedAtMs:number|null,generationDurationMs:number|null,thinkingDurationMs:number|null,outputDurationMs:number|null}|null}
+ */
+export function normalizeApiTimingMeta(rawTiming) {
+  if (!rawTiming || typeof rawTiming !== 'object') return null;
+  const startedAtMs = normalizeTimestampMs(rawTiming.started_at_ms ?? rawTiming.startedAtMs);
+  const firstVisibleOutputAtMs = normalizeTimestampMs(rawTiming.first_visible_output_at_ms ?? rawTiming.firstVisibleOutputAtMs);
+  const completedAtMs = normalizeTimestampMs(rawTiming.completed_at_ms ?? rawTiming.completedAtMs);
+  const generationDurationMs = normalizeTokenValue(rawTiming.generation_duration_ms ?? rawTiming.generationDurationMs);
+  const thinkingDurationMs = normalizeTokenValue(rawTiming.thinking_duration_ms ?? rawTiming.thinkingDurationMs);
+  const outputDurationMs = normalizeTokenValue(rawTiming.output_duration_ms ?? rawTiming.outputDurationMs);
+  if (
+    startedAtMs == null
+    && firstVisibleOutputAtMs == null
+    && completedAtMs == null
+    && generationDurationMs == null
+    && thinkingDurationMs == null
+    && outputDurationMs == null
+  ) {
+    return null;
+  }
+  return {
+    startedAtMs,
+    firstVisibleOutputAtMs,
+    completedAtMs,
+    generationDurationMs,
+    thinkingDurationMs,
+    outputDurationMs
   };
 }
 
@@ -198,16 +300,27 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
   const apiUuid = toTrimmedText(nodeLike?.apiUuid);
   const hasThoughtSignature = !!nodeLike?.thoughtSignature;
   const usage = normalizeApiUsageMeta(nodeLike?.apiUsage);
+  const timing = normalizeApiTimingMeta(nodeLike?.responseTiming);
   const timestampMs = normalizeTimestampMs(nodeLike?.timestamp);
   const date = (timestampMs != null) ? new Date(timestampMs) : null;
   const promptTokens = usage?.promptTokens ?? '';
   const completionTokens = usage?.completionTokens ?? '';
   const totalTokens = usage?.totalTokens ?? '';
+  const cachedInputTokens = usage?.cachedInputTokens ?? '';
+  const reasoningTokens = usage?.reasoningTokens ?? '';
   const promptTokensK = formatTokenCompact(usage?.promptTokens);
   const completionTokensK = formatTokenCompact(usage?.completionTokens);
   const totalTokensK = formatTokenCompact(usage?.totalTokens);
+  const cachedInputTokensK = formatTokenCompact(usage?.cachedInputTokens);
+  const reasoningTokensK = formatTokenCompact(usage?.reasoningTokens);
   const usageLine = buildUsageLine(usage, value => formatTokenWithThousands(value));
   const usageLineK = buildUsageLine(usage, value => formatTokenCompact(value));
+  const thinkingDurationMs = normalizeTokenValue(timing?.thinkingDurationMs ?? nodeLike?.response_activity_duration_ms);
+  const outputDurationMs = normalizeTokenValue(timing?.outputDurationMs);
+  const generationDurationMs = normalizeTokenValue(timing?.generationDurationMs);
+  const thinkingDuration = formatDurationCompact(thinkingDurationMs);
+  const outputDuration = formatDurationCompact(outputDurationMs);
+  const generationDuration = formatDurationCompact(generationDurationMs);
   const timeLabel = formatTimeHhMm(date);
   const dateLabel = formatSmartDateLabel(date);
   const dateTimeLabel = dateLabel ? `${dateLabel} ${timeLabel}`.trim() : timeLabel;
@@ -217,10 +330,24 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
   const tooltipPromptTokensLine = (usage?.promptTokens != null) ? `prompt_tokens: ${usage.promptTokens}` : '';
   const tooltipCompletionTokensLine = (usage?.completionTokens != null) ? `completion_tokens: ${usage.completionTokens}` : '';
   const tooltipTotalTokensLine = (usage?.totalTokens != null) ? `total_tokens: ${usage.totalTokens}` : '';
+  const tooltipCachedInputTokensLine = (usage?.cachedInputTokens != null) ? `cached_input_tokens: ${usage.cachedInputTokens}` : '';
+  const tooltipReasoningTokensLine = (usage?.reasoningTokens != null) ? `reasoning_tokens: ${usage.reasoningTokens}` : '';
   const tooltipUsageLines = [
     tooltipPromptTokensLine,
     tooltipCompletionTokensLine,
     tooltipTotalTokensLine
+  ].filter(Boolean).join('\n');
+  const tooltipUsageDetailLines = [
+    tooltipCachedInputTokensLine,
+    tooltipReasoningTokensLine
+  ].filter(Boolean).join('\n');
+  const tooltipGenerationDurationLine = generationDuration ? `generation_duration: ${generationDuration}` : '';
+  const tooltipThinkingDurationLine = thinkingDuration ? `thinking_duration: ${thinkingDuration}` : '';
+  const tooltipOutputDurationLine = outputDuration ? `output_duration: ${outputDuration}` : '';
+  const tooltipTimingLines = [
+    tooltipGenerationDurationLine,
+    tooltipThinkingDurationLine,
+    tooltipOutputDurationLine
   ].filter(Boolean).join('\n');
 
   const displayLabel = hasThoughtSignature
@@ -252,6 +379,10 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
     input_tokens_k: promptTokensK,
     output_tokens_k: completionTokensK,
     total_tokens_k: totalTokensK,
+    cached_input_tokens: cachedInputTokens,
+    cached_input_tokens_k: cachedInputTokensK,
+    reasoning_tokens: reasoningTokens,
+    reasoning_tokens_k: reasoningTokensK,
     prompt_tokens_k: promptTokensK,
     completion_tokens_k: completionTokensK,
     usage_line: usageLine,
@@ -259,9 +390,22 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
     tooltip_api_line: tooltipApiLine,
     tooltip_signature_line: tooltipSignatureLine,
     tooltip_usage_lines: tooltipUsageLines,
+    tooltip_usage_detail_lines: tooltipUsageDetailLines,
     tooltip_prompt_tokens_line: tooltipPromptTokensLine,
     tooltip_completion_tokens_line: tooltipCompletionTokensLine,
     tooltip_total_tokens_line: tooltipTotalTokensLine,
+    tooltip_cached_input_tokens_line: tooltipCachedInputTokensLine,
+    tooltip_reasoning_tokens_line: tooltipReasoningTokensLine,
+    generation_duration_ms: generationDurationMs ?? '',
+    generation_duration: generationDuration,
+    thinking_duration_ms: thinkingDurationMs ?? '',
+    thinking_duration: thinkingDuration,
+    output_duration_ms: outputDurationMs ?? '',
+    output_duration: outputDuration,
+    tooltip_generation_duration_line: tooltipGenerationDurationLine,
+    tooltip_thinking_duration_line: tooltipThinkingDurationLine,
+    tooltip_output_duration_line: tooltipOutputDurationLine,
+    tooltip_timing_lines: tooltipTimingLines,
     timestamp: timestampMs != null ? String(timestampMs) : '',
     time: timeLabel,
     date: dateLabel,
