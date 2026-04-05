@@ -33,8 +33,10 @@ import {
   RESPONSES_TOOL_OUTPUT_MAX_BYTES,
   stringifyResponsesToolOutputValue
 } from '../utils/responses_tool_output.js';
+import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
+const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 
 /**
  * 创建消息发送器
@@ -5865,84 +5867,11 @@ export function createMessageSender(appContext) {
     return base ? `${base}\n\n${text}` : text;
   }
 
-  /**
-   * 构造要直接拼接到“当前用户消息”末尾的网页内容文本。
-   *
-   * 说明：
-   * - 用户手写要求/提示词继续留在 system / instructions 层；
-   * - 页面内容属于本轮问题的事实背景，这里直接附着在当前发送的 user 消息末尾；
-   * - 这样不会额外引入一条临时 contextual user message，避免破坏历史前缀稳定性。
-   *
-   * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
-   * @returns {string}
-   */
-  function buildPageContentUserSuffix(pageContent) {
-    if (!pageContent || typeof pageContent !== 'object') return '';
-    const title = (typeof pageContent.title === 'string') ? pageContent.title.trim() : '';
-    const url = (typeof pageContent.url === 'string') ? pageContent.url.trim() : '';
-    const content = (typeof pageContent.content === 'string') ? pageContent.content.trim() : '';
-    if (!title && !url && !content) return '';
-
-    const parts = ['当前网页内容：'];
-    if (title) parts.push(`标题：${title}`);
-    if (url) parts.push(`URL：${url}`);
-    if (content) parts.push(`内容：${content}`);
-    return `\n\n${parts.join('\n')}`;
-  }
-
-  /**
-   * 将网页内容直接拼接到“最后一条 user 消息”末尾。
-   * 支持纯文本与多模态数组内容，尽量保持原有非文本 part 顺序不变。
-   *
-   * @param {Array<Object>} messages
-   * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
-   * @returns {Array<Object>}
-   */
-  function appendPageContentToLatestUserMessage(messages, pageContent) {
-    const source = Array.isArray(messages) ? messages : [];
-    const suffix = buildPageContentUserSuffix(pageContent);
-    if (!suffix) {
-      return source;
-    }
-
-    const cloned = source.map((item) => cloneDataSafely(item));
-    for (let i = cloned.length - 1; i >= 0; i -= 1) {
-      const msg = cloned[i];
-      if (String(msg?.role || '').trim().toLowerCase() !== 'user') continue;
-
-      if (Array.isArray(msg.content)) {
-        let textPartIndex = -1;
-        for (let j = msg.content.length - 1; j >= 0; j -= 1) {
-          const part = msg.content[j];
-          if (part && part.type === 'text') {
-            textPartIndex = j;
-            break;
-          }
-        }
-
-        const nextContent = msg.content.map(part => cloneDataSafely(part));
-        if (textPartIndex >= 0) {
-          const part = nextContent[textPartIndex];
-          const baseText = (typeof part?.text === 'string') ? part.text : '';
-          nextContent[textPartIndex] = {
-            ...part,
-            text: `${baseText}${suffix}`
-          };
-        } else {
-          nextContent.push({ type: 'text', text: suffix.trimStart() });
-        }
-        cloned[i] = { ...msg, content: nextContent };
-        return cloned;
-      }
-
-      const baseText = (typeof msg.content === 'string') ? msg.content : '';
-      cloned[i] = {
-        ...msg,
-        content: `${baseText}${suffix}`
-      };
-      return cloned;
-    }
-    return source;
+  function buildCurrentPageMetaSnapshot() {
+    const url = typeof state?.pageInfo?.url === 'string' ? state.pageInfo.url.trim() : '';
+    const title = typeof state?.pageInfo?.title === 'string' ? state.pageInfo.title.trim() : '';
+    if (!url && !title) return null;
+    return { url, title };
   }
 
   /**
@@ -6158,9 +6087,49 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 构造给 Responses API 使用的 page_content_read 自定义函数工具定义。
+   *
+   * 这个工具的定位非常克制：
+   * - 只返回“当前网页 + 可访问 iframe”的预提取纯文本；
+   * - 文本会做逐行 trim 与空白折叠，更适合快速通读；
+   * - 不承诺 DOM 级结构、选择器级定位或属性提取；
+   * - 若模型需要结构化读取，请优先改用 js_runtime_execute。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesPageContentFunctionToolDefinition() {
+    return {
+      type: 'function',
+      name: RESPONSES_PAGE_CONTENT_TOOL_NAME,
+      description: [
+        '快速读取当前侧栏绑定网页标签页的预提取文本内容。',
+        '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
+        '这不是 DOM 结构化提取工具；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
+        '默认返回中间截断预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          skip_chars: {
+            type: ['integer', 'null'],
+            description: '可选。要跳过的字符数，用于读取指定偏移后的连续片段。省略时默认从头开始。'
+          },
+          max_chars: {
+            type: ['integer', 'null'],
+            description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认中间截断预览。'
+          }
+        },
+        required: ['skip_chars', 'max_chars']
+      }
+    };
+  }
+
+  /**
    * 返回当前这次发送应该暴露给 Responses API 的自定义函数工具列表。
    *
-   * 当前只开放 js_runtime_execute：
+   * 当前开放两个侧栏绑定网页工具：
    * - 仅在 Responses API 场景下注入；
    * - 独立页模式下不开放，因为没有稳定的目标网页标签页。
    *
@@ -6170,8 +6139,11 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     if (state?.isStandalone) return [];
-    if (typeof utils?.executeJsRuntime !== 'function') return [];
-    return [buildResponsesJsRuntimeFunctionToolDefinition()];
+    const tools = [buildResponsesPageContentFunctionToolDefinition()];
+    if (typeof utils?.executeJsRuntime === 'function') {
+      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition());
+    }
+    return tools;
   }
 
   /**
@@ -6520,6 +6492,29 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 执行 page_content_read 并返回稳定结果对象。
+   *
+   * 它读取的是当前页面“已抽取文本”的快速阅读视图：
+   * - 包含页面正文与可访问 iframe 文本；
+   * - 文本会做轻量归一化；
+   * - 不适合作 DOM 级结构化提取。
+   *
+   * @param {any} rawArgs
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesPageContentFunction(rawArgs) {
+    try {
+      const pageContent = await getPageContent();
+      return buildPageContentReadResult(pageContent, rawArgs);
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
    * 当前策略：
@@ -6562,6 +6557,8 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs);
+    } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
+      outputPayload = await executeResponsesPageContentFunction(parsedArgs);
     } else {
       outputPayload = {
         ok: false,
@@ -6978,7 +6975,7 @@ export function createMessageSender(appContext) {
    * @param {Object|string} [options.api] - API 选择参数：可为完整配置对象、配置 id/displayName/modelName、'selected'、或 {favoriteIndex}
    * @param {Object} [options.resolvedApiConfig] - 已解析好的 API 配置（优先于 api 参数，完全绕过内部选择策略）
    * @param {boolean} [options.forceSendFullHistory] - 是否强制发送完整历史
-   * @param {Object|null} [options.pageContentSnapshot] - 若提供则使用该网页内容快照，避免再次获取
+   * @param {Object|null} [options.pageContentSnapshot] - 若提供则作为轻量 pageMeta 快照写入历史节点（不再自动读取/注入网页正文）
    * @param {Array<Object>|null} [options.conversationSnapshot] - 若提供则使用该会话历史快照（数组 of nodes）构建消息
    * @param {boolean} [options.omitDefaultSystemPrompt] - 是否跳过“提示词设置”里的默认系统提示词
    * @returns {Promise<{ ok: true, apiConfig: Object } | { ok: false, error: Error, apiConfig: Object, retryHint: Object, retry: (delayMs?: number, override?: Object) => Promise<any> }>} 结果对象（供外部无状态重试）
@@ -7204,8 +7201,6 @@ export function createMessageSender(appContext) {
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
     let canUpdateExistingAiMessage = false;
-    let pageContentResponse = null;
-    let pageContentLength = 0;
     let conversationChain = null;
     let effectiveApiConfig = null;
 
@@ -7468,7 +7463,7 @@ export function createMessageSender(appContext) {
             historyPatch: preprocessHistoryPatch || null,
             meta: historyMeta,
             historyMessagesRef: attempt?.historyMessagesRef || null,
-            pageMeta: pageContentSnapshot || null
+            pageMeta: pageContentSnapshot || buildCurrentPageMetaSnapshot()
           });
         }
 
@@ -7595,69 +7590,6 @@ export function createMessageSender(appContext) {
         attempt.loadingMessage = null;
       }
 
-      // 如果不是临时模式，获取网页内容
-      if (!isTemporaryMode) {
-        if (pageContentSnapshot) {
-          pageContentResponse = pageContentSnapshot;
-        } else {
-          updateLoadingStatus(loadingMessage, '正在获取网页内容...', { stage: 'get_page_content' });
-          pageContentResponse = await getPageContent();
-        }
-        if (pageContentResponse) {
-          pageContentLength = (typeof pageContentResponse?.content === 'string')
-            ? pageContentResponse.content.length
-            : 0;
-          let didCalibrateFirstUserPageMeta = false;
-
-          // 兜底：为“首条用户消息”校准/补齐 pageMeta（固定会话来源页）
-          //
-          // 背景：
-          // - appendMessage 时会尝试从 state.pageInfo 冻结 {url,title} 到首条用户消息节点上；
-          // - 但 state.pageInfo 可能“滞后”于真实页面（例如切换网页后立即触发总结，URL_CHANGED 事件还没同步到 sidebar）；
-          // - 更可靠的依据是本次请求实际使用的 pageContentResponse（它来自 content script，对应实际被总结/发送的页面内容）；
-          // - 因此这里不仅要“补齐缺失”，还要允许在发现不一致时进行“校准覆盖”，避免新会话错绑到上一个对话的网页。
-          try {
-            if (!regenerateMode && (userMessageDiv || detachedUserMessageNode)) {
-              const userMessageId = userMessageDiv?.getAttribute?.('data-message-id')
-                || detachedUserMessageNode?.id
-                || '';
-              const node = userMessageId
-                ? resolveAttemptAiNode({ historyMessagesRef: attempt?.historyMessagesRef || [] }, userMessageId)
-                : null;
-              const isUser = !!(node && String(node.role || '').toLowerCase() === 'user');
-              if (isUser) {
-                const historyMessages = Array.isArray(attempt?.historyMessagesRef)
-                  ? attempt.historyMessagesRef
-                  : (chatHistoryManager.chatHistory.messages || []);
-                const hasOtherUserMessage = historyMessages.some(
-                  (m) => m && m.id !== node.id && String(m.role || '').toLowerCase() === 'user'
-                );
-                if (!hasOtherUserMessage) {
-                  const url = typeof pageContentResponse?.url === 'string' ? pageContentResponse.url.trim() : '';
-                  const title = typeof pageContentResponse?.title === 'string' ? pageContentResponse.title.trim() : '';
-                  if (url || title) {
-                    const prevUrl = typeof node.pageMeta?.url === 'string' ? node.pageMeta.url.trim() : '';
-                    const prevTitle = typeof node.pageMeta?.title === 'string' ? node.pageMeta.title.trim() : '';
-                    // 若与之前冻结的快照不一致，则以 pageContentResponse 为准进行校准（它对应“实际用于总结”的页面内容）
-                    if (prevUrl !== url || prevTitle !== title) {
-                      node.pageMeta = { url, title };
-                      didCalibrateFirstUserPageMeta = true;
-                    }
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            console.warn('补齐首条用户消息 pageMeta 失败（将回退为保存时读取 pageInfo）:', e);
-          }
-          if (didCalibrateFirstUserPageMeta && attempt) {
-            await persistAttemptConversationSnapshot(attempt, { force: true });
-          }
-        } else {
-          console.error('获取网页内容失败。');
-        }
-      }
-      
       // 更新加载状态：正在构建消息
       updateLoadingStatus(loadingMessage, '正在构建消息...', { stage: 'compose_messages' });
 
@@ -7697,7 +7629,7 @@ export function createMessageSender(appContext) {
       const messages = composeMessages({
         prompts: promptsConfig,
         injectedSystemMessages,
-        pageContent: pageContentResponse,
+        pageContent: null,
         imageContainsScreenshot: !!imageContainsScreenshot,
         omitDefaultSystemPrompt,
         currentPromptType,
@@ -7733,7 +7665,7 @@ export function createMessageSender(appContext) {
       const messagesAfterInjection = hasInjectedMessages
         ? applyInjectedMessages(preprocessedMessages, injectedMessages, { replaceLastUser: injectOnly })
         : preprocessedMessages;
-      const finalMessages = appendPageContentToLatestUserMessage(messagesAfterInjection, pageContentResponse);
+      const finalMessages = messagesAfterInjection;
       const latestUserOutboundContent = getLatestUserMessageContent(finalMessages);
 
       if (!regenerateMode && (userMessageDiv || detachedUserMessageNode)) {
@@ -7766,9 +7698,10 @@ export function createMessageSender(appContext) {
       let ephemeralResponsesInstructions = '';
 
       const shouldInjectJsRuntimeFrameContext = (
-        Array.isArray(getResponsesCustomFunctionTools(effectiveApiConfig))
-        && getResponsesCustomFunctionTools(effectiveApiConfig).length > 0
+        typeof utils?.executeJsRuntime === 'function'
         && typeof utils?.getJsRuntimeFrames === 'function'
+        && !state?.isStandalone
+        && isOpenAIResponsesApiConfig(effectiveApiConfig)
       );
       if (shouldInjectJsRuntimeFrameContext) {
         updateLoadingStatus(loadingMessage, '正在获取 JS Runtime frame 上下文...', { stage: 'get_js_runtime_frames' });
@@ -7781,19 +7714,16 @@ export function createMessageSender(appContext) {
 
       // 添加字数统计元素
       if (!regenerateMode) {
-        addContentLengthFooter(userMessageDiv, pageContentLength, config);
+        addContentLengthFooter(userMessageDiv, config);
       }
 
-      function addContentLengthFooter(userMessageDiv, pageContentLength, config) {
+      function addContentLengthFooter(userMessageDiv, config) {
         if (!userMessageDiv) return;
         
         // 创建字数统计元素
         const footer = document.createElement('div');
         footer.classList.add('content-length-footer');
-        if (pageContentLength > 0) {
-          footer.textContent = `↑ ${pageContentLength.toLocaleString()}`;
-        }
-        footer.textContent += ` ${config.modelName}`;
+        footer.textContent = `${config.modelName}`;
 
         // 添加到用户消息下方
         userMessageDiv.appendChild(footer);
@@ -7924,7 +7854,7 @@ export function createMessageSender(appContext) {
         messageId,
         targetAiMessageId: normalizedTargetAiMessageId,
         forceSendFullHistory,
-        pageContentSnapshot: pageContentResponse || pageContentSnapshot || null,
+        pageContentSnapshot: pageContentSnapshot || buildCurrentPageMetaSnapshot(),
         conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : conversationSnapshot,
         omitDefaultSystemPrompt,
         aspectRatioOverride,
@@ -8175,7 +8105,7 @@ export function createMessageSender(appContext) {
   /**
    * 为“排队中的待发送消息”冻结最小必要快照。
    *
-   * 为什么这里只冻结输入区与页面快照，而不冻结整段会话历史：
+   * 为什么这里只冻结输入区与轻量页面来源快照，而不冻结整段会话历史：
    * - 用户要求队列按 FIFO 串行发送，后一条应在前一条回复完成后再基于“最新会话状态”发出；
    * - 因此会话历史必须在真正执行时再读取，才能拿到前一条 AI 回复；
    * - 但输入区文本/图片若不提前冻结，就会在用户继续编辑时被覆盖，甚至误清掉当前草稿。
@@ -8215,7 +8145,7 @@ export function createMessageSender(appContext) {
     };
 
     if (!queuedOptions.pageContentSnapshot && !isTemporaryMode) {
-      queuedOptions.pageContentSnapshot = await getPageContent();
+      queuedOptions.pageContentSnapshot = buildCurrentPageMetaSnapshot();
     }
 
     return queuedOptions;

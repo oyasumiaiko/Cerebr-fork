@@ -135,9 +135,9 @@ export function composeMessages(args) {
   // 1) 系统消息：系统提示词 + 注入系统消息 + 截图提示
   //
   // 说明：
-  // - 网页内容不再混进 system 消息；
-  // - 发送链路会把页面内容直接拼接到“当前发送的用户消息”末尾；
-  // - 这样可以把“行为要求/提示词”和“事实性页面上下文”分层处理，避免网页内容继续伪装成 system 指令。
+  // - 网页内容不再默认混进 system / user 消息；
+  // - 若模型需要快速阅读抽取后的页面正文，应显式调用 `page_content_read` 工具；
+  // - 这样可以把“行为要求/提示词”和“按需读取的页面事实”分离，避免页面正文每轮都默认挤占上下文。
   let systemMessageContent = (omitDefaultSystemPrompt === true) ? '' : (prompts.system?.prompt || '');
   if (imageContainsScreenshot) {
     systemMessageContent += "\n用户附加了当前页面的屏幕截图";
