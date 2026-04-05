@@ -17,6 +17,11 @@ import {
   resolveReceivedResponseHandlingMode,
   planStreamingRenderTransition
 } from './response_flow_state.js';
+import {
+  splitPendingSteersByTurn,
+  buildRestoredQueueJobsFromPendingSteers,
+  resolvePendingSteerRestoreDisposition
+} from './conversation_pending_steer.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
 import { normalizeApiUsageMeta } from '../utils/api_footer_template.js';
 
@@ -222,6 +227,7 @@ export function createMessageSender(appContext) {
   let draftConversationQueueSerial = 0;
   let activeDraftConversationQueueKey = `__draft_queue_${draftConversationQueueSerial}`;
   let queuedConversationTaskSerial = 0;
+  let pendingConversationSteerSerial = 0;
   let activeQueuePreviewDragState = null;
   // 固定 API 失效提示的去重窗口，避免连续发送刷屏
   let lastInvalidApiLockNotice = { conversationId: '', at: 0 };
@@ -2229,6 +2235,11 @@ export function createMessageSender(appContext) {
     return `conversation_job_${Date.now()}_${queuedConversationTaskSerial}`;
   }
 
+  function createPendingConversationSteerId() {
+    pendingConversationSteerSerial += 1;
+    return `conversation_steer_${Date.now()}_${pendingConversationSteerSerial}`;
+  }
+
   function normalizeConversationQueuedTask(queuedTask) {
     const normalizedTask = (queuedTask && typeof queuedTask === 'object')
       ? queuedTask
@@ -2297,6 +2308,72 @@ export function createMessageSender(appContext) {
     }
 
     return normalizedTask;
+  }
+
+  function normalizePendingConversationSteer(rawSteer) {
+    const normalizedSteer = (rawSteer && typeof rawSteer === 'object')
+      ? rawSteer
+      : {};
+    if (!normalizedSteer.id) {
+      normalizedSteer.id = createPendingConversationSteerId();
+    }
+    normalizedSteer.createdAt = Number.isFinite(Number(normalizedSteer.createdAt))
+      ? Number(normalizedSteer.createdAt)
+      : Date.now();
+    normalizedSteer.payload = (normalizedSteer.payload && typeof normalizedSteer.payload === 'object')
+      ? normalizedSteer.payload
+      : {};
+    normalizedSteer.responseInputItem = (normalizedSteer.responseInputItem && typeof normalizedSteer.responseInputItem === 'object')
+      ? cloneDataSafely(normalizedSteer.responseInputItem)
+      : null;
+    normalizedSteer.textPreview = (typeof normalizedSteer.textPreview === 'string')
+      ? normalizedSteer.textPreview.trim()
+      : '';
+    normalizedSteer.rawText = (typeof normalizedSteer.rawText === 'string')
+      ? normalizedSteer.rawText
+      : '';
+    normalizedSteer.imageCount = Number.isFinite(Number(normalizedSteer.imageCount))
+      ? Math.max(0, Math.floor(Number(normalizedSteer.imageCount)))
+      : 0;
+    normalizedSteer.hasScreenshot = normalizedSteer.hasScreenshot === true;
+    normalizedSteer.targetTurnId = normalizeConversationId(normalizedSteer.targetTurnId || '');
+    normalizedSteer.targetTurnStartedAtMs = Number.isFinite(Number(normalizedSteer.targetTurnStartedAtMs))
+      ? Number(normalizedSteer.targetTurnStartedAtMs)
+      : null;
+    return normalizedSteer;
+  }
+
+  function buildResponsesUserMessageInputItemFromPayload(payload) {
+    const normalizedPayload = (payload && typeof payload === 'object') ? payload : {};
+    const text = (typeof normalizedPayload.originalMessageText === 'string')
+      ? normalizedPayload.originalMessageText
+      : '';
+    const images = extractQueuedInputImages(normalizedPayload.inputImagesHtmlSnapshot || '');
+    const contentParts = [];
+    images.forEach((image) => {
+      const imageUrl = (image.imageData || image.previewSrc || '').trim();
+      if (!imageUrl) return;
+      contentParts.push({
+        type: 'input_image',
+        image_url: imageUrl
+      });
+    });
+    if (text) {
+      contentParts.push({ type: 'input_text', text });
+    }
+    if (contentParts.length <= 0) return null;
+    if (contentParts.length === 1 && contentParts[0].type === 'input_text') {
+      return {
+        type: 'message',
+        role: 'user',
+        content: contentParts[0].text
+      };
+    }
+    return {
+      type: 'message',
+      role: 'user',
+      content: contentParts
+    };
   }
 
   function summarizePendingConversationMutation(queueKey) {
@@ -2578,8 +2655,7 @@ export function createMessageSender(appContext) {
       canceled: '已取消'
     };
     const staleReasonTextMap = {
-      history_mutated: '历史已修改',
-      steered: '已被转向'
+      history_mutated: '历史已修改'
     };
     const staleReasonText = staleReasonTextMap[normalizedTask.staleReason]
       || normalizedTask.staleReason
@@ -2606,6 +2682,20 @@ export function createMessageSender(appContext) {
       canDrag: normalizedTask.status === 'queued'
         || normalizedTask.status === 'paused'
         || normalizedTask.status === 'delayed_retry'
+    };
+  }
+
+  function buildPendingSteerPreview(pendingSteer) {
+    const normalizedSteer = normalizePendingConversationSteer(pendingSteer);
+    const text = (normalizedSteer.textPreview || '').trim();
+    const fallbackText = normalizedSteer.imageCount > 0
+      ? '（等待吸收的转向图片消息）'
+      : '（等待吸收的转向消息）';
+    return {
+      id: normalizedSteer.id,
+      text: text || fallbackText,
+      imageCount: normalizedSteer.imageCount,
+      hasScreenshot: normalizedSteer.hasScreenshot
     };
   }
 
@@ -2893,13 +2983,17 @@ export function createMessageSender(appContext) {
   function refreshCurrentConversationQueuedSendPreview() {
     const existingContainer = getConversationQueuedSendPreviewContainer();
     const activeQueueKey = getCurrentActiveConversationQueueKey();
-    const runtimeQueueSnapshot = conversationRuntimeStore?.getConversationRuntimeState?.(activeQueueKey)?.queue || null;
+    const runtimeSnapshot = conversationRuntimeStore?.getConversationRuntimeState?.(activeQueueKey) || null;
+    const runtimeQueueSnapshot = runtimeSnapshot?.queue || null;
     const queue = Array.isArray(runtimeQueueSnapshot?.jobs)
       ? runtimeQueueSnapshot.jobs.map((job) => normalizeConversationQueuedTask(job))
       : getConversationSendQueue(activeQueueKey);
     const pendingMutation = runtimeQueueSnapshot?.pendingMutation || summarizePendingConversationMutation(activeQueueKey);
+    const pendingSteers = Array.isArray(runtimeSnapshot?.steer?.pendingSteers)
+      ? runtimeSnapshot.steer.pendingSteers.map((steer) => buildPendingSteerPreview(steer))
+      : [];
 
-    if ((!Array.isArray(queue) || queue.length === 0) && !pendingMutation) {
+    if ((!Array.isArray(queue) || queue.length === 0) && !pendingMutation && pendingSteers.length === 0) {
       existingContainer?.remove();
       return;
     }
@@ -2919,6 +3013,17 @@ export function createMessageSender(appContext) {
       pendingNotice.textContent = pendingMutation.description || '当前生成结束后将应用历史修改';
       list.appendChild(pendingNotice);
     }
+
+    pendingSteers.forEach((steer, index) => {
+      const pendingSteerNotice = document.createElement('div');
+      pendingSteerNotice.className = 'conversation-send-queue-preview__pending-mutation';
+      const steerTags = [];
+      if (steer.hasScreenshot) steerTags.push('截图');
+      if (steer.imageCount > 0) steerTags.push(`${steer.imageCount} 图`);
+      const suffix = steerTags.length > 0 ? ` · ${steerTags.join(' · ')}` : '';
+      pendingSteerNotice.textContent = `转向 ${index + 1}：${steer.text}${suffix}`;
+      list.appendChild(pendingSteerNotice);
+    });
 
     queue.forEach((task, index) => {
       const preview = buildQueuedTaskPreview(task);
@@ -3613,9 +3718,9 @@ export function createMessageSender(appContext) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     if (!normalizedQueueKey) return null;
     const patch = (steerStatePatch && typeof steerStatePatch === 'object') ? steerStatePatch : {};
-    return updateConversationRuntimeStateByKey(normalizedQueueKey, (draft) => {
+    const snapshot = updateConversationRuntimeStateByKey(normalizedQueueKey, (draft) => {
       draft.steer.pendingSteers = Array.isArray(patch.pendingSteers)
-        ? cloneDataSafely(patch.pendingSteers)
+        ? patch.pendingSteers.map((steer) => normalizePendingConversationSteer(steer))
         : [];
       draft.steer.targetTurnId = (typeof patch.targetTurnId === 'string' && patch.targetTurnId.trim())
         ? patch.targetTurnId.trim()
@@ -3624,13 +3729,82 @@ export function createMessageSender(appContext) {
         ? Number(patch.targetTurnStartedAtMs)
         : null;
     });
+    refreshCurrentConversationQueuedSendPreview();
+    return snapshot;
   }
 
-  function clearConversationSteerRuntime(queueKey) {
-    return setConversationSteerRuntime(queueKey, {
-      pendingSteers: [],
-      targetTurnId: null,
-      targetTurnStartedAtMs: null
+  function getConversationPendingSteers(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    if (!normalizedQueueKey || !conversationRuntimeStore?.getConversationRuntimeState) return [];
+    const snapshot = conversationRuntimeStore.getConversationRuntimeState(normalizedQueueKey);
+    return Array.isArray(snapshot?.steer?.pendingSteers)
+      ? snapshot.steer.pendingSteers.map((steer) => normalizePendingConversationSteer(steer))
+      : [];
+  }
+
+  function getAttemptSteerTargetIdentity(attemptState) {
+    if (!attemptState) {
+      return {
+        turnId: null,
+        turnStartedAtMs: null
+      };
+    }
+
+    return {
+      turnId: normalizeConversationId(attemptState.aiMessageId || attemptState.id || ''),
+      turnStartedAtMs: Number.isFinite(Number(attemptState.startedAt))
+        ? Number(attemptState.startedAt)
+        : null
+    };
+  }
+
+  function removeConversationPendingSteersByIds(queueKey, steerIds) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const steerIdSet = new Set(
+      Array.isArray(steerIds)
+        ? steerIds
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter(Boolean)
+        : []
+    );
+    if (!normalizedQueueKey || steerIdSet.size <= 0) return getConversationPendingSteers(normalizedQueueKey);
+
+    const existing = getConversationPendingSteers(normalizedQueueKey);
+    const remaining = existing.filter((steer) => !steerIdSet.has(String(steer?.id || '').trim()));
+    const latestRemaining = remaining[remaining.length - 1] || null;
+    setConversationSteerRuntime(normalizedQueueKey, {
+      pendingSteers: remaining,
+      targetTurnId: latestRemaining?.targetTurnId || null,
+      targetTurnStartedAtMs: latestRemaining?.targetTurnStartedAtMs ?? null
+    });
+    return remaining;
+  }
+
+  function getConversationPendingSteersForAttempt(attemptState) {
+    if (!attemptState) return [];
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
+    const pendingSteers = getConversationPendingSteers(runtimeConversationKey);
+    if (pendingSteers.length <= 0) return [];
+    const { turnId, turnStartedAtMs } = getAttemptSteerTargetIdentity(attemptState);
+    return splitPendingSteersByTurn(pendingSteers, {
+      turnId,
+      turnStartedAtMs
+    }).matched.map((steer) => normalizePendingConversationSteer(steer));
+  }
+
+  function appendConversationPendingSteer(queueKey, pendingSteer, targetAttempt = null) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const targetIdentity = getAttemptSteerTargetIdentity(targetAttempt);
+    const normalizedSteer = normalizePendingConversationSteer({
+      ...(pendingSteer && typeof pendingSteer === 'object' ? pendingSteer : {}),
+      targetTurnId: targetIdentity.turnId || pendingSteer?.targetTurnId || null,
+      targetTurnStartedAtMs: targetIdentity.turnStartedAtMs ?? pendingSteer?.targetTurnStartedAtMs ?? null
+    });
+    const existing = getConversationPendingSteers(normalizedQueueKey);
+    return setConversationSteerRuntime(normalizedQueueKey, {
+      pendingSteers: existing.concat([normalizedSteer]),
+      targetTurnId: normalizedSteer.targetTurnId || null,
+      targetTurnStartedAtMs: normalizedSteer.targetTurnStartedAtMs ?? Date.now()
     });
   }
 
@@ -3659,99 +3833,73 @@ export function createMessageSender(appContext) {
     return changed;
   }
 
-  function markConversationQueuedJobsSteered(queueKey) {
-    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
-    const queue = getConversationSendQueue(normalizedQueueKey);
-    let changed = false;
-    let affectedCount = 0;
-    queue.forEach((task, index) => {
-      const normalizedTask = normalizeConversationQueuedTask(task);
-      if (isConversationJobTerminal(normalizedTask) || normalizedTask.status === 'running') return;
-      if (normalizedTask.status === 'stale' && normalizedTask.staleReason === 'steered') return;
-      queue[index] = normalizeConversationQueuedTask({
-        ...normalizedTask,
-        status: 'stale',
-        paused: true,
-        availableAt: null,
-        staleReason: 'steered'
-      });
-      changed = true;
-      affectedCount += 1;
-    });
-    if (changed) {
-      refreshConversationQueueState(normalizedQueueKey);
-    }
-    return affectedCount;
-  }
-
   /**
-   * 直接转向当前生成中的会话：
-   * - 先中止当前正在生成的请求；
-   * - 当前会话里尚未真正发出的 queue 项统一标记为“待确认”，避免继续沿旧方向自动发送；
-   * - 再将新的用户输入立即作为最高优先级任务发出。
+   * 标准 steer：把新的用户输入挂到当前 in-flight turn 的 pending steers 上。
    *
-   * 这与普通 Enter 的区别在于：
-   * - Enter 保持 FIFO，尊重当前生成；
-   * - Ctrl+Enter 则显式表达“别继续旧方向了，立刻按这条新意图来”。
+   * 关键语义（对齐 Codex）：
+   * - 不新开 turn；
+   * - 不先 interrupt；
+   * - 不碰当前 queue；
+   * - 只在当前 active turn 的下一个安全边界被吸收。
    */
-  async function requestConversationSteer({ queueKey, conversationId = '', queuedTask } = {}) {
+  async function requestConversationSteer({ queueKey, pendingSteer } = {}) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
-    const normalizedConversationId = normalizeConversationId(conversationId)
-      || normalizeConversationId(normalizedQueueKey);
-    const nextTask = normalizeConversationQueuedTask(queuedTask);
-    if (!normalizedQueueKey || !nextTask?.payload) {
-      return { ok: false, error: new Error('invalid_steer_job') };
+    const normalizedSteer = normalizePendingConversationSteer(pendingSteer);
+    if (!normalizedQueueKey || !normalizedSteer?.responseInputItem) {
+      return { ok: false, error: new Error('invalid_pending_steer') };
     }
 
     const targetAttempt = getLatestRunningAttemptForConversationQueue(normalizedQueueKey);
     if (!targetAttempt) {
-      clearConversationSteerRuntime(normalizedQueueKey);
-      return dispatchConversationJob(normalizedQueueKey, nextTask, {
-        forceQueue: false,
-        ignoreQueuedMessages: true
-      });
+      return { ok: false, reason: 'no_active_turn', error: new Error('当前没有可转向的生成') };
+    }
+    if (targetAttempt.supportsStandardSteer !== true) {
+      return { ok: false, reason: 'unsupported_turn_transport', error: new Error('当前连接源不支持标准 steer') };
     }
 
-    const steerPreviewText = String(nextTask?.payload?.originalMessageText || '').trim();
-    setConversationSteerRuntime(normalizedQueueKey, {
-      pendingSteers: [{
-        id: `steer_${Date.now()}`,
-        createdAt: Date.now(),
-        textPreview: steerPreviewText.slice(0, 200),
-        hasImages: !!nextTask?.payload?.inputHasImagesSnapshot,
-        hasScreenshot: !!nextTask?.payload?.inputHasScreenshotSnapshot
-      }],
+    appendConversationPendingSteer(normalizedQueueKey, normalizedSteer, targetAttempt);
+    return {
+      ok: true,
+      pending: true,
       targetTurnId: targetAttempt.aiMessageId || targetAttempt.id || null,
-      targetTurnStartedAtMs: Number.isFinite(Number(targetAttempt.startedAt))
-        ? Number(targetAttempt.startedAt)
-        : Date.now()
-    });
+      pendingCount: getConversationPendingSteers(normalizedQueueKey).length
+    };
+  }
 
-    // 先把现有排队项全部转成“待确认”，再去中止当前 running。
-    // 这样即便被中止的请求在 finally 里触发了一次 queue flush，前面的 stale 项也会阻止旧队列继续自动开跑。
-    const staleCount = markConversationQueuedJobsSteered(normalizedQueueKey);
-    abortRequestsForConversationQueue(normalizedQueueKey, { suppressQueueFlush: true });
-    await waitForConversationQueueIdle(normalizedQueueKey, 5000);
-    if (hasRunningAttemptForConversationQueue(normalizedQueueKey)) {
-      clearConversationSteerRuntime(normalizedQueueKey);
-      return { ok: false, error: new Error('当前生成尚未完全停止，暂时无法转向') };
+  function restorePendingSteersForAttemptAsQueueFollowUps(attemptState) {
+    if (!attemptState) return [];
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
+    const pendingSteers = getConversationPendingSteersForAttempt(attemptState);
+    if (pendingSteers.length <= 0) return [];
+
+    removeConversationPendingSteersByIds(
+      runtimeConversationKey,
+      pendingSteers.map((steer) => steer.id)
+    );
+
+    const restoreDisposition = resolvePendingSteerRestoreDisposition(
+      attemptState.completedSuccessfully
+        ? 'completed'
+        : (attemptState.manualAbort ? 'interrupted' : 'error')
+    );
+    const restoredJobs = buildRestoredQueueJobsFromPendingSteers(pendingSteers, {
+      createJobId: createQueuedConversationTaskId,
+      conversationId: normalizeConversationId(attemptState.boundConversationId) || normalizeConversationId(runtimeConversationKey),
+      conversationRevisionAtEnqueue: attemptState.historyConversationRevision,
+      retryPolicy: buildDefaultConversationJobRetryPolicy('append_user_message'),
+      status: restoreDisposition.status,
+      failureMessage: restoreDisposition.failureMessage,
+      createdAt: Date.now()
+    }).map((job) => normalizeConversationQueuedTask(job));
+
+    for (let index = restoredJobs.length - 1; index >= 0; index -= 1) {
+      enqueueConversationSend(runtimeConversationKey, restoredJobs[index], { atFront: true });
     }
-    try {
-      const result = await dispatchConversationJob(normalizedQueueKey, {
-        ...nextTask,
-        conversationId: normalizedConversationId || nextTask.conversationId
-      }, {
-        forceQueue: false,
-        ignoreQueuedMessages: true
-      });
-      return {
-        ...result,
-        steered: true,
-        staleCount
-      };
-    } finally {
-      clearConversationSteerRuntime(normalizedQueueKey);
+
+    if (restoreDisposition.status === 'queued') {
+      scheduleConversationQueueFlush(runtimeConversationKey);
     }
+    return restoredJobs;
   }
 
   async function dispatchConversationJob(queueKey, queuedTask, options = {}) {
@@ -6413,7 +6561,8 @@ export function createMessageSender(appContext) {
   function buildResponsesFunctionToolFollowUpRequest(
     previousRequestBody,
     responseOutputItems,
-    functionCallOutputs
+    functionCallOutputs,
+    pendingSteerInputItems = []
   ) {
     const nextBody = cloneDataSafely(previousRequestBody) || {};
     const previousInput = Array.isArray(nextBody.input)
@@ -6429,6 +6578,11 @@ export function createMessageSender(appContext) {
           ? functionCallOutputs.map(item => cloneDataSafely(item))
           : []
       );
+    if (Array.isArray(pendingSteerInputItems) && pendingSteerInputItems.length > 0) {
+      nextBody.input = nextBody.input.concat(
+        pendingSteerInputItems.map(item => cloneDataSafely(item)).filter(Boolean)
+      );
+    }
     return nextBody;
   }
 
@@ -6529,6 +6683,8 @@ export function createMessageSender(appContext) {
   }) {
     let currentRequestBody = initialRequestBody;
     let lastHandleResult = null;
+    let pendingSteerIdsAwaitingRequestAcceptance = [];
+    let pendingSteerInputItemsAwaitingRequestAcceptance = [];
 
     while (true) {
       const response = await sendApiRequestForAttempt({
@@ -6538,6 +6694,23 @@ export function createMessageSender(appContext) {
         loadingMessage,
         attemptState
       });
+
+      if (pendingSteerIdsAwaitingRequestAcceptance.length > 0) {
+        removeConversationPendingSteersByIds(
+          getAttemptRuntimeConversationKey(attemptState),
+          pendingSteerIdsAwaitingRequestAcceptance
+        );
+        if (attemptState && pendingSteerInputItemsAwaitingRequestAcceptance.length > 0) {
+          const mergedAcceptedInputItems = mergeResponsesReplayOutputItems(
+            attemptState.responsesToolLoopAccumulatedInputItems,
+            pendingSteerInputItemsAwaitingRequestAcceptance
+          );
+          applyResponsesInputItemsToAttempt(attemptState, mergedAcceptedInputItems);
+          await persistAttemptConversationSnapshot(attemptState, { force: true });
+        }
+        pendingSteerIdsAwaitingRequestAcceptance = [];
+        pendingSteerInputItemsAwaitingRequestAcceptance = [];
+      }
 
       const requestedResponseHandlingMode = resolveResponseHandlingMode({
         apiBase: usedApiConfig?.baseUrl,
@@ -6560,6 +6733,7 @@ export function createMessageSender(appContext) {
         ? lastHandleResult.responseToolCalls
           .filter(record => String(record?.type || '').trim().toLowerCase() === 'function_call')
         : [];
+
       if (pendingFunctionCalls.length <= 0) {
         return lastHandleResult;
       }
@@ -6576,6 +6750,24 @@ export function createMessageSender(appContext) {
         }
         functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall));
       }
+
+      /**
+       * 关键语义：标准 steer 应该在“下一个安全边界”被吸收。
+       *
+       * 对带工具调用的 Responses turn 来说，真正的安全边界不是“模型输出完 function_call item 的那一刻”，
+       * 而是“本地工具执行完成、即将发起 follow-up request”这一刻。
+       *
+       * 这能覆盖两种用户时机：
+       * 1. 模型刚发出 function_call 后立刻 steer；
+       * 2. 工具执行过程中 steer（例如工具本身要等几秒）。
+       *
+       * 如果在执行工具前就把 pending steer 提前 drain 掉，第二类 steer 会被错误地延后到再下一轮边界，
+       * 表现上就不像 Codex 的真正 steer。
+       */
+      const pendingSteersForFollowUp = getConversationPendingSteersForAttempt(attemptState);
+      const pendingSteerInputItemsForFollowUp = pendingSteersForFollowUp
+        .map((steer) => cloneDataSafely(steer?.responseInputItem))
+        .filter((item) => item && typeof item === 'object');
 
       if (attemptState) {
         updateAttemptRuntimeState(attemptState, (draft) => {
@@ -6598,8 +6790,15 @@ export function createMessageSender(appContext) {
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
         currentRequestBody,
         lastHandleResult?.responseOutputItems,
-        functionCallOutputs
+        functionCallOutputs,
+        pendingSteerInputItemsForFollowUp
       );
+      pendingSteerIdsAwaitingRequestAcceptance = pendingSteersForFollowUp
+        .map((steer) => String(steer?.id || '').trim())
+        .filter(Boolean);
+      pendingSteerInputItemsAwaitingRequestAcceptance = pendingSteerInputItemsForFollowUp
+        .map((item) => cloneDataSafely(item))
+        .filter(Boolean);
     }
   }
 
@@ -6883,6 +7082,7 @@ export function createMessageSender(appContext) {
         responsesToolLoopLastResponseId: null,
         runtimeConversationKey: normalizedConversationQueueKey || getCurrentActiveConversationQueueKey(),
         completedSuccessfully: false,
+        supportsStandardSteer: false,
         conversationJobId: normalizedConversationJobId || null,
         conversationJobKind: normalizedConversationJobKind,
         conversationRevisionAtStart: normalizedConversationRevisionAtStart,
@@ -6928,6 +7128,7 @@ export function createMessageSender(appContext) {
 
 	      attemptState.finished = true;
       activeAttempts.delete(attemptState.id);
+      const restoredPendingSteerJobs = restorePendingSteersForAttemptAsQueueFollowUps(attemptState);
       updateAttemptRuntimeState(attemptState, (draft) => {
         draft.activeTurn.status = attemptState.completedSuccessfully
           ? 'completed'
@@ -6946,6 +7147,21 @@ export function createMessageSender(appContext) {
         }
       }
       notifyStreamingConversationStateChanged();
+
+      if (restoredPendingSteerJobs.length > 0 && isAttemptMainConversationActive(attemptState)) {
+        showNotification?.({
+          message: attemptState.completedSuccessfully
+            ? `未被吸收的转向输入已转为 ${restoredPendingSteerJobs.length} 条排队消息`
+            : '未被吸收的转向输入已移入队列并暂停',
+          type: 'info',
+          duration: 2200
+        });
+      }
+
+      const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
+      if (hasQueuedMessagesForConversation(runtimeConversationKey)) {
+        scheduleConversationQueueFlush(runtimeConversationKey);
+      }
 
       const hasOtherAttempts = activeAttempts.size > 0;
       if (!hasOtherAttempts) {
@@ -7371,6 +7587,9 @@ export function createMessageSender(appContext) {
         config = apiManager.getSelectedConfig();
       }
       effectiveApiConfig = config;
+      if (attempt) {
+        attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
+      }
       let ephemeralResponsesInstructions = '';
 
       const shouldInjectJsRuntimeFrameContext = (
@@ -7871,6 +8090,56 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 构建“标准 steer”的待提交输入。
+   *
+   * 注意这里不是 future turn 的 queue job：
+   * - 它不会进入普通 FIFO 队列；
+   * - 它只会挂到当前 active turn 的 pending steers 上；
+   * - 在下一个安全边界（当前 hop 完成 / tool 结果边界）时，作为同一个 turn 内的新 user input 被吸收。
+   */
+  async function buildPendingConversationSteer(baseOptions, snapshot = {}) {
+    const normalizedSnapshot = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    const imagesHtmlSnapshot = (typeof normalizedSnapshot.imagesHtmlSnapshot === 'string')
+      ? normalizedSnapshot.imagesHtmlSnapshot
+      : (inputController ? inputController.getImagesHTML() : imageContainer.innerHTML);
+    const hasImagesInInput = (typeof normalizedSnapshot.hasImagesInInput === 'boolean')
+      ? normalizedSnapshot.hasImagesInInput
+      : (inputController ? inputController.hasImages() : !!imageContainer.querySelector('.image-tag'));
+    const hasScreenshotSnapshot = (typeof normalizedSnapshot.hasScreenshotSnapshot === 'boolean')
+      ? normalizedSnapshot.hasScreenshotSnapshot
+      : (inputController
+        ? inputController.hasScreenshot()
+        : !!imageContainer.querySelector('img[alt="page-screenshot.png"]'));
+    const payload = await buildQueuedSendOptions(baseOptions, {
+      baseText: typeof normalizedSnapshot.baseText === 'string'
+        ? normalizedSnapshot.baseText
+        : (baseOptions?.originalMessageText ?? ''),
+      imagesHtml: imagesHtmlSnapshot,
+      hasImages: hasImagesInInput,
+      hasScreenshot: hasScreenshotSnapshot
+    });
+    const responseInputItem = buildResponsesUserMessageInputItemFromPayload(payload);
+    if (!responseInputItem) return null;
+
+    const rawText = (typeof payload.originalMessageText === 'string')
+      ? payload.originalMessageText
+      : '';
+    const previewText = rawText.trim();
+    const imageCount = extractQueuedPreviewImages(payload.inputImagesHtmlSnapshot || '').length;
+
+    return normalizePendingConversationSteer({
+      id: createPendingConversationSteerId(),
+      createdAt: Date.now(),
+      payload,
+      responseInputItem,
+      rawText,
+      textPreview: previewText || (imageCount > 0 ? '（转向中的图片消息）' : '（转向中的消息）'),
+      imageCount,
+      hasScreenshot: payload.inputHasScreenshotSnapshot === true
+    });
+  }
+
+  /**
    * Public send entry:
    * - Handles slash commands and trailing control markers.
    *
@@ -7975,7 +8244,8 @@ export function createMessageSender(appContext) {
       || baseText
       || hasImagesInInput
     );
-    const shouldSendAsSteer = submissionBehavior === 'steer' && hasRunningAttemptInCurrentConversation;
+    const requestedSteer = submissionBehavior === 'steer';
+    const shouldSendAsSteer = requestedSteer && hasRunningAttemptInCurrentConversation;
 
     if (singleOpts.regenerateMode) {
       return requestRegenerateMessage({
@@ -7990,12 +8260,17 @@ export function createMessageSender(appContext) {
       });
     }
 
-    if (shouldSendAsSteer && !canQueueOrInterrupt) {
+    if (requestedSteer && !hasRunningAttemptInCurrentConversation) {
+      showNotification?.({ message: '当前没有可转向的生成', type: 'warning', duration: 1800 });
+      return { ok: false, reason: 'no_active_turn' };
+    }
+
+    if (requestedSteer && !canQueueOrInterrupt) {
       showNotification?.({ message: '没有可用于转向的内容', type: 'warning', duration: 1800 });
       return { ok: false, reason: 'empty_steer' };
     }
 
-    if ((hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation) && canQueueOrInterrupt) {
+    if (!requestedSteer && (hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation) && canQueueOrInterrupt) {
       const shouldEnqueue = hasQueuedMessagesInCurrentConversation || queueCurrentConversationMessages;
 
       if (!shouldEnqueue) {
@@ -8008,39 +8283,27 @@ export function createMessageSender(appContext) {
     const hasScreenshotSnapshot = inputController
       ? inputController.hasScreenshot()
       : !!imageContainer.querySelector('img[alt="page-screenshot.png"]');
-    const nextJob = await buildAppendConversationJob(singleOpts, {
-      baseText,
-      conversationId: currentConversationIdForSend,
-      imagesHtmlSnapshot,
-      hasImagesInInput,
-      hasScreenshotSnapshot
-    });
-
-    clearInputs();
-    inputController?.focusToEnd?.();
 
     if (shouldSendAsSteer) {
+      const pendingSteer = await buildPendingConversationSteer(singleOpts, {
+        baseText,
+        imagesHtmlSnapshot,
+        hasImagesInInput,
+        hasScreenshotSnapshot
+      });
+      if (!pendingSteer) {
+        showNotification?.({ message: '当前输入无法构造成标准 steer', type: 'warning', duration: 1800 });
+        return { ok: false, reason: 'invalid_pending_steer' };
+      }
       const result = await requestConversationSteer({
         queueKey: currentConversationQueueKey,
-        conversationId: currentConversationIdForSend,
-        queuedTask: nextJob
+        pendingSteer
       });
-      const steerSucceeded = !!(result?.ok || result?.queued);
-      if (!steerSucceeded) {
-        try {
-          restoreQueuedTaskToComposer(nextJob);
-        } catch (error) {
-          console.warn('转向失败后恢复输入区内容失败:', error);
-        }
-      }
-      if (steerSucceeded && typeof showNotification === 'function') {
-        const staleCount = Number.isFinite(Number(result?.staleCount))
-          ? Number(result.staleCount)
-          : 0;
+      if (result?.ok && typeof showNotification === 'function') {
+        clearInputs();
+        inputController?.focusToEnd?.();
         showNotification({
-          message: staleCount > 0
-            ? `已直接转向当前生成，${staleCount} 条排队消息已转为待确认`
-            : '已直接转向当前生成',
+          message: `已加入当前生成的转向输入（待提交 ${result.pendingCount || 1} 条）`,
           type: 'info',
           duration: 2200
         });
@@ -8053,6 +8316,17 @@ export function createMessageSender(appContext) {
       }
       return result;
     }
+
+    const nextJob = await buildAppendConversationJob(singleOpts, {
+      baseText,
+      conversationId: currentConversationIdForSend,
+      imagesHtmlSnapshot,
+      hasImagesInInput,
+      hasScreenshotSnapshot
+    });
+
+    clearInputs();
+    inputController?.focusToEnd?.();
 
     const shouldForceQueue = hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation;
     const result = await dispatchConversationJob(currentConversationQueueKey, nextJob, {

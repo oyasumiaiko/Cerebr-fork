@@ -28,9 +28,11 @@ test('normalizeConversationApiLock trims fields and drops empty payload', async 
     }),
     {
       id: 'cfg_1',
+      connectionSourceId: '',
       displayName: '主力模型',
       modelName: 'gpt-4o-mini',
-      baseUrl: 'https://api.example.com'
+      baseUrl: 'https://api.example.com',
+      connectionType: ''
     }
   );
 });
@@ -47,9 +49,11 @@ test('mergeConversationApiLockState prefers memory state when available', async 
   assert.equal(result.source, 'memory');
   assert.deepEqual(result.apiLock, {
     id: 'mem-id',
+    connectionSourceId: '',
     displayName: '内存锁',
     modelName: 'm1',
-    baseUrl: 'u1'
+    baseUrl: 'u1',
+    connectionType: ''
   });
 });
 
@@ -65,9 +69,11 @@ test('mergeConversationApiLockState falls back to stored state when preserve is 
   assert.equal(result.source, 'stored');
   assert.deepEqual(result.apiLock, {
     id: 'db-id',
+    connectionSourceId: '',
     displayName: '历史锁',
     modelName: 'm2',
-    baseUrl: 'u2'
+    baseUrl: 'u2',
+    connectionType: ''
   });
 });
 

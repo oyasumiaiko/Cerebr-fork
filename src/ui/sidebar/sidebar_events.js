@@ -1620,9 +1620,10 @@ function setupMessageInputHandlers(appContext) {
     }
 
     if (e.ctrlKey) {
-      // Ctrl+Enter：优先用于“直接转向当前生成”。
-      // 若当前没有正在生成的请求，messageSender 内部会自动回退为普通发送，
-      // 这样快捷键语义对用户始终稳定，不需要在事件层重复判断运行态。
+      // Ctrl+Enter：标准 steer。
+      // - 仅在当前存在 active turn 时才成立；
+      // - 不会自动回退为普通发送，避免把“标准 steer”悄悄降级成别的语义；
+      // - 若当前没有正在生成的请求，messageSender 会给出轻提示并保持输入框原状。
       appContext.services.messageSender.sendSteerMessage();
       return;
     }
