@@ -240,6 +240,24 @@ function buildPrompt(currentScenario) {
   };
 }
 
+function resolvePersistentProfileDir(repoRootPath) {
+  const fromEnv = (typeof process.env.CEREBR_CDP_PROFILE_DIR === 'string')
+    ? process.env.CEREBR_CDP_PROFILE_DIR.trim()
+    : '';
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+
+  /**
+   * 默认复用固定 profile，原因：
+   * - Chrome 138+ 的 Allow User Scripts 是“每扩展单独开关”，且新安装默认关闭；
+   * - 若每次都创建临时 profile，这个开关永远不会被记住，手动打开一次也会丢失；
+   * - 测试脚本仍然使用 `--load-extension=<repoRoot>`，所以即使 profile 固定，
+   *   只要重启 Chrome，就会从当前仓库目录重新加载 unpacked 扩展代码。
+   */
+  return path.join(repoRootPath, 'output', 'playwright', '_profiles', 'cdp_sidebar_smoke');
+}
+
 async function main() {
   await fsp.mkdir(outputDir, { recursive: true });
 
@@ -256,8 +274,9 @@ async function main() {
   };
 
   const cdpPort = await getFreePort();
-  const profileDir = path.join(os.tmpdir(), `cerebr-cdp-sidebar-${Date.now()}`);
+  const profileDir = resolvePersistentProfileDir(repoRoot);
   await fsp.mkdir(profileDir, { recursive: true });
+  result.profileDir = profileDir;
 
   const chromeArgs = [
     `--remote-debugging-port=${cdpPort}`,
